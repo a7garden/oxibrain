@@ -7,6 +7,7 @@ pub mod communities;
 pub mod consolidation;
 pub mod context;
 pub mod explain;
+pub mod export;
 pub mod extraction;
 pub mod index_ops;
 pub mod knowledge;
