@@ -16,6 +16,9 @@ pub mod registry;
 pub mod reproject;
 pub mod schema;
 pub mod writer;
+pub mod timeline;
+pub mod explain;
+
 pub use backup::{BackupManifest, online_backup};
 pub use project::{
     DeclObject, Declaration, EntityRef, canonical_declaration_content, parse_declaration,

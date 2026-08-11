@@ -272,5 +272,56 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
+    pub async fn timeline(
+        &self,
+        space: &str,
+        entity_id: &str,
+        from: Option<oxibrain_ports::Timestamp>,
+        to: Option<oxibrain_ports::Timestamp>,
+    ) -> Result<Vec<oxibrain_store::timeline::TimelineEntry>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let entity_id = entity_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::timeline::timeline(conn, &space, &entity_id, from, to))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    pub async fn diff(
+        &self,
+        space: &str,
+        entity_id: &str,
+        at_a: oxibrain_ports::Timestamp,
+        at_b: oxibrain_ports::Timestamp,
+    ) -> Result<oxibrain_store::timeline::DiffResult, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let entity_id = entity_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::timeline::diff(conn, &space, &entity_id, at_a, at_b))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    pub async fn why(
+        &self,
+        space: &str,
+        statement_id: &str,
+    ) -> Result<oxibrain_store::explain::ExplainBlock, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let statement_id = statement_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::explain::why(conn, &space, &statement_id))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
 
 }
