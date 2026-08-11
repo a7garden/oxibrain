@@ -985,10 +985,14 @@ Per spec §11.1 orchestration:
 
 - [ ] **Step 2: Implement Brain::summarize_communities**
 
-Per spec §11.2:
+Per spec §11.2 — community summaries are Derived episodes with cached text
+(DESIGN §5.3, §9.4), same pattern as consolidation:
 1. Read community groups [reader].
-2. For each group: check cache [reader]. If miss, build prompt [reader], call LLM [async].
-3. Cache text [WriteOp].
+2. For each group: check cache (`get_cached_summary`) [reader]. If miss, build prompt [reader], call LLM [async].
+3. Write Derived episodes + cache text [WriteOp]:
+   - `write_derived_episode(conn, space, text, source_episodes, config, now)` — creates a Derived episode + episode_links to episodes mentioning the community's entities.
+   - `cache_summary(conn, "community", &member_hash, &extractor_id, &text, now)` — caches for reprojection determinism.
+   Both operations run in one WriteOp transaction.
 
 - [ ] **Step 3: Write integration test**
 

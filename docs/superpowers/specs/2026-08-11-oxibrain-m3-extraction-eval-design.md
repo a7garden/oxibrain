@@ -1063,17 +1063,26 @@ one. The extraction pipeline only processes `kind = 'primary'` episodes.
 
 ### 11.2 Community summaries (§9.4)
 
-M2 built deterministic community clustering. M3 adds LLM-generated summary text,
-using the same store-primitives + Brain-orchestration pattern:
+M2 built deterministic community clustering. M3 adds LLM-generated summary text.
+Per DESIGN §5.3 and §9.4, community summaries are **Derived episodes** with cached
+text — searchable, quotable, provenance-carrying, and terminal (never re-extracted).
+They use the same store-primitives + Brain-orchestration pattern as consolidation:
 
 1. Brain reads community groups (`load_community_entities`) via reader pool.
 2. For each group: check cache (`get_cached_summary`). If miss, call LLM (async).
-3. Brain writes cached text via WriteOp (`cache_summary`).
+3. Brain writes Derived episodes + caches text via WriteOp:
+   - `write_derived_episode(conn, space, text, source_episodes, config, now)`
+   - `cache_summary(conn, "community", &member_hash, &extractor_id, &text, now)`
 
-The summary text is cached and indexed by FTS5 (searchable). It is NOT a Derived
-episode — it lives in the `summaries` cache table and is surfaced by community
-queries (§9.4). Regeneration (`--regenerate-summaries`) creates a new cache entry
-with a new extractor_id, leaving the old intact (§5.3).
+The Derived episode's `source` is `Derived { of: <community entity_ids JSON> }`.
+`episode_links` connect it to the episodes that mention the community's entities
+(`rel = 'summarizes'`). The text is ALSO cached in `summaries` for reprojection
+determinism (reproject reuses the cache, no LLM call).
+
+Both consolidation and community summaries follow this identical pattern — the
+only difference is the member set (episodes vs entities). Regeneration
+(`--regenerate-summaries`) creates a new cache entry with a new extractor_id,
+leaving the old intact (§5.3).
 
 ### 11.3 Why LLM calls cannot be in store functions
 
@@ -1404,7 +1413,6 @@ port is configured.
 | D3 | Core stays pure | §15: "core may depend on store" | Core defines extraction types + pure fns (schema, validator, prompt); store orchestrates | Consistent with M1/M2. Core gaining store deps is M5+. |
 | D4 | Golden corpus starts at ~50, not ~200 | §14.1: "~200 labeled episodes" | M3 ships ~50; grows incrementally | ~200 is the target; M3 establishes the harness and CI gates with a smaller corpus. The regression gates bind from the first measurement (§14.2). |
 | D5 | Extraction runs LLM off-actor, not on writer thread | §13.1: "long work runs off the actor" | Brain facade orchestrates: claim [WriteOp] → LLM [spawn_blocking] → project [WriteOp] | The writer actor runs all writes in transactions (§7.2). An LLM call inside a transaction would block all readers and writers for seconds-minutes. |
-| D6 | Community summaries cached in `summaries` table, not as Derived episodes | §9.4: "summaries are Derived episodes" | Community summary text cached in `summaries`; consolidation summaries ARE Derived episodes | Community summaries are per-cluster text, not per-episode. Storing them in `summaries` (the existing cache table) avoids creating synthetic episodes for each community. Consolidation summaries (episode clusters) are Derived episodes with proper provenance. |
 
 ---
 
