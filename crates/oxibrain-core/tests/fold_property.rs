@@ -5,10 +5,10 @@
 //! "Property tests for the temporal fold".
 
 use oxibrain_core::{
-    fold, overlaps, Assertion, BeliefStatus, Cardinality, Interval, Invalidation, Object,
-    ObjectKind, Polarity, PredicateDef, Statement, StatementEntry, Temporality,
+    Assertion, BeliefStatus, Cardinality, Interval, Invalidation, Object, ObjectKind, Polarity,
+    PredicateDef, Statement, StatementEntry, Temporality, fold, overlaps,
 };
-use oxibrain_ports::{Timestamp, TIME_MAX};
+use oxibrain_ports::{TIME_MAX, Timestamp};
 use proptest::prelude::*;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

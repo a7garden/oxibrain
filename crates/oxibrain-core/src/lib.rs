@@ -35,6 +35,7 @@ pub use fold::{StatementEntry, fold};
 
 pub mod confidence;
 pub mod context;
+pub mod eval;
 pub mod extraction;
 pub mod lifecycle;
 pub mod retrieval;

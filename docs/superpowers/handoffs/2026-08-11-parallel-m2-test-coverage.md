@@ -2,9 +2,15 @@
 
 > **Date:** 2026-08-11
 > **Branch:** `main` (merged)
-> **Commits:** `22d4c75`, `c2d5a9d`, `85b0745`, merge `bbc5e0d`
+> **Commits:** `22d4c75`, `c2d5a9d`, `85b0745`, `ed9cef3`, merges `bbc5e0d`
 > **Context:** Written by a parallel session while M3 (extraction + evaluation) was
 > in progress. All work is in non-overlapping files — zero merge conflicts.
+>
+> **Bug found and fixed:** the `supersede_no_overlapping_active` property test
+> found a boundary-condition bug in `fold_supersede` — when one interval ends
+> exactly where another begins (`valid_to == new_start`), the clipping condition
+> used strict `>` instead of `>=`, leaving two Active beliefs overlapping at a
+> single point. Fixed in `ed9cef3`. See §5 below.
 
 ---
 
