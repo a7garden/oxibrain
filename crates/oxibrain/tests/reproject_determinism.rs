@@ -171,6 +171,13 @@ async fn reproject_is_byte_identical() {
     let before = dump_all(&conn_before);
     drop(conn_before);
 
+    // Guard against vacuous regression: the projection must be non-empty, or
+    // "byte-identical" is meaningless (empty == empty).
+    assert!(
+        !before.is_empty(),
+        "projection must be non-empty before reproject — declares are not projecting"
+    );
+
     // Reproject.
     brain.reproject().await.unwrap();
 
