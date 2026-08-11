@@ -7,3 +7,7 @@ pub mod rrf;
 pub mod vector;
 pub use rrf::{FusedItem, fuse};
 pub use vector::{TfIdfModel, TfIdfVector, cosine_sim, tokenize};
+pub mod knn;
+pub mod adjacency;
+pub use knn::KnnIndex;
+pub use adjacency::{AdjacencyGraph, BfsResult, BfsSpec};
