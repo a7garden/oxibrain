@@ -30,3 +30,5 @@ pub use registry::{
 pub mod resolution;
 pub use resolution::{normalize, resolve, score, Decision, ResolutionConfig};
 
+pub mod fold;
+pub use fold::{fold, StatementEntry};
