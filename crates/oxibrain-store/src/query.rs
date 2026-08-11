@@ -5,9 +5,13 @@ use crate::knowledge as kcrud;
 use crate::sql_err;
 use oxibrain_core::knowledge::Object;
 
-use oxibrain_core::retrieval::{QueryMode, SearchHit, SearchTarget};
+use oxibrain_core::retrieval::{
+    DroppedItem, Query, QueryMode, RankedItem, RankingResult, SearchHit, SearchTarget,
+};
 use oxibrain_core::{Belief, Statement};
+use oxibrain_index::rrf;
 use oxibrain_index::{KnnIndex, TfIdfModel, TfIdfVector};
+
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::{Connection, params};
 
@@ -268,4 +272,104 @@ pub fn semantic_search(
         })
         .collect();
     Ok(hits)
+}
+
+/// Convert a SearchHit to a stable "kind:id" RRF key.
+fn hit_key(hit: &SearchHit) -> String {
+    match &hit.target {
+        SearchTarget::Episode { id } => format!("episode:{id}"),
+        SearchTarget::Statement { id } => format!("statement:{id}"),
+        SearchTarget::Entity { id } => format!("entity:{id}"),
+    }
+}
+
+/// Parse an RRF key back into a SearchTarget. Unknown shapes fall back to
+/// Episode so the result is never lossy.
+fn parse_key(key: &str) -> SearchTarget {
+    match key.split_once(':') {
+        Some(("statement", id)) => SearchTarget::Statement { id: id.to_string() },
+        Some(("entity", id)) => SearchTarget::Entity { id: id.to_string() },
+        Some((_, id)) => SearchTarget::Episode { id: id.to_string() },
+        None => SearchTarget::Episode { id: key.to_string() },
+    }
+}
+
+/// Hybrid (or mode-specific) query: run the matching modes, fuse their result
+/// lists with RRF (`k=60`), and emit a [`RankingResult`] with provenance.
+///
+/// M2 simplification: `QueryMode::Graph` reuses lexical hits on entities and
+/// re-labels them — full neighbor expansion lands in Task 8.
+pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, BrainError> {
+    let limit = q.limit;
+    let mut mode_lists: Vec<Vec<SearchHit>> = Vec::new();
+
+    let run_lexical = matches!(q.mode, QueryMode::Hybrid | QueryMode::Lexical);
+    let run_semantic = matches!(q.mode, QueryMode::Hybrid | QueryMode::Semantic);
+    let run_graph = matches!(q.mode, QueryMode::Hybrid | QueryMode::Graph);
+
+    let dropped: Vec<DroppedItem> = Vec::new();
+
+    if run_lexical {
+        let hits = fts_search(conn, &q.space, &q.text, limit)?;
+        mode_lists.push(hits);
+    }
+    if run_semantic {
+        let hits = semantic_search(conn, &q.space, &q.text, limit)?;
+        mode_lists.push(hits);
+    }
+    if run_graph {
+        // Graph mode: lexical hits on entities only, re-tagged as Graph.
+        let hits = fts_search(conn, &q.space, &q.text, limit)?
+            .into_iter()
+            .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
+            .map(|mut h| {
+                h.mode = QueryMode::Graph;
+                h
+            })
+            .collect::<Vec<_>>();
+        if !hits.is_empty() {
+            mode_lists.push(hits);
+        }
+    }
+
+    // RRF expects `(key, raw_score)` tuples; the raw score is unused for
+    // ranking (RRF is rank-based) but is preserved for downstream debugging.
+    let rrf_lists: Vec<Vec<(String, f64)>> = mode_lists
+        .iter()
+        .map(|hits| hits.iter().map(|h| (hit_key(h), h.score)).collect())
+        .collect();
+
+    let fused = rrf::fuse(&rrf_lists, 60);
+
+    let total_found = fused.len();
+    let items: Vec<RankedItem> = fused
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .map(|(rank, item)| {
+            // For each mode that returned this item, record its rank inside that list.
+            let mode_ranks: Vec<(QueryMode, usize)> = mode_lists
+                .iter()
+                .filter_map(|hits| {
+                    let pos = hits.iter().position(|h| hit_key(h) == item.key)?;
+                    let mode = hits.first().map(|h| h.mode).unwrap_or(QueryMode::Lexical);
+                    Some((mode, pos))
+                })
+                .collect();
+            RankedItem {
+                target: parse_key(&item.key),
+                fused_score: item.score,
+                rank,
+                mode_ranks,
+                salience: 1.0, // M2: salience default; decay recalculates per space.
+            }
+        })
+        .collect();
+
+    Ok(RankingResult {
+        items,
+        dropped,
+        total_found,
+        query: q.clone(),
+    })
 }
