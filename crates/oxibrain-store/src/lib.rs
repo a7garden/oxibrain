@@ -3,20 +3,24 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod backup;
+pub mod knowledge;
 pub mod ledger;
 pub mod lock;
 pub mod meta;
 pub mod migration;
-pub mod reader;
-pub mod schema;
-pub mod writer;
-pub mod knowledge;
 pub mod project;
 pub mod query;
+pub mod reader;
+pub mod index_ops;
 pub mod registry;
 pub mod reproject;
+pub mod schema;
+pub mod writer;
 pub use backup::{BackupManifest, online_backup};
-pub use project::{canonical_declaration_content, parse_declaration, project_declaration, Declaration, DeclObject, EntityRef};
+pub use project::{
+    DeclObject, Declaration, EntityRef, canonical_declaration_content, parse_declaration,
+    project_declaration,
+};
 pub use reader::ReaderPool;
 pub use reproject::reproject;
 pub use writer::WriterActor;

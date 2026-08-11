@@ -5,7 +5,7 @@ use tempfile::tempdir;
 fn open_creates_and_migrates() {
     let dir = tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open");
-    assert_eq!(store.user_version().unwrap(), 2);
+    assert_eq!(store.user_version().unwrap(), 3);
     assert!(store.db_path().exists());
 }
 
