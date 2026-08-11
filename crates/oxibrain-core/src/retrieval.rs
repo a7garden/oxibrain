@@ -18,7 +18,9 @@ pub struct Query {
     pub min_confidence: f32,
 }
 
-fn default_limit() -> usize { 20 }
+fn default_limit() -> usize {
+    20
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -128,7 +130,11 @@ impl PredicateFilter {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Direction { Out, In, Both }
+pub enum Direction {
+    Out,
+    In,
+    Both,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

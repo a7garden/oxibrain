@@ -64,7 +64,11 @@ fn statement_assertion_round_trip() {
     kcrud::insert_statement(&conn, &stmt).unwrap();
 
     let group = kcrud::get_statement_group(&conn, "s1", "e1", "knows").unwrap();
-    assert_eq!(group.len(), 0, "no assertions yet → group excludes empty statements");
+    assert_eq!(
+        group.len(),
+        0,
+        "no assertions yet → group excludes empty statements"
+    );
 }
 
 #[test]

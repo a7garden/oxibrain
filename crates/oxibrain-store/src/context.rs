@@ -2,7 +2,9 @@
 
 use crate::query;
 use crate::sql_err;
-use oxibrain_core::context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens};
+use oxibrain_core::context::{
+    ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens,
+};
 use oxibrain_core::retrieval::{Query, QueryMode, SearchTarget};
 use oxibrain_ports::BrainError;
 use rusqlite::{Connection, params};
@@ -135,8 +137,7 @@ fn render_belief(
         .map_err(sql_err)?;
     let (predicate, obj_entity, obj_literal, status, _valid_from, confidence) = row;
     let object_repr = obj_entity.or(obj_literal).unwrap_or_default();
-    let text = format!(
-        "... {predicate} {object_repr} (status={status}, confidence={confidence:.2})"
-    );
+    let text =
+        format!("... {predicate} {object_repr} (status={status}, confidence={confidence:.2})");
     Ok(RenderedBelief { text })
 }

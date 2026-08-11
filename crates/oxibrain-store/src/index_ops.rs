@@ -11,10 +11,7 @@ use rusqlite::{Connection, params};
 
 /// Render a statement as a searchable string: "subject predicate object".
 /// Uses entity surface names from entity_keys (canonical key).
-pub fn render_statement(
-    conn: &Connection,
-    stmt: &Statement,
-) -> Result<String, BrainError> {
+pub fn render_statement(conn: &Connection, stmt: &Statement) -> Result<String, BrainError> {
     let subject_name = entity_surface(conn, &stmt.subject)?;
     let object_str = match &stmt.object {
         Object::Entity(eid) => entity_surface(conn, eid)?,
@@ -62,13 +59,14 @@ fn entity_surface(conn: &Connection, entity_id: &str) -> Result<String, BrainErr
 
 /// Drop and rebuild all FTS5 content for a space.
 pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
-    conn.execute("DELETE FROM episodes_fts WHERE space_id = ?1", params![space])
-        .map_err(sql_err)?;
+    conn.execute(
+        "DELETE FROM episodes_fts WHERE space_id = ?1",
+        params![space],
+    )
+    .map_err(sql_err)?;
     // Index episodes.
     let mut stmt = conn
-        .prepare(
-            "SELECT id, content FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL",
-        )
+        .prepare("SELECT id, content FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL")
         .map_err(sql_err)?;
     let episodes: Vec<(String, String)> = stmt
         .query_map(params![space], |r| {

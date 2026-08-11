@@ -78,7 +78,10 @@ async fn index_rebuild_is_deterministic() {
     // Declarations do not auto-update derived indexes — explicitly rebuild so
     // the first snapshot reflects the full index state. reproject must
     // produce the same state.
-    brain.rebuild_indexes(&space).await.expect("rebuild_indexes");
+    brain
+        .rebuild_indexes(&space)
+        .await
+        .expect("rebuild_indexes");
     brain
         .rebuild_communities(&space)
         .await
@@ -112,7 +115,10 @@ async fn index_rebuild_is_deterministic() {
         .await
         .expect("resolve")
         .expect("Alice exists after reproject");
-    assert_eq!(alice_id, alice_id_after, "entity ids must survive reproject");
+    assert_eq!(
+        alice_id, alice_id_after,
+        "entity ids must survive reproject"
+    );
 
     let snapshot2 = brain.snapshot_indexes(&space).await.expect("snapshot2");
     assert_eq!(

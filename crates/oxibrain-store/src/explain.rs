@@ -32,11 +32,7 @@ pub struct ConfidenceBreakdown {
 }
 
 /// Provenance and confidence breakdown for a statement.
-pub fn why(
-    conn: &Connection,
-    space: &str,
-    statement_id: &str,
-) -> Result<ExplainBlock, BrainError> {
+pub fn why(conn: &Connection, space: &str, statement_id: &str) -> Result<ExplainBlock, BrainError> {
     let stmt_row = conn
         .query_row(
             "SELECT id, subject_id, predicate, object_entity, object_literal

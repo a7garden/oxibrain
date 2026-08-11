@@ -224,9 +224,7 @@ pub fn load_tfidf_model(
 pub fn load_knn_index(conn: &Connection, space: &str) -> Result<KnnIndex, BrainError> {
     let mut index = KnnIndex::new();
     let mut stmt = conn
-        .prepare(
-            "SELECT target_kind, target_id, vector FROM tfidf_vectors WHERE space_id = ?1",
-        )
+        .prepare("SELECT target_kind, target_id, vector FROM tfidf_vectors WHERE space_id = ?1")
         .map_err(sql_err)?;
     let rows = stmt
         .query_map(params![space], |r| {
@@ -292,7 +290,9 @@ fn parse_key(key: &str) -> SearchTarget {
         Some(("statement", id)) => SearchTarget::Statement { id: id.to_string() },
         Some(("entity", id)) => SearchTarget::Entity { id: id.to_string() },
         Some((_, id)) => SearchTarget::Episode { id: id.to_string() },
-        None => SearchTarget::Episode { id: key.to_string() },
+        None => SearchTarget::Episode {
+            id: key.to_string(),
+        },
     }
 }
 

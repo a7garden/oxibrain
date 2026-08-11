@@ -79,10 +79,14 @@ pub fn diff(
 ) -> Result<DiffResult, BrainError> {
     let beliefs_a = beliefs_at(conn, space, entity_id, at_a)?;
     let beliefs_b = beliefs_at(conn, space, entity_id, at_b)?;
-    let map_a: std::collections::HashMap<String, &TimelineEntry> =
-        beliefs_a.iter().map(|e| (e.statement_id.clone(), e)).collect();
-    let map_b: std::collections::HashMap<String, &TimelineEntry> =
-        beliefs_b.iter().map(|e| (e.statement_id.clone(), e)).collect();
+    let map_a: std::collections::HashMap<String, &TimelineEntry> = beliefs_a
+        .iter()
+        .map(|e| (e.statement_id.clone(), e))
+        .collect();
+    let map_b: std::collections::HashMap<String, &TimelineEntry> = beliefs_b
+        .iter()
+        .map(|e| (e.statement_id.clone(), e))
+        .collect();
     let mut added = Vec::new();
     let mut removed = Vec::new();
     let mut changed = Vec::new();
@@ -90,8 +94,7 @@ pub fn diff(
         match map_a.get(id) {
             None => added.push((*entry_b).clone()),
             Some(entry_a)
-                if entry_a.status != entry_b.status
-                    || entry_a.valid_from != entry_b.valid_from =>
+                if entry_a.status != entry_b.status || entry_a.valid_from != entry_b.valid_from =>
             {
                 changed.push((*entry_b).clone());
             }

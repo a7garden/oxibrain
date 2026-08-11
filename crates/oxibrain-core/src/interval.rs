@@ -62,7 +62,10 @@ pub fn clip(affirming: &[Interval], denial: &Interval) -> Vec<Interval> {
         }
         // Overlap: split into [aff.start, denial.start) and (denial.end, aff.end].
         if aff.start < denial.start {
-            result.push(Interval::new(aff.start, Timestamp(denial.start.millis() - 1)));
+            result.push(Interval::new(
+                aff.start,
+                Timestamp(denial.start.millis() - 1),
+            ));
         }
         if denial.end < aff.end {
             result.push(Interval::new(Timestamp(denial.end.millis() + 1), aff.end));

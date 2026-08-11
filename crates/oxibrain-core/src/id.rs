@@ -67,7 +67,7 @@ pub fn normalize_content(s: &str) -> String {
         .trim_end()
         .to_string()
 }
-use crate::knowledge::{claim_repr, object_repr, Polarity};
+use crate::knowledge::{Polarity, claim_repr, object_repr};
 
 /// `EntityId = blake3(space, entity_type, first_episode_id, first_span_start)`
 pub fn entity_id(
@@ -94,7 +94,12 @@ pub fn entity_key_id(entity_id: &str, normalized: &str, ty: &str) -> Id {
 }
 
 /// `StatementId = blake3(space, subject, predicate, object_repr)`
-pub fn statement_id(space: &str, subject: &str, predicate: &str, object: &crate::knowledge::Object) -> Id {
+pub fn statement_id(
+    space: &str,
+    subject: &str,
+    predicate: &str,
+    object: &crate::knowledge::Object,
+) -> Id {
     let repr = object_repr(object);
     hex(derive(&[
         ("space", space),
@@ -212,15 +217,47 @@ mod tests {
 
     #[test]
     fn assertion_id_stable() {
-        let a1 = assertion_id("st1", "ep1", "ext1", Polarity::Affirm, TIME_MIN, TIME_MAX, 1.0);
-        let a2 = assertion_id("st1", "ep1", "ext1", Polarity::Affirm, TIME_MIN, TIME_MAX, 1.0);
+        let a1 = assertion_id(
+            "st1",
+            "ep1",
+            "ext1",
+            Polarity::Affirm,
+            TIME_MIN,
+            TIME_MAX,
+            1.0,
+        );
+        let a2 = assertion_id(
+            "st1",
+            "ep1",
+            "ext1",
+            Polarity::Affirm,
+            TIME_MIN,
+            TIME_MAX,
+            1.0,
+        );
         assert_eq!(a1, a2);
     }
 
     #[test]
     fn different_polarity_different_assertion() {
-        let a1 = assertion_id("st1", "ep1", "ext1", Polarity::Affirm, TIME_MIN, TIME_MAX, 1.0);
-        let a2 = assertion_id("st1", "ep1", "ext1", Polarity::Deny, TIME_MIN, TIME_MAX, 1.0);
+        let a1 = assertion_id(
+            "st1",
+            "ep1",
+            "ext1",
+            Polarity::Affirm,
+            TIME_MIN,
+            TIME_MAX,
+            1.0,
+        );
+        let a2 = assertion_id(
+            "st1",
+            "ep1",
+            "ext1",
+            Polarity::Deny,
+            TIME_MIN,
+            TIME_MAX,
+            1.0,
+        );
         assert_ne!(a1, a2);
     }
 

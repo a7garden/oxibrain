@@ -18,11 +18,25 @@ pub enum BrainError {
     Invalid(String),
     #[error("corruption: {0}")]
     Corruption(String),
+    #[error("provider error (retryable: {retryable}): {message}")]
+    Provider { retryable: bool, message: String },
+    #[error("extraction error: {0}")]
+    Extraction(String),
+    #[error("budget exceeded: {0}")]
+    Budget(String),
 }
 
 impl BrainError {
     /// True if repeating the operation might succeed (transient I/O, lock contention).
     pub fn retryable(&self) -> bool {
-        matches!(self, Self::Storage(_) | Self::Locked { .. })
+        matches!(
+            self,
+            Self::Storage(_)
+                | Self::Locked { .. }
+                | Self::Provider {
+                    retryable: true,
+                    ..
+                }
+        )
     }
 }

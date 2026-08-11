@@ -4,10 +4,10 @@
 
 pub mod canonical;
 pub mod id;
-pub mod types;
 pub mod interval;
+pub mod types;
 
-pub use interval::{clip, merge_overlapping, overlaps, Interval};
+pub use interval::{Interval, clip, merge_overlapping, overlaps};
 
 pub mod knowledge;
 pub mod registry;
@@ -19,30 +19,30 @@ pub use id::{
 };
 pub use knowledge::{
     Assertion, Belief, BeliefStatus, Entity, EntityKey, EntityMerge, KeyOrigin, Mention,
-    MentionRole, MergeDecision, Object, Polarity, ResolutionMethod, Statement, Support,
-    TypedValue, claim_repr, object_repr,
+    MentionRole, MergeDecision, Object, Polarity, ResolutionMethod, Statement, Support, TypedValue,
+    claim_repr, object_repr,
 };
 pub use types::{ContentHash, Episode, EpisodeKind, SourceRef, Space, TrustTier};
 
 pub use registry::{
-    core_v1, Cardinality, Invalidation, LiteralType, ObjectKind, PredicateDef, Temporality,
-    CORE_V1_MAJOR, CORE_V1_MINOR,
+    CORE_V1_MAJOR, CORE_V1_MINOR, Cardinality, Invalidation, LiteralType, ObjectKind, PredicateDef,
+    Temporality, core_v1,
 };
 pub mod resolution;
 
 pub mod fold;
-pub use fold::{fold, StatementEntry};
+pub use fold::{StatementEntry, fold};
 
-pub mod retrieval;
-pub mod lifecycle;
+pub mod confidence;
 pub mod context;
+pub mod extraction;
+pub mod lifecycle;
+pub mod retrieval;
 
-pub use retrieval::{
-    Direction, DropReason, DroppedItem, PredicateFilter, Query, QueryMode,
-    RankedItem, RankingResult, SearchHit, SearchTarget, Strategy, TraversalEdge,
-    TraversalNode, TraversalResult, TraversalSpec,
-};
+pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens};
 pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};
-pub use context::{
-    ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens,
+pub use retrieval::{
+    Direction, DropReason, DroppedItem, PredicateFilter, Query, QueryMode, RankedItem,
+    RankingResult, SearchHit, SearchTarget, Strategy, TraversalEdge, TraversalNode,
+    TraversalResult, TraversalSpec,
 };

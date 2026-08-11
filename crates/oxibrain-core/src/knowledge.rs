@@ -94,7 +94,9 @@ impl MergeDecision {
     }
     pub fn parse_db(kind: &str, score: Option<f64>) -> Option<Self> {
         match kind {
-            "rule" => Some(Self::Rule { score: score.unwrap_or(0.0) }),
+            "rule" => Some(Self::Rule {
+                score: score.unwrap_or(0.0),
+            }),
             "user" => Some(Self::User),
             "import" => Some(Self::Import),
             _ => None,
@@ -231,8 +233,12 @@ impl ResolutionMethod {
         match method {
             "exact_key" => Some(Self::ExactKey),
             "alias" => Some(Self::Alias),
-            "lexical" => Some(Self::Lexical { score: score.unwrap_or(0.0) }),
-            "embedding" => Some(Self::Embedding { score: score.unwrap_or(0.0) }),
+            "lexical" => Some(Self::Lexical {
+                score: score.unwrap_or(0.0),
+            }),
+            "embedding" => Some(Self::Embedding {
+                score: score.unwrap_or(0.0),
+            }),
             "new" => Some(Self::New),
             "user" => Some(Self::User),
             _ => None,

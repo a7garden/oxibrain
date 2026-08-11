@@ -1,7 +1,7 @@
 //! Lifecycle WriteOps: salience decay + compaction (DESIGN §10).
 
 use crate::sql_err;
-use oxibrain_core::lifecycle::{salience, DecayConfig};
+use oxibrain_core::lifecycle::{DecayConfig, salience};
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::{Connection, params};
 

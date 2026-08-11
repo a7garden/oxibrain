@@ -3,24 +3,24 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod backup;
+pub mod communities;
+pub mod context;
+pub mod explain;
+pub mod index_ops;
 pub mod knowledge;
 pub mod ledger;
+pub mod lifecycle;
 pub mod lock;
 pub mod meta;
 pub mod migration;
 pub mod project;
 pub mod query;
 pub mod reader;
-pub mod index_ops;
 pub mod registry;
 pub mod reproject;
 pub mod schema;
-pub mod writer;
-pub mod communities;
 pub mod timeline;
-pub mod lifecycle;
-pub mod context;
-pub mod explain;
+pub mod writer;
 
 pub use backup::{BackupManifest, online_backup};
 pub use project::{

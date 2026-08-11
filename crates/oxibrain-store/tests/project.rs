@@ -1,5 +1,5 @@
-use oxibrain_ports::{ClockPort, FakeClock, Timestamp, TIME_MAX, TIME_MIN};
-use oxibrain_store::project::{project_declaration, Declaration, DeclObject, EntityRef};
+use oxibrain_ports::{ClockPort, FakeClock, TIME_MAX, TIME_MIN, Timestamp};
+use oxibrain_store::project::{DeclObject, Declaration, EntityRef, project_declaration};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -27,7 +27,10 @@ fn declare_statement_creates_belief() {
     let (_dir, conn, clock) = setup();
 
     let decl = Declaration::AddStatement {
-        subject: EntityRef { surface: "Alice".into(), ty: "Person".into() },
+        subject: EntityRef {
+            surface: "Alice".into(),
+            ty: "Person".into(),
+        },
         predicate: "employed_by".into(),
         object: DeclObject::Entity {
             surface: "Acme".into(),
@@ -54,7 +57,10 @@ fn supersession_updates_beliefs() {
 
     // Declare employed_by(Alice, Acme)
     let d1 = Declaration::AddStatement {
-        subject: EntityRef { surface: "Alice".into(), ty: "Person".into() },
+        subject: EntityRef {
+            surface: "Alice".into(),
+            ty: "Person".into(),
+        },
         predicate: "employed_by".into(),
         object: DeclObject::Entity {
             surface: "Acme".into(),
@@ -68,7 +74,10 @@ fn supersession_updates_beliefs() {
 
     // Declare employed_by(Alice, Globex) — should supersede Acme.
     let d2 = Declaration::AddStatement {
-        subject: EntityRef { surface: "Alice".into(), ty: "Person".into() },
+        subject: EntityRef {
+            surface: "Alice".into(),
+            ty: "Person".into(),
+        },
         predicate: "employed_by".into(),
         object: DeclObject::Entity {
             surface: "Globex".into(),

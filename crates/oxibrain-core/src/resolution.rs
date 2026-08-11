@@ -81,14 +81,16 @@ pub fn score(
         return 0.0;
     }
 
-    let exact = if candidate.normalized == mention_normalized { 1.0 } else { 0.0 };
+    let exact = if candidate.normalized == mention_normalized {
+        1.0
+    } else {
+        0.0
+    };
     // M1: no alias detection here; w_alias term is a placeholder for M3.
 
     let jw = strsim::jaro_winkler(&candidate.normalized, mention_normalized);
 
-    let raw = config.w_exact * exact
-        + config.w_jw * jw
-        + config.w_graph * graph_context;
+    let raw = config.w_exact * exact + config.w_jw * jw + config.w_graph * graph_context;
 
     // Clamp to [0, 1].
     raw.clamp(0.0, 1.0)
@@ -176,9 +178,19 @@ mod tests {
     #[test]
     fn exact_match_links() {
         let cands = vec![make_key("e1", "alice", "Person")];
-        let dec = resolve("alice", &"Person".to_string(), &cands, |_| 0.0, &ResolutionConfig::default());
+        let dec = resolve(
+            "alice",
+            &"Person".to_string(),
+            &cands,
+            |_| 0.0,
+            &ResolutionConfig::default(),
+        );
         match dec {
-            Decision::Link { entity, method, score } => {
+            Decision::Link {
+                entity,
+                method,
+                score,
+            } => {
                 assert_eq!(entity, "e1");
                 assert!(score >= 0.85);
                 assert!(matches!(method, ResolutionMethod::ExactKey));
@@ -190,7 +202,13 @@ mod tests {
     #[test]
     fn type_mismatch_rejected() {
         let cands = vec![make_key("e1", "alice", "Organization")];
-        let dec = resolve("alice", &"Person".to_string(), &cands, |_| 0.0, &ResolutionConfig::default());
+        let dec = resolve(
+            "alice",
+            &"Person".to_string(),
+            &cands,
+            |_| 0.0,
+            &ResolutionConfig::default(),
+        );
         match dec {
             Decision::New { .. } => {}
             _ => panic!("expected New for type mismatch"),
@@ -199,20 +217,35 @@ mod tests {
 
     #[test]
     fn no_candidates_is_new() {
-        let dec = resolve("alice", &"Person".to_string(), &[], |_| 0.0, &ResolutionConfig::default());
+        let dec = resolve(
+            "alice",
+            &"Person".to_string(),
+            &[],
+            |_| 0.0,
+            &ResolutionConfig::default(),
+        );
         assert!(matches!(dec, Decision::New { .. }));
     }
 
     #[test]
     fn normalize_basic() {
         assert_eq!(normalize("Alice", &"Person".to_string()), "alice");
-        assert_eq!(normalize("  Alice   Smith  ", &"Person".to_string()), "alice smith");
+        assert_eq!(
+            normalize("  Alice   Smith  ", &"Person".to_string()),
+            "alice smith"
+        );
     }
 
     #[test]
     fn low_similarity_is_new() {
         let cands = vec![make_key("e1", "zzzzzzzzz", "Person")];
-        let dec = resolve("alice", &"Person".to_string(), &cands, |_| 0.0, &ResolutionConfig::default());
+        let dec = resolve(
+            "alice",
+            &"Person".to_string(),
+            &cands,
+            |_| 0.0,
+            &ResolutionConfig::default(),
+        );
         assert!(matches!(dec, Decision::New { .. }));
     }
 }

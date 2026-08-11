@@ -40,10 +40,10 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
     let episodes: Vec<(String, String, String, i64)> = stmt
         .query_map([], |r| {
             Ok((
-                r.get::<_, String>(0)?,    // id
-                r.get::<_, String>(1)?,    // space_id
-                r.get::<_, String>(2)?,    // content
-                r.get::<_, i64>(3)?,       // ingested_at
+                r.get::<_, String>(0)?, // id
+                r.get::<_, String>(1)?, // space_id
+                r.get::<_, String>(2)?, // content
+                r.get::<_, i64>(3)?,    // ingested_at
             ))
         })
         .map_err(sql_err)?

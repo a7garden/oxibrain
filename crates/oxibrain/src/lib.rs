@@ -210,12 +210,9 @@ impl Brain {
         q: oxibrain_core::retrieval::Query,
     ) -> Result<oxibrain_core::retrieval::RankingResult, BrainError> {
         let h = self.handle.clone();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| query::hybrid_query(conn, &q))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        tokio::task::spawn_blocking(move || h.readers.read(|conn| query::hybrid_query(conn, &q)))
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Rebuild all indexes for a space (FTS5, TF-IDF, salience). Runs on the
@@ -347,9 +344,8 @@ impl Brain {
                 Ok(())
             }))?;
             h.writer.flush()?;
-            rx.recv().map_err(|_| {
-                BrainError::Storage("rebuild_communities channel dropped".into())
-            })
+            rx.recv()
+                .map_err(|_| BrainError::Storage("rebuild_communities channel dropped".into()))
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
@@ -370,7 +366,6 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
-
 
     pub async fn apply_decay(&self, space: &str) -> Result<usize, BrainError> {
         let h = self.handle.clone();
@@ -399,13 +394,13 @@ impl Brain {
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer.submit(Box::new(move |conn| {
-                let count =
-                    oxibrain_store::lifecycle::compact_episodes(conn, &space, now, 90)?;
+                let count = oxibrain_store::lifecycle::compact_episodes(conn, &space, now, 90)?;
                 let _ = tx.send(count);
                 Ok(())
             }))?;
             h.writer.flush()?;
-            rx.recv().map_err(|_| BrainError::Storage("compact channel dropped".into()))
+            rx.recv()
+                .map_err(|_| BrainError::Storage("compact channel dropped".into()))
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
@@ -428,5 +423,4 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
-
 }

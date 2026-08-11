@@ -1,9 +1,89 @@
 //! TF-IDF vector model with hashing trick (deterministic, fixed dimensionality).
-fn fnv1a(s:&str)->u64{let mut h=0xcbf29ce484222325u64;for b in s.bytes(){h^=b as u64;h=h.wrapping_mul(0x100000001b3);}h}
-const STOP_WORDS:&[&str]= &["the","a","an","is","are","was","were","be","been","being","have","has","had","do","does","did","will","would","could","should","may","might","must","can","of","in","on","at","to","for","with","by","from","as","into","about","than","then","no","not","or","and","but","if","so","it","its","this","that","these","those","i","you","he","she","we","they"];
-pub fn tokenize(text:&str)->Vec<String>{text.to_lowercase().split(|c:char|!c.is_alphanumeric()).filter(|s|!s.is_empty()&&s.len()>1&&!STOP_WORDS.contains(s)).map(String::from).collect()}
-pub struct TfIdfModel{pub dim:usize,idf:Vec<f32>,pub n_docs:usize}
-impl TfIdfModel{pub fn fit(texts:&[&str],dim:usize)->Self{let n_docs=texts.len();let mut df=vec![0u32;dim];for text in texts{let mut seen=std::collections::HashSet::new();for t in tokenize(text){seen.insert((fnv1a(&t)as usize)%dim);}for d in seen{df[d]+=1;}}let idf=df.iter().map(|&d|((1.0+n_docs as f32)/(1.0+d as f32)).ln()+1.0).collect();Self{dim,idf,n_docs}}pub fn transform(&self,text:&str)->TfIdfVector{let mut v=vec![0f32;self.dim];for t in tokenize(text){v[(fnv1a(&t)as usize)%self.dim]+=1.0;}let mut n=0.;for(i,x)in v.iter_mut().enumerate(){*x*=self.idf[i];n+=*x**x;}n=n.sqrt().max(1e-12);for x in &mut v{*x/=n;}TfIdfVector(v)}}
+fn fnv1a(s: &str) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+const STOP_WORDS: &[&str] = &[
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "can", "of",
+    "in", "on", "at", "to", "for", "with", "by", "from", "as", "into", "about", "than", "then",
+    "no", "not", "or", "and", "but", "if", "so", "it", "its", "this", "that", "these", "those",
+    "i", "you", "he", "she", "we", "they",
+];
+pub fn tokenize(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty() && s.len() > 1 && !STOP_WORDS.contains(s))
+        .map(String::from)
+        .collect()
+}
+pub struct TfIdfModel {
+    pub dim: usize,
+    idf: Vec<f32>,
+    pub n_docs: usize,
+}
+impl TfIdfModel {
+    pub fn fit(texts: &[&str], dim: usize) -> Self {
+        let n_docs = texts.len();
+        let mut df = vec![0u32; dim];
+        for text in texts {
+            let mut seen = std::collections::HashSet::new();
+            for t in tokenize(text) {
+                seen.insert((fnv1a(&t) as usize) % dim);
+            }
+            for d in seen {
+                df[d] += 1;
+            }
+        }
+        let idf = df
+            .iter()
+            .map(|&d| ((1.0 + n_docs as f32) / (1.0 + d as f32)).ln() + 1.0)
+            .collect();
+        Self { dim, idf, n_docs }
+    }
+    pub fn transform(&self, text: &str) -> TfIdfVector {
+        let mut v = vec![0f32; self.dim];
+        for t in tokenize(text) {
+            v[(fnv1a(&t) as usize) % self.dim] += 1.0;
+        }
+        let mut n = 0.;
+        for (i, x) in v.iter_mut().enumerate() {
+            *x *= self.idf[i];
+            n += *x * *x;
+        }
+        n = n.sqrt().max(1e-12);
+        for x in &mut v {
+            *x /= n;
+        }
+        TfIdfVector(v)
+    }
+}
 pub struct TfIdfVector(Vec<f32>);
-impl TfIdfVector{pub fn as_slice(&self)->&[f32]{&self.0}pub fn from_vec(v:Vec<f32>)->Self{Self(v)}pub fn dim(&self)->usize{self.0.len()}pub fn to_bytes(&self)->Vec<u8>{self.0.iter().flat_map(|v|v.to_le_bytes()).collect()}pub fn from_bytes(b:&[u8])->Self{Self(b.chunks_exact(4).map(|c|f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect())}}
-pub fn cosine_sim(a:&TfIdfVector,b:&TfIdfVector)->f64{a.0.iter().zip(&b.0).map(|(x,y)|x*y).sum::<f32>()as f64}
+impl TfIdfVector {
+    pub fn as_slice(&self) -> &[f32] {
+        &self.0
+    }
+    pub fn from_vec(v: Vec<f32>) -> Self {
+        Self(v)
+    }
+    pub fn dim(&self) -> usize {
+        self.0.len()
+    }
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+    pub fn from_bytes(b: &[u8]) -> Self {
+        Self(
+            b.chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect(),
+        )
+    }
+}
+pub fn cosine_sim(a: &TfIdfVector, b: &TfIdfVector) -> f64 {
+    a.0.iter().zip(&b.0).map(|(x, y)| x * y).sum::<f32>() as f64
+}

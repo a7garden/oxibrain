@@ -4,7 +4,7 @@
 //! across different objects (different StatementIds) sharing the same
 //! subject+predicate (spec deviation D1).
 
-use crate::interval::{clip, merge_overlapping, overlaps, Interval};
+use crate::interval::{Interval, clip, merge_overlapping, overlaps};
 use crate::knowledge::{
     Assertion, Belief, BeliefStatus, Polarity, Statement, StatementId, Support,
 };
@@ -136,9 +136,10 @@ fn fold_contradiction(visible: &[VisibleStmt]) -> Vec<Belief> {
         for j in (i + 1)..affirming.len() {
             let a = &affirming[i];
             let b = &affirming[j];
-            let overlap = a.affirm.iter().any(|ai| {
-                b.affirm.iter().any(|bi| overlaps(ai, bi))
-            });
+            let overlap = a
+                .affirm
+                .iter()
+                .any(|ai| b.affirm.iter().any(|bi| overlaps(ai, bi)));
             if overlap {
                 if !contradicted.contains(&a.stmt.id.as_str()) {
                     contradicted.push(&a.stmt.id);
@@ -294,8 +295,14 @@ fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
 fn compute_support(assertions: &[Assertion]) -> Support {
     use std::collections::HashSet;
 
-    let affirm_count = assertions.iter().filter(|a| a.polarity == Polarity::Affirm).count() as u32;
-    let deny_count = assertions.iter().filter(|a| a.polarity == Polarity::Deny).count() as u32;
+    let affirm_count = assertions
+        .iter()
+        .filter(|a| a.polarity == Polarity::Affirm)
+        .count() as u32;
+    let deny_count = assertions
+        .iter()
+        .filter(|a| a.polarity == Polarity::Deny)
+        .count() as u32;
 
     let distinct_episodes: HashSet<&str> = assertions.iter().map(|a| a.episode.as_str()).collect();
 
@@ -319,10 +326,8 @@ fn compute_support(assertions: &[Assertion]) -> Support {
 mod tests {
     use super::*;
     use crate::knowledge::{Object, Polarity, Statement};
-    use crate::registry::{
-        Cardinality, Invalidation, ObjectKind, PredicateDef, Temporality,
-    };
-    use oxibrain_ports::{Timestamp, TIME_MAX, TIME_MIN};
+    use crate::registry::{Cardinality, Invalidation, ObjectKind, PredicateDef, Temporality};
+    use oxibrain_ports::{TIME_MAX, TIME_MIN, Timestamp};
 
     fn ts(m: i64) -> Timestamp {
         Timestamp(m)
@@ -413,7 +418,13 @@ mod tests {
         let stmt = make_stmt("st1", "e1", "employed_by", "acme");
         let group = vec![StatementEntry {
             statement: stmt,
-            assertions: vec![make_assertion("st1", "ep1", Polarity::Affirm, ts(100), TIME_MAX)],
+            assertions: vec![make_assertion(
+                "st1",
+                "ep1",
+                Polarity::Affirm,
+                ts(100),
+                TIME_MAX,
+            )],
         }];
         let beliefs = fold(&def_employed(), &group, TIME_MAX);
         assert_eq!(beliefs.len(), 1);
@@ -429,17 +440,35 @@ mod tests {
         let group = vec![
             StatementEntry {
                 statement: stmt_a,
-                assertions: vec![make_assertion("st_a", "ep1", Polarity::Affirm, ts(100), TIME_MAX)],
+                assertions: vec![make_assertion(
+                    "st_a",
+                    "ep1",
+                    Polarity::Affirm,
+                    ts(100),
+                    TIME_MAX,
+                )],
             },
             StatementEntry {
                 statement: stmt_b,
-                assertions: vec![make_assertion("st_b", "ep2", Polarity::Affirm, ts(200), TIME_MAX)],
+                assertions: vec![make_assertion(
+                    "st_b",
+                    "ep2",
+                    Polarity::Affirm,
+                    ts(200),
+                    TIME_MAX,
+                )],
             },
         ];
         let beliefs = fold(&def_employed(), &group, TIME_MAX);
         // Acme: [100, 199] Superseded. Globex: [200, MAX] Active.
-        let acme = beliefs.iter().find(|b| b.statement == "st_a").expect("acme belief");
-        let globex = beliefs.iter().find(|b| b.statement == "st_b").expect("globex belief");
+        let acme = beliefs
+            .iter()
+            .find(|b| b.statement == "st_a")
+            .expect("acme belief");
+        let globex = beliefs
+            .iter()
+            .find(|b| b.statement == "st_b")
+            .expect("globex belief");
         assert_eq!(acme.status, BeliefStatus::Superseded);
         assert_eq!(acme.valid_to, ts(199));
         assert_eq!(globex.status, BeliefStatus::Active);
@@ -454,16 +483,32 @@ mod tests {
         let group = vec![
             StatementEntry {
                 statement: stmt_a,
-                assertions: vec![make_assertion("st_a", "ep1", Polarity::Affirm, TIME_MIN, TIME_MAX)],
+                assertions: vec![make_assertion(
+                    "st_a",
+                    "ep1",
+                    Polarity::Affirm,
+                    TIME_MIN,
+                    TIME_MAX,
+                )],
             },
             StatementEntry {
                 statement: stmt_b,
-                assertions: vec![make_assertion("st_b", "ep2", Polarity::Affirm, TIME_MIN, TIME_MAX)],
+                assertions: vec![make_assertion(
+                    "st_b",
+                    "ep2",
+                    Polarity::Affirm,
+                    TIME_MIN,
+                    TIME_MAX,
+                )],
             },
         ];
         let beliefs = fold(&def_born_in(), &group, TIME_MAX);
         assert_eq!(beliefs.len(), 2);
-        assert!(beliefs.iter().all(|b| b.status == BeliefStatus::Contradicted));
+        assert!(
+            beliefs
+                .iter()
+                .all(|b| b.status == BeliefStatus::Contradicted)
+        );
     }
 
     // ── Coexist: two projects for MultiValued predicate. ──
@@ -474,11 +519,23 @@ mod tests {
         let group = vec![
             StatementEntry {
                 statement: stmt_a,
-                assertions: vec![make_assertion("st_a", "ep1", Polarity::Affirm, ts(100), TIME_MAX)],
+                assertions: vec![make_assertion(
+                    "st_a",
+                    "ep1",
+                    Polarity::Affirm,
+                    ts(100),
+                    TIME_MAX,
+                )],
             },
             StatementEntry {
                 statement: stmt_b,
-                assertions: vec![make_assertion("st_b", "ep2", Polarity::Affirm, ts(100), TIME_MAX)],
+                assertions: vec![make_assertion(
+                    "st_b",
+                    "ep2",
+                    Polarity::Affirm,
+                    ts(100),
+                    TIME_MAX,
+                )],
             },
         ];
         let beliefs = fold(&def_works_on(), &group, TIME_MAX);
@@ -537,7 +594,10 @@ mod tests {
             }],
         }];
         let beliefs = fold(&def_employed(), &group, ts(10));
-        assert!(beliefs.is_empty(), "retracted assertion should produce no belief");
+        assert!(
+            beliefs.is_empty(),
+            "retracted assertion should produce no belief"
+        );
     }
 
     // ── Output is sorted by (statement_id, valid_from). ──
@@ -548,11 +608,23 @@ mod tests {
         let group = vec![
             StatementEntry {
                 statement: stmt_b,
-                assertions: vec![make_assertion("st_b", "ep2", Polarity::Affirm, ts(200), TIME_MAX)],
+                assertions: vec![make_assertion(
+                    "st_b",
+                    "ep2",
+                    Polarity::Affirm,
+                    ts(200),
+                    TIME_MAX,
+                )],
             },
             StatementEntry {
                 statement: stmt_a,
-                assertions: vec![make_assertion("st_a", "ep1", Polarity::Affirm, ts(100), TIME_MAX)],
+                assertions: vec![make_assertion(
+                    "st_a",
+                    "ep1",
+                    Polarity::Affirm,
+                    ts(100),
+                    TIME_MAX,
+                )],
             },
         ];
         let beliefs = fold(&def_works_on(), &group, TIME_MAX);

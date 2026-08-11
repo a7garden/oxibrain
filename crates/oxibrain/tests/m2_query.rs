@@ -7,13 +7,7 @@ use oxibrain_ports::{FakeClock, Timestamp};
 use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 use tempfile::tempdir;
 
-fn decl_add(
-    subj: &str,
-    subj_ty: &str,
-    pred: &str,
-    obj: &str,
-    obj_ty: &str,
-) -> Declaration {
+fn decl_add(subj: &str, subj_ty: &str, pred: &str, obj: &str, obj_ty: &str) -> Declaration {
     Declaration::AddStatement {
         subject: EntityRef {
             surface: subj.into(),
@@ -58,9 +52,7 @@ fn decl_add_at(
 #[tokio::test]
 async fn hybrid_query_finds_declared_knowledge() {
     let dir = tempdir().expect("tempdir");
-    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
-        1_700_000_000_000,
-    )));
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
     let brain = Brain::with_clock(
         oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
         clock,
@@ -80,7 +72,10 @@ async fn hybrid_query_finds_declared_knowledge() {
         .expect("declare");
 
     // Rebuild indexes so lexical/semantic search can see the inserted content.
-    brain.rebuild_indexes(&space).await.expect("rebuild_indexes");
+    brain
+        .rebuild_indexes(&space)
+        .await
+        .expect("rebuild_indexes");
 
     let q = Query {
         text: "Alice ProjectX".into(),
@@ -99,9 +94,7 @@ async fn hybrid_query_finds_declared_knowledge() {
 #[tokio::test]
 async fn traversal_finds_multihop() {
     let dir = tempdir().expect("tempdir");
-    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
-        1_700_000_000_000,
-    )));
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
     let brain = Brain::with_clock(
         oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
         clock,
@@ -146,9 +139,7 @@ async fn traversal_finds_multihop() {
 #[tokio::test]
 async fn timeline_diff_why_supersession() {
     let dir = tempdir().expect("tempdir");
-    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
-        1_700_000_000_000,
-    )));
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
     let brain = Brain::with_clock(
         oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
         clock.clone(),
@@ -216,10 +207,7 @@ async fn timeline_diff_why_supersession() {
     // Diff between two points in time should observe a change.
     let t0 = Timestamp::from_millis(t_acme_start);
     let t1 = Timestamp::from_millis(t_globex_start + 100);
-    let diff = brain
-        .diff(&space, &alice_id, t0, t1)
-        .await
-        .expect("diff");
+    let diff = brain.diff(&space, &alice_id, t0, t1).await.expect("diff");
     assert!(
         !diff.added.is_empty() || !diff.changed.is_empty(),
         "diff should show added or changed between t0 and t1, got {:?}",
@@ -241,9 +229,7 @@ async fn timeline_diff_why_supersession() {
 #[tokio::test]
 async fn rebuild_communities_separates_clusters() {
     let dir = tempdir().expect("tempdir");
-    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
-        1_700_000_000_000,
-    )));
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
     let brain = Brain::with_clock(
         oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
         clock,
@@ -253,12 +239,7 @@ async fn rebuild_communities_separates_clusters() {
     let space = brain.ensure_space("test").await.expect("space");
 
     // Two disconnected clusters: A-B-C and X-Y-Z.
-    for (s, o) in [
-        ("A", "B"),
-        ("B", "C"),
-        ("X", "Y"),
-        ("Y", "Z"),
-    ] {
+    for (s, o) in [("A", "B"), ("B", "C"), ("X", "Y"), ("Y", "Z")] {
         brain
             .declare(&space, decl_add(s, "Concept", "knows", o, "Concept"))
             .await
@@ -321,9 +302,7 @@ async fn rebuild_communities_separates_clusters() {
 #[tokio::test]
 async fn apply_decay_updates_salience() {
     let dir = tempdir().expect("tempdir");
-    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
-        1_700_000_000_000,
-    )));
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
     let brain = Brain::with_clock(
         oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
         clock.clone(),
@@ -350,7 +329,10 @@ async fn apply_decay_updates_salience() {
     // Advance several days, then apply decay.
     clock.advance(10 * 86_400_000);
     let updated = brain.apply_decay(&space).await.expect("apply_decay");
-    assert!(updated >= 1, "should update at least one entity, got {updated}");
+    assert!(
+        updated >= 1,
+        "should update at least one entity, got {updated}"
+    );
 
     // Verify decay applied: open the DB directly and read salience.
     let db_path = dir.path().join("brain.db");
@@ -377,9 +359,7 @@ async fn apply_decay_updates_salience() {
 #[tokio::test]
 async fn compact_succeeds_and_keeps_content_readable() {
     let dir = tempdir().expect("tempdir");
-    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
-        1_700_000_000_000,
-    )));
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
     let brain = Brain::with_clock(
         oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
         clock.clone(),
@@ -404,18 +384,26 @@ async fn compact_succeeds_and_keeps_content_readable() {
     clock.advance(200 * 86_400_000);
 
     let compacted = brain.compact(&space).await.expect("compact");
-    assert!(compacted >= 1, "should compact at least one episode, got {compacted}");
+    assert!(
+        compacted >= 1,
+        "should compact at least one episode, got {compacted}"
+    );
 
     // The get_episode call should still return the content transparently.
-    let got = brain.get_episode(&ep_id).await.expect("get_episode").expect("some");
-    assert_eq!(got.content, note_text, "content should be transparently restored");
+    let got = brain
+        .get_episode(&ep_id)
+        .await
+        .expect("get_episode")
+        .expect("some");
+    assert_eq!(
+        got.content, note_text,
+        "content should be transparently restored"
+    );
 }
 #[tokio::test]
 async fn assemble_context_packs_within_budget() {
     let dir = tempdir().expect("tempdir");
-    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
-        1_700_000_000_000,
-    )));
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
     let brain = Brain::with_clock(
         oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
         clock,
@@ -473,6 +461,3 @@ async fn assemble_context_packs_within_budget() {
         result.layers
     );
 }
-
-
-

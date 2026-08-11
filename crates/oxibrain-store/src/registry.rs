@@ -2,18 +2,17 @@
 //! array, loads PredicateDefs from the predicates table.
 
 use crate::sql_err;
-use oxibrain_core::registry::{core_v1, PredicateDef, CORE_V1_MAJOR, CORE_V1_MINOR};
+use oxibrain_core::registry::{CORE_V1_MAJOR, CORE_V1_MINOR, PredicateDef, core_v1};
 use oxibrain_ports::BrainError;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::HashMap;
 
 /// Seed the core/v1 ontology into the predicates table. Idempotent (INSERT OR IGNORE).
 pub fn seed_core_v1(conn: &Connection) -> Result<(), BrainError> {
     for def in core_v1() {
         let json = serde_json::to_string(def).expect("predicate def serializable");
-        let canon = oxibrain_core::canonical_json_value(
-            &serde_json::from_str(&json).expect("valid json"),
-        );
+        let canon =
+            oxibrain_core::canonical_json_value(&serde_json::from_str(&json).expect("valid json"));
         conn.execute(
             "INSERT OR IGNORE INTO predicates (name, major_version, minor_version, def_json)
              VALUES (?1, ?2, ?3, ?4)",
@@ -33,8 +32,8 @@ pub fn load_predicate(conn: &Connection, name: &str) -> Result<Option<PredicateD
     );
     match row {
         Ok(json) => {
-            let def: PredicateDef =
-                serde_json::from_str(&json).map_err(|e| BrainError::Storage(format!("predicate parse: {e}")))?;
+            let def: PredicateDef = serde_json::from_str(&json)
+                .map_err(|e| BrainError::Storage(format!("predicate parse: {e}")))?;
             Ok(Some(def))
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),

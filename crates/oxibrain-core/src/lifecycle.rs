@@ -12,7 +12,11 @@ pub struct DecayConfig {
 
 impl Default for DecayConfig {
     fn default() -> Self {
-        Self { base: 1.0, lambda: 0.01, floor: 0.05 }
+        Self {
+            base: 1.0,
+            lambda: 0.01,
+            floor: 0.05,
+        }
     }
 }
 
@@ -32,7 +36,10 @@ pub struct CompactionConfig {
 
 impl Default for CompactionConfig {
     fn default() -> Self {
-        Self { salience_threshold: 0.1, min_age_days: 90 }
+        Self {
+            salience_threshold: 0.1,
+            min_age_days: 90,
+        }
     }
 }
 
