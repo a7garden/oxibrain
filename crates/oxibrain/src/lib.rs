@@ -398,4 +398,22 @@ impl Brain {
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
+    pub async fn assemble_context(
+        &self,
+        space: &str,
+        query: &str,
+        token_budget: usize,
+    ) -> Result<oxibrain_core::context::ContextResult, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let query = query.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| {
+                oxibrain_store::context::assemble_context(conn, &space, &query, token_budget)
+            })
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
 }

@@ -410,5 +410,69 @@ async fn compact_succeeds_and_keeps_content_readable() {
     let got = brain.get_episode(&ep_id).await.expect("get_episode").expect("some");
     assert_eq!(got.content, note_text, "content should be transparently restored");
 }
+#[tokio::test]
+async fn assemble_context_packs_within_budget() {
+    let dir = tempdir().expect("tempdir");
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
+        1_700_000_000_000,
+    )));
+    let brain = Brain::with_clock(
+        oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
+        clock,
+    )
+    .await
+    .expect("open");
+    let space = brain.ensure_space("test").await.expect("space");
+
+    // Declare some knowledge and ingest a note so the context layers have content.
+    brain
+        .declare(
+            &space,
+            decl_add("Alice", "Person", "employed_by", "Acme", "Organization"),
+        )
+        .await
+        .expect("declare");
+    brain
+        .ingest_note(
+            &space,
+            "note.md",
+            "Alice joined Acme in 2020.".to_string(),
+            Timestamp::from_millis(1_700_000_000_000),
+        )
+        .await
+        .expect("ingest_note");
+
+    // Rebuild indexes so the lexical layer can find anything.
+    brain
+        .rebuild_indexes(&space)
+        .await
+        .expect("rebuild_indexes");
+
+    let budget = 1024_usize;
+    let result = brain
+        .assemble_context(&space, "Alice Acme", budget)
+        .await
+        .expect("assemble_context");
+
+    assert!(
+        result.total_tokens <= budget,
+        "total_tokens {} must be <= budget {}",
+        result.total_tokens,
+        budget
+    );
+    assert_eq!(result.budget.max_tokens, budget);
+    // We ingested at least one episode, so the recent-episodes layer should be
+    // populated.
+    let has_recent = result
+        .layers
+        .iter()
+        .any(|l| l.kind == oxibrain_core::context::LayerKind::RecentEpisodes);
+    assert!(
+        has_recent,
+        "expected a recent-episodes layer, got layers: {:?}",
+        result.layers
+    );
+}
+
 
 
