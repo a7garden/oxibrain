@@ -1,0 +1,14 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Frontend (Phase 4)
+node_modules/
+dist/
+.vite/
+
+# OS / editor
+.DS_Store
+
+# OMP harness local state
+/.omp/
