@@ -6,15 +6,17 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["http-llm"]
-http-llm = []   # placeholder until M3 ships the real adapter
+default = []
+http-llm = ["dep:oxibrain-llm-http"]
 
 [dependencies]
 oxibrain-core.workspace = true
 oxibrain-store.workspace = true
 oxibrain-ports.workspace = true
+oxibrain-llm-http = { workspace = true, optional = true }
 tokio.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

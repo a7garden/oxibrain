@@ -471,6 +471,31 @@ fn parse_claim_literal(lt: &str, value: &str) -> Result<TypedValue, BrainError> 
     }
 }
 
+/// Find primary episodes that don't have a cache entry for this extractor.
+pub fn uncached_episodes(
+    conn: &Connection,
+    space: &str,
+    extractor_id: &str,
+) -> Result<Vec<String>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.id FROM episodes e
+             WHERE e.space_id = ?1 AND e.kind = 'primary'
+             AND NOT EXISTS (
+               SELECT 1 FROM extractions x
+               WHERE x.episode_id = e.id AND x.extractor_id = ?2
+             )
+             ORDER BY e.seq ASC",
+        )
+        .map_err(sql_err)?;
+    let ids: Vec<String> = stmt
+        .query_map(rusqlite::params![space, extractor_id], |r| r.get(0))
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    Ok(ids)
+}
+
 /// Parse + validate + project from a cached response — no LLM call.
 /// Used by reproject to replay extractions deterministically.
 pub fn project_from_cache(

@@ -6,7 +6,9 @@ pub mod config;
 
 pub use config::BrainConfig;
 pub use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier};
-pub use oxibrain_ports::{BrainError, ClockPort, SystemClock, Timestamp};
+pub use oxibrain_ports::{
+    BrainError, ClockPort, LlmPort, LlmRequest, LlmResponse, SystemClock, Timestamp,
+};
 
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 use oxibrain_store::{StoreHandle, ledger, query, reproject};
@@ -16,6 +18,7 @@ use std::sync::Arc;
 pub struct Brain {
     handle: Arc<StoreHandle>,
     clock: Arc<dyn ClockPort>,
+    llm: Option<Arc<dyn LlmPort>>,
 }
 
 impl Brain {
@@ -26,6 +29,7 @@ impl Brain {
         Ok(Self {
             handle: Arc::new(store),
             clock: Arc::new(SystemClock),
+            llm: None,
         })
     }
 
@@ -39,6 +43,7 @@ impl Brain {
         Ok(Self {
             handle: Arc::new(store),
             clock,
+            llm: None,
         })
     }
 
@@ -422,5 +427,341 @@ impl Brain {
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Create a Brain with a custom clock and LLM port.
+    pub async fn with_llm(
+        config: BrainConfig,
+        clock: Arc<dyn ClockPort>,
+        llm: Arc<dyn LlmPort>,
+    ) -> Result<Self, BrainError> {
+        let store = tokio::task::spawn_blocking(move || StoreHandle::open(&config.dir))
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+        Ok(Self {
+            handle: Arc::new(store),
+            clock,
+            llm: Some(llm),
+        })
+    }
+
+    /// Returns the configured LLM port, or an error if none.
+    fn require_llm(&self) -> Result<&Arc<dyn LlmPort>, BrainError> {
+        self.llm
+            .as_ref()
+            .ok_or_else(|| BrainError::Config("no LLM port configured".into()))
+    }
+
+    /// Ingest an episode and enqueue an extraction job. Returns the episode id.
+    pub async fn ingest(
+        &self,
+        space: &str,
+        content: String,
+        source: SourceRef,
+        trust: TrustTier,
+        extractor_id: &str,
+    ) -> Result<String, BrainError> {
+        let h = self.handle.clone();
+        let now = self.clock.now();
+        let space = space.to_string();
+        let extractor_id = extractor_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                let ep_id = oxibrain_store::extraction::ingest_and_enqueue(
+                    conn,
+                    &space,
+                    &content,
+                    source,
+                    trust,
+                    &extractor_id,
+                    now,
+                )?;
+                let _ = tx.send(ep_id);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("ingest channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Extract a single episode synchronously (realtime mode). Does NOT use the
+    /// job queue — directly reads, calls LLM, validates, projects. Returns summary.
+    pub async fn extract_one(
+        &self,
+        space: &str,
+        episode_id: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+    ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
+        let llm = self.require_llm()?.clone();
+        let now = self.clock.now();
+
+        // 1. Read episode content [reader].
+        let episode = self
+            .get_episode(episode_id)
+            .await?
+            .ok_or_else(|| BrainError::NotFound(format!("episode {episode_id}")))?;
+
+        // 2. Generate schema + prompt [pure].
+        let predicates = oxibrain_core::registry::core_v1();
+        let schema = oxibrain_core::extraction::schema_from_registry(predicates);
+        let system = oxibrain_core::extraction::build_extraction_prompt(predicates);
+
+        // 3. Call LLM [async, off-actor].
+        let req = LlmRequest {
+            model: config.model_id.clone(),
+            system: Some(system),
+            prompt: episode.content.clone(),
+            json_schema: Some(schema),
+            max_tokens: config.max_tokens,
+        };
+        let response = llm.complete(req.clone()).await?;
+
+        // 4. Parse + validate [pure].
+        let parsed: oxibrain_core::extraction::ExtractionResponse =
+            serde_json::from_str(&response.text)
+                .map_err(|e| BrainError::Extraction(format!("parse LLM response: {e}")))?;
+        let mut result = oxibrain_core::extraction::validate_claims(
+            &parsed.claims,
+            &episode.content,
+            predicates,
+        );
+
+        // 5. Repair loop: one retry if invalid claims exist.
+        if !result.invalid.is_empty() && config.max_tokens > 0 {
+            let errors_summary: Vec<&oxibrain_core::extraction::ValidationError> = result
+                .invalid
+                .iter()
+                .flat_map(|(_, errs)| errs.iter())
+                .collect();
+            let repair_prompt = format!(
+                "{}\n\nPrevious extraction had these errors: {:?}\nPlease re-extract, fixing these issues.",
+                episode.content, errors_summary
+            );
+            let repair_req = LlmRequest {
+                prompt: repair_prompt,
+                ..req.clone()
+            };
+            if let Ok(repair_response) = llm.complete(repair_req).await {
+                if let Ok(repair_parsed) = serde_json::from_str::<
+                    oxibrain_core::extraction::ExtractionResponse,
+                >(&repair_response.text)
+                {
+                    result = oxibrain_core::extraction::validate_claims(
+                        &repair_parsed.claims,
+                        &episode.content,
+                        predicates,
+                    );
+                }
+            }
+        }
+
+        let invalid_count = result.invalid.len();
+        let raw_response = response.text.clone();
+        let extractor_id = config.id();
+        let space = space.to_string();
+        let episode_id = episode_id.to_string();
+        let valid = result.valid.clone();
+        let invalid = result.invalid.clone();
+
+        // 6. Project [WriteOp].
+        let h = self.handle.clone();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                // Cache the raw response.
+                oxibrain_store::extraction::cache_response(
+                    conn,
+                    &episode_id,
+                    &extractor_id,
+                    &raw_response,
+                    now,
+                )?;
+                // Project valid claims.
+                let n = oxibrain_store::extraction::project_extraction(
+                    conn,
+                    &space,
+                    &episode_id,
+                    &extractor_id,
+                    &valid,
+                    now,
+                )?;
+                // File invalid claims.
+                for (_claim, errors) in &invalid {
+                    let errors_json = serde_json::to_string(errors).unwrap_or_else(|_| "[]".into());
+                    oxibrain_store::quarantine::record_failure(
+                        conn,
+                        &episode_id,
+                        &extractor_id,
+                        &raw_response,
+                        &errors_json,
+                        now,
+                    )?;
+                }
+                let summary = oxibrain_core::extraction::ExtractSummary {
+                    extracted: n,
+                    quarantined: invalid_count,
+                    episodes_done: 1,
+                    episodes_failed: 0,
+                };
+                let _ = tx.send(summary);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("extract_one channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Process pending extraction jobs in batch. Claims up to
+    /// `budget.max_episodes_per_batch` ready jobs and extracts each.
+    pub async fn extract_pending(
+        &self,
+        space: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+        budget: &oxibrain_core::extraction::ExtractionBudget,
+    ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
+        let _llm = self.require_llm()?;
+        let now = self.clock.now();
+        let extractor_id = config.id();
+
+        // 1. Claim jobs.
+        let h = self.handle.clone();
+        let lease_timeout = budget.lease_timeout_secs;
+        let batch_limit = budget.max_episodes_per_batch;
+        let jobs = tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                let _ = oxibrain_store::extraction::reclaim_expired(conn, now);
+                let jobs = oxibrain_store::extraction::claim_jobs(
+                    conn,
+                    &extractor_id,
+                    lease_timeout,
+                    batch_limit,
+                    now,
+                )?;
+                let _ = tx.send(jobs);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("claim_jobs channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+
+        // 2. Process each job via extract_one.
+        let mut total = oxibrain_core::extraction::ExtractSummary::default();
+        for job in jobs {
+            match self.extract_one(space, &job.episode_id, config).await {
+                Ok(summary) => {
+                    total.extracted += summary.extracted;
+                    total.quarantined += summary.quarantined;
+                    total.episodes_done += 1;
+                    // Complete the job.
+                    let h = self.handle.clone();
+                    let job_id = job.id.clone();
+                    let now = self.clock.now();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let _ = h.writer.submit(Box::new(move |conn| {
+                            let _ = tx
+                                .send(oxibrain_store::extraction::complete_job(conn, &job_id, now));
+                            Ok(())
+                        }));
+                        let _ = h.writer.flush();
+                        rx.recv()
+                    })
+                    .await;
+                }
+                Err(e) => {
+                    total.episodes_failed += 1;
+                    // Fail the job.
+                    let h = self.handle.clone();
+                    let job_id = job.id.clone();
+                    let now = self.clock.now();
+                    let max_attempts = budget.max_repair_attempts + 1;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let _ = h.writer.submit(Box::new(move |conn| {
+                            let _ = tx.send(oxibrain_store::extraction::fail_job(
+                                conn,
+                                &job_id,
+                                &e.to_string(),
+                                max_attempts,
+                                now,
+                            ));
+                            Ok(())
+                        }));
+                        let _ = h.writer.flush();
+                        rx.recv()
+                    })
+                    .await;
+                }
+            }
+        }
+        Ok(total)
+    }
+
+    /// Query job queue status (counts by state).
+    pub async fn job_status(&self) -> Result<Vec<(String, usize)>, BrainError> {
+        let h = self.handle.clone();
+        tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| {
+                let jobs = oxibrain_store::extraction::list_jobs(conn, None)?;
+                let mut counts: std::collections::BTreeMap<String, usize> =
+                    std::collections::BTreeMap::new();
+                for job in jobs {
+                    *counts.entry(job.state.as_str().to_string()).or_default() += 1;
+                }
+                Ok(counts.into_iter().collect())
+            })
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Re-extract all primary episodes with a new extractor config.
+    /// Old cache entries are preserved (different extractor_id = different PK).
+    pub async fn reextract(
+        &self,
+        space: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+    ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
+        let _llm = self.require_llm()?;
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let query_space = space.clone();
+        let extractor_id = config.id();
+
+        // Find primary episodes that don't have a cache entry for this extractor.
+        let episode_ids = tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| {
+                oxibrain_store::extraction::uncached_episodes(conn, &query_space, &extractor_id)
+            })
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+
+        // Extract each.
+        let mut total = oxibrain_core::extraction::ExtractSummary::default();
+        for ep_id in episode_ids {
+            match self.extract_one(&space, &ep_id, config).await {
+                Ok(s) => {
+                    total.extracted += s.extracted;
+                    total.quarantined += s.quarantined;
+                    total.episodes_done += 1;
+                }
+                Err(_) => {
+                    total.episodes_failed += 1;
+                }
+            }
+        }
+        Ok(total)
     }
 }
