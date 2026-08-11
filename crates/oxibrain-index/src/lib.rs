@@ -11,3 +11,5 @@ pub mod knn;
 pub mod adjacency;
 pub use knn::KnnIndex;
 pub use adjacency::{AdjacencyGraph, BfsResult, BfsSpec};
+pub mod community;
+pub use community::{CommunityMap, label_propagation};
