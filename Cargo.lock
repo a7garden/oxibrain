@@ -911,6 +911,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxibrain-connectors"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "oxibrain-core"
 version = "0.1.0"
 dependencies = [

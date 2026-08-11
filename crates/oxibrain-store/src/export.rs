@@ -6,8 +6,8 @@
 
 use crate::sql_err;
 use oxibrain_ports::BrainError;
-use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::Connection;
+use rusqlite::types::{Value as SqlValue, ValueRef};
 
 /// Tables to export, in dependency order (parents before children).
 const EXPORT_TABLES: &[&str] = &[
@@ -74,9 +74,7 @@ fn value_ref_to_json(val: ValueRef) -> serde_json::Value {
             let s = std::str::from_utf8(bytes).unwrap_or("");
             serde_json::Value::String(s.to_string())
         }
-        ValueRef::Blob(bytes) => {
-            serde_json::Value::String(format!("hex:{}", hex::encode(bytes)))
-        }
+        ValueRef::Blob(bytes) => serde_json::Value::String(format!("hex:{}", hex::encode(bytes))),
     }
 }
 
@@ -97,7 +95,8 @@ fn get_column_names(conn: &Connection, table: &str) -> Result<Vec<String>, Brain
 
 /// Import JSONL into the store. Assumes the store is fresh (tables empty).
 pub fn import_jsonl(conn: &Connection, jsonl: &str) -> Result<(), BrainError> {
-    conn.execute("PRAGMA foreign_keys=OFF", []).map_err(sql_err)?;
+    conn.execute("PRAGMA foreign_keys=OFF", [])
+        .map_err(sql_err)?;
 
     for line in jsonl.lines() {
         if line.trim().is_empty() {
@@ -115,7 +114,8 @@ pub fn import_jsonl(conn: &Connection, jsonl: &str) -> Result<(), BrainError> {
         insert_row(conn, table, row)?;
     }
 
-    conn.execute("PRAGMA foreign_keys=ON", []).map_err(sql_err)?;
+    conn.execute("PRAGMA foreign_keys=ON", [])
+        .map_err(sql_err)?;
     Ok(())
 }
 
@@ -185,9 +185,15 @@ mod tests {
         let sid = crate::ledger::create_space(&conn, "personal", Timestamp::from_millis(0))
             .expect("space");
         let decl = Declaration::AddStatement {
-            subject: EntityRef { surface: "Alice".into(), ty: "person".into() },
+            subject: EntityRef {
+                surface: "Alice".into(),
+                ty: "person".into(),
+            },
             predicate: "employed_by".into(),
-            object: DeclObject::Entity { surface: "Acme".into(), ty: "organization".into() },
+            object: DeclObject::Entity {
+                surface: "Acme".into(),
+                ty: "organization".into(),
+            },
             polarity: "affirm".into(),
             valid_from: 0,
             valid_to: oxibrain_ports::TIME_MAX.millis(),
@@ -200,7 +206,8 @@ mod tests {
     fn count_all(conn: &Connection) -> HashMap<String, i64> {
         let mut map = HashMap::new();
         for table in EXPORT_TABLES {
-            if let Ok(n) = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            if let Ok(n) =
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
             {
                 map.insert(table.to_string(), n);
             }
@@ -230,8 +237,18 @@ mod tests {
     fn export_includes_all_tables() {
         let conn = fresh_db_with_data();
         let jsonl = export_jsonl(&conn).unwrap();
-        for table in &["spaces", "episodes", "entities", "statements", "assertions", "predicates"] {
-            assert!(jsonl.contains(&format!("\"table\":\"{table}\"")), "missing {table}");
+        for table in &[
+            "spaces",
+            "episodes",
+            "entities",
+            "statements",
+            "assertions",
+            "predicates",
+        ] {
+            assert!(
+                jsonl.contains(&format!("\"table\":\"{table}\"")),
+                "missing {table}"
+            );
         }
     }
 
@@ -245,10 +262,12 @@ mod tests {
         import_jsonl(&conn2, &jsonl).unwrap();
         crate::reproject::reproject(&conn2).unwrap();
 
-        let beliefs_before: i64 =
-            conn.query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0)).unwrap();
-        let beliefs_after: i64 =
-            conn2.query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0)).unwrap();
+        let beliefs_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0))
+            .unwrap();
+        let beliefs_after: i64 = conn2
+            .query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(beliefs_before, beliefs_after);
     }
 }

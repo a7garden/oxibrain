@@ -6,11 +6,16 @@ pub mod config;
 
 pub use config::BrainConfig;
 pub use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier};
+pub use oxibrain_core::security::{
+    AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
+    TokenInfo,
+};
 pub use oxibrain_ports::{
     BrainError, ClockPort, LlmPort, LlmRequest, LlmResponse, SystemClock, Timestamp,
 };
 
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
+pub use oxibrain_store::security::AuditRow;
 use oxibrain_store::{StoreHandle, ledger, query, reproject};
 use std::sync::Arc;
 
@@ -483,6 +488,159 @@ impl Brain {
             h.writer.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("ingest channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Issue a token. Returns (TokenInfo, secret). The secret is shown once.
+    pub async fn issue_token(
+        &self,
+        scope: &Scope,
+        issued_by: &str,
+        label: Option<&str>,
+    ) -> Result<(TokenInfo, String), BrainError> {
+        let h = self.handle.clone();
+        let now = self.clock.now();
+        let scope = scope.clone();
+        let issued_by = issued_by.to_string();
+        let label = label.map(String::from);
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                let res = oxibrain_store::security::issue_token(
+                    conn, &scope, &issued_by, label.as_deref(), now,
+                )?;
+                let _ = tx.send(res);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("issue_token channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Verify a token by its secret. Returns the scope if valid and not
+    /// expired/revoked.
+    pub async fn verify_token(&self, secret: &str) -> Result<Option<Scope>, BrainError> {
+        let h = self.handle.clone();
+        let now = self.clock.now();
+        let secret = secret.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::security::verify_token(conn, &secret, now))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Revoke a token by id.
+    pub async fn revoke_token(&self, id: &str) -> Result<(), BrainError> {
+        let h = self.handle.clone();
+        let now = self.clock.now();
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                oxibrain_store::security::revoke_token(conn, &id, now)?;
+                let _ = tx.send(());
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("revoke_token channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// List all tokens (active and revoked).
+    pub async fn list_tokens(&self) -> Result<Vec<TokenInfo>, BrainError> {
+        let h = self.handle.clone();
+        tokio::task::spawn_blocking(move || h.readers.read(oxibrain_store::security::list_tokens))
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// List recent audit entries, most recent first.
+    pub async fn audit_log(&self, limit: Option<i64>) -> Result<Vec<AuditRow>, BrainError> {
+        let h = self.handle.clone();
+        tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| oxibrain_store::security::list_audit(conn, limit))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Resolve the closure of objects affected by redacting `target`. Does NOT
+    /// modify the store — safe for `--dry-run`.
+    pub async fn redact_dry_run(
+        &self,
+        target: &RedactTarget,
+    ) -> Result<RedactionClosure, BrainError> {
+        let h = self.handle.clone();
+        let target = target.clone();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::redaction::resolve_closure(conn, &target))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Execute redaction. Writes audit + redactions record FIRST, then
+    /// tombstones and deletes. Returns what was affected.
+    pub async fn redact(
+        &self,
+        target: &RedactTarget,
+        reason: &str,
+        actor: &str,
+    ) -> Result<RedactionResult, BrainError> {
+        let h = self.handle.clone();
+        let now = self.clock.now();
+        let target = target.clone();
+        let reason = reason.to_string();
+        let actor = actor.to_string();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                let res = oxibrain_store::redaction::execute_redaction(
+                    conn, &target, &reason, &actor, now,
+                )?;
+                let _ = tx.send(res);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("redact channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Export all durable tables as a JSONL string.
+    pub async fn export_jsonl(&self) -> Result<String, BrainError> {
+        let h = self.handle.clone();
+        tokio::task::spawn_blocking(move || h.readers.read(oxibrain_store::export::export_jsonl))
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Import JSONL into the store. Assumes the store is fresh (tables empty).
+    pub async fn import_jsonl(&self, jsonl: String) -> Result<(), BrainError> {
+        let h = self.handle.clone();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                oxibrain_store::export::import_jsonl(conn, &jsonl)?;
+                let _ = tx.send(());
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("import_jsonl channel dropped".into()))
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?

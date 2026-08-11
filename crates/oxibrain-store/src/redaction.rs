@@ -55,7 +55,11 @@ fn resolve_episode_closure(
     let mention_ids = if assertion_ids.is_empty() {
         Vec::new()
     } else {
-        query_strings_in(conn, "SELECT id FROM mentions WHERE assertion_id IN", &assertion_ids)?
+        query_strings_in(
+            conn,
+            "SELECT id FROM mentions WHERE assertion_id IN",
+            &assertion_ids,
+        )?
     };
 
     // Statements that will be left unsupported (all assertions come from this episode).
@@ -117,7 +121,11 @@ fn resolve_entity_closure(
     let mention_ids = if assertion_ids.is_empty() {
         Vec::new()
     } else {
-        query_strings_in(conn, "SELECT id FROM mentions WHERE assertion_id IN", &assertion_ids)?
+        query_strings_in(
+            conn,
+            "SELECT id FROM mentions WHERE assertion_id IN",
+            &assertion_ids,
+        )?
     };
 
     // Unsupported statements: those that lose ALL assertions.
@@ -240,15 +248,31 @@ pub fn execute_redaction(
     }
 
     // 5. Delete mentions for affected assertions.
-    delete_in(conn, "DELETE FROM mentions WHERE assertion_id IN", &closure.assertions)?;
+    delete_in(
+        conn,
+        "DELETE FROM mentions WHERE assertion_id IN",
+        &closure.assertions,
+    )?;
 
     // 6. Delete assertions.
-    delete_in(conn, "DELETE FROM assertions WHERE id IN", &closure.assertions)?;
+    delete_in(
+        conn,
+        "DELETE FROM assertions WHERE id IN",
+        &closure.assertions,
+    )?;
 
     // 7. Delete unsupported statements.
     if !closure.statements.is_empty() {
-        delete_in(conn, "DELETE FROM beliefs WHERE statement_id IN", &closure.statements)?;
-        delete_in(conn, "DELETE FROM statements WHERE id IN", &closure.statements)?;
+        delete_in(
+            conn,
+            "DELETE FROM beliefs WHERE statement_id IN",
+            &closure.statements,
+        )?;
+        delete_in(
+            conn,
+            "DELETE FROM statements WHERE id IN",
+            &closure.statements,
+        )?;
     }
 
     // 8. Re-fold affected belief groups (statements that lost some assertions
@@ -266,22 +290,42 @@ pub fn execute_redaction(
 /// `redacted_at IS NULL` in the replay queries) or write audit (already done).
 /// `at` is the original redaction timestamp — used as the fold's reference
 /// point so assertions with `recorded_at <= at` are visible.
-pub fn apply_replay(conn: &Connection, target: &RedactTarget, at: Timestamp) -> Result<usize, BrainError> {
+pub fn apply_replay(
+    conn: &Connection,
+    target: &RedactTarget,
+    at: Timestamp,
+) -> Result<usize, BrainError> {
     let closure = resolve_closure(conn, target)?;
     if closure.assertions.is_empty() {
         return Ok(0);
     }
 
     // Delete mentions.
-    delete_in(conn, "DELETE FROM mentions WHERE assertion_id IN", &closure.assertions)?;
+    delete_in(
+        conn,
+        "DELETE FROM mentions WHERE assertion_id IN",
+        &closure.assertions,
+    )?;
 
     // Delete assertions.
-    delete_in(conn, "DELETE FROM assertions WHERE id IN", &closure.assertions)?;
+    delete_in(
+        conn,
+        "DELETE FROM assertions WHERE id IN",
+        &closure.assertions,
+    )?;
 
     // Delete unsupported statements.
     if !closure.statements.is_empty() {
-        delete_in(conn, "DELETE FROM beliefs WHERE statement_id IN", &closure.statements)?;
-        delete_in(conn, "DELETE FROM statements WHERE id IN", &closure.statements)?;
+        delete_in(
+            conn,
+            "DELETE FROM beliefs WHERE statement_id IN",
+            &closure.statements,
+        )?;
+        delete_in(
+            conn,
+            "DELETE FROM statements WHERE id IN",
+            &closure.statements,
+        )?;
     }
 
     // Re-fold affected groups using the original redaction timestamp.
@@ -358,7 +402,11 @@ fn refold_affected(
         if group.is_empty() {
             // No assertions left — delete beliefs for these statements.
             if !group_stmt_ids.is_empty() {
-                delete_in(conn, "DELETE FROM beliefs WHERE statement_id IN", &group_stmt_ids)?;
+                delete_in(
+                    conn,
+                    "DELETE FROM beliefs WHERE statement_id IN",
+                    &group_stmt_ids,
+                )?;
             }
         } else {
             let pred_def = registry::load_predicate(conn, &pred)?
@@ -425,9 +473,7 @@ fn refold_episode_groups(
     // Re-fold all groups in this space.
     let groups: Vec<(String, String)> = {
         let mut stmt = conn
-            .prepare(
-                "SELECT DISTINCT subject_id, predicate FROM statements WHERE space_id = ?1",
-            )
+            .prepare("SELECT DISTINCT subject_id, predicate FROM statements WHERE space_id = ?1")
             .map_err(sql_err)?;
         let rows = stmt
             .query_map(params![space], |r| {
@@ -448,7 +494,11 @@ fn refold_episode_groups(
 
         if group.is_empty() {
             if !group_stmt_ids.is_empty() {
-                delete_in(conn, "DELETE FROM beliefs WHERE statement_id IN", &group_stmt_ids)?;
+                delete_in(
+                    conn,
+                    "DELETE FROM beliefs WHERE statement_id IN",
+                    &group_stmt_ids,
+                )?;
             }
         } else {
             let pred_def = registry::load_predicate(conn, &pred)?
@@ -469,7 +519,9 @@ fn query_strings(
     params: &[&dyn rusqlite::ToSql],
 ) -> Result<Vec<String>, BrainError> {
     let mut stmt = conn.prepare(sql).map_err(sql_err)?;
-    let rows = stmt.query_map(params, |r| r.get::<_, String>(0)).map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params, |r| r.get::<_, String>(0))
+        .map_err(sql_err)?;
     let mut result = Vec::new();
     for row in rows {
         result.push(row.map_err(sql_err)?);
@@ -565,7 +617,11 @@ mod tests {
 
         // Episode content is tombstoned.
         let content: String = conn
-            .query_row("SELECT content FROM episodes WHERE id = ?1", params![ep_id], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM episodes WHERE id = ?1",
+                params![ep_id],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(content, "[redacted]");
 

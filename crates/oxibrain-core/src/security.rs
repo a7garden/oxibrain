@@ -71,7 +71,7 @@ impl Capability {
 pub type CapabilitySet = BTreeSet<Capability>;
 
 /// Authorization scope carried by a token. DESIGN §11.2.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Scope {
     /// Space ids this scope grants access to.
     pub spaces: Vec<String>,
@@ -85,31 +85,20 @@ pub struct Scope {
     pub expires_at: Option<Timestamp>,
 }
 
-impl Default for Scope {
-    fn default() -> Self {
-        Self {
-            spaces: Vec::new(),
-            caps: CapabilitySet::new(),
-            predicate_filter: None,
-            entity_type_filter: None,
-            expires_at: None,
-        }
-    }
-}
 
 impl Scope {
     /// Check if a capability is granted for a space and not expired.
     pub fn permits(&self, cap: Capability, space: &str, now: Timestamp) -> bool {
         self.caps.contains(&cap)
             && self.spaces.iter().any(|s| s == space)
-            && self.expires_at.map_or(true, |exp| now < exp)
+            && self.expires_at.is_none_or(|exp| now < exp)
     }
 
     /// Check if a predicate passes the filter (or there is no filter).
     pub fn permits_predicate(&self, predicate: &str) -> bool {
         self.predicate_filter
             .as_ref()
-            .map_or(true, |filter| filter.iter().any(|p| p == predicate))
+            .is_none_or(|filter| filter.iter().any(|p| p == predicate))
     }
 }
 

@@ -135,7 +135,9 @@ pub fn revoke_token(conn: &Connection, id: &str, now: Timestamp) -> Result<(), B
         )
         .map_err(sql_err)?;
     if n == 0 {
-        return Err(BrainError::NotFound(format!("token {id} (or already revoked)")));
+        return Err(BrainError::NotFound(format!(
+            "token {id} (or already revoked)"
+        )));
     }
     Ok(())
 }
@@ -331,20 +333,33 @@ mod tests {
         let (_info, secret) = issue_token(&conn, &scope, "cli", None, now).unwrap();
 
         // Before expiry: OK.
-        assert!(verify_token(&conn, &secret, Timestamp::from_millis(1500))
-            .unwrap()
-            .is_some());
+        assert!(
+            verify_token(&conn, &secret, Timestamp::from_millis(1500))
+                .unwrap()
+                .is_some()
+        );
         // At expiry: blocked.
-        assert!(verify_token(&conn, &secret, Timestamp::from_millis(2000))
-            .unwrap()
-            .is_none());
+        assert!(
+            verify_token(&conn, &secret, Timestamp::from_millis(2000))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn audit_write_and_list() {
         let conn = fresh_db();
         let now = Timestamp::from_millis(1000);
-        write_audit(&conn, "cli", Some("personal"), "declare", Some("stmt1"), None, now).unwrap();
+        write_audit(
+            &conn,
+            "cli",
+            Some("personal"),
+            "declare",
+            Some("stmt1"),
+            None,
+            now,
+        )
+        .unwrap();
         write_audit(&conn, "admin", None, "token_issue", None, Some("{}"), now).unwrap();
 
         let entries = list_audit(&conn, None).unwrap();

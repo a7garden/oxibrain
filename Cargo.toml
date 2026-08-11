@@ -8,6 +8,7 @@ members = [
     "crates/oxibrain",
     "crates/oxibrain-cli",
     "crates/oxibrain-llm-http",
+    "crates/oxibrain-connectors",
 ]
 
 [workspace.package]
