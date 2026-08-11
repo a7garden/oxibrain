@@ -159,12 +159,17 @@ oxibrain-core = { path = "crates/oxibrain-core" }
 oxibrain-ports = { path = "crates/oxibrain-ports" }
 oxibrain-store = { path = "crates/oxibrain-store" }
 blake3 = "1.5"
+hex = "0.4"
+unicode-normalization = "0.1"
+fs2 = "0.4"
+async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs"] }
 clap = { version = "4", features = ["derive"] }
 proptest = "1"
+tempfile = "3"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 thiserror = "1"
@@ -228,6 +233,7 @@ rust-version.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
@@ -245,6 +251,8 @@ rust-version.workspace = true
 [dependencies]
 oxibrain-ports.workspace = true
 blake3.workspace = true
+hex.workspace = true
+unicode-normalization.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -266,12 +274,16 @@ rust-version.workspace = true
 oxibrain-ports.workspace = true
 oxibrain-core.workspace = true
 rusqlite.workspace = true
+hex.workspace = true
+fs2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-tempfile = "3"
+tempfile.workspace = true
+rusqlite.workspace = true
+oxibrain-ports.workspace = true
 ```
 
 `crates/oxibrain/Cargo.toml`:
@@ -296,7 +308,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-tempfile = "3"
+tempfile.workspace = true
 ```
 
 `crates/oxibrain-cli/Cargo.toml`:
@@ -579,12 +591,9 @@ impl BrainError {
     }
 }
 
-impl From<rusqlite::Error> for BrainError {
-    fn from(e: rusqlite::Error) -> Self { Self::Storage(e.to_string()) }
-}
 ```
 
-Note: `From<rusqlite::Error>` lives in ports (not store) so every crate can convert it. ports must add `rusqlite` as a dependency — but **that violates the "only store references rusqlite" rule.** Resolution: move this `From` impl into `oxibrain-store` instead. **Do not add `rusqlite` to ports.** Keep `BrainError` here without the `From` impl; store adds its own conversion (see Task 4 Step 5).
+Note: there is intentionally **no** `impl From<rusqlite::Error> for BrainError` anywhere — it would violate the orphan rule (`BrainError` is foreign to every crate that has `rusqlite`, and vice versa). `oxibrain-store` instead owns two tiny helpers `sql_err`/`io_err` used via `.map_err(...)?` at every rusqlite/IO boundary (see Task 4 Step 5). The `?`-on-rusqlite shortcut does **not** compile in this workspace.
 
 - [ ] **Step 6: Write `llm.rs` and `embedding.rs` (M0 trait stubs)**
 
@@ -615,7 +624,7 @@ pub trait LlmPort: Send + Sync {
     async fn complete(&self, req: LlmRequest) -> Result<LlmResponse, BrainError>;
 }
 ```
-Add `async-trait = "0.1"` to ports `[dependencies]`.
+`async-trait` is in `[workspace.dependencies]` (Task 1); ports' `Cargo.toml` adds `async-trait.workspace = true`.
 
 `crates/oxibrain-ports/src/embedding.rs`:
 ```rust
@@ -677,7 +686,7 @@ of BrainError."
 - Modify: `crates/oxibrain-core/src/lib.rs`
 
 **Interfaces:**
-- Produces: `ContentHash` (`[u8; 32]`); value types `Space`, `Episode`, `SourceRef`, `TrustTier`, `EpisodeKind`; `canonical_json(value) -> String`; `EpisodeId`/content-hash derivation via BLAKE3.
+- Produces: `ContentHash` (`[u8; 32]`); value types `Space`, `Episode`, `SourceRef`, `TrustTier`, `EpisodeKind`; `canonical_json_value(value) -> String`; `EpisodeId`/content-hash derivation via BLAKE3.
 
 - [ ] **Step 1: Write `types.rs` (M0 ledger value types, DESIGN.md §5.2–5.3)**
 
@@ -791,28 +800,11 @@ Add `hex = "0.4"` to core `[dependencies]`.
 //! Canonical serialization. A bug here is a determinism bug (DESIGN.md §5.6):
 //! sorted keys, normalized numbers, RFC-3339 UTC timestamps. Property-tested.
 
-use serde::Serialize;
+use serde_json::{Map, Value};
 
-/// Serialize a value to canonical JSON: sorted object keys, no whitespace,
-/// normalized floats, ASCII string output. Deterministic for equal inputs.
-pub fn canonical_json<T: Serialize>(value: &T) -> Result<String, serde_json::Error> {
-    let mut buf = Vec::new();
-    let mut ser = serde_json::Serializer::with_formatter(&mut buf, CanonicalFormatter);
-    value.serialize(&mut ser)?;
-    Ok(String::from_utf8(buf).expect("json is utf8"))
-}
-
-struct CanonicalFormatter;
-
-impl serde::ser::Formatter for CanonicalFormatter {
-    // Default impls produce compact JSON with no whitespace.
-}
-
-impl<'a> serde_json::ser::Format<'a> for CanonicalFormatter {}
-
-/// Normalize an arbitrary JSON value to canonical form: recursively sort object keys.
-pub fn canonicalize_value(v: &serde_json::Value) -> serde_json::Value {
-    use serde_json::Value;
+/// Recursively sort all object keys in a JSON value. Object key order is the only
+/// non-determinism in `serde_json`; sorting it makes the output a pure function of the value.
+pub fn canonicalize_value(v: &Value) -> Value {
     match v {
         Value::Object(map) => {
             let mut pairs: Vec<(String, Value)> = map
@@ -820,21 +812,26 @@ pub fn canonicalize_value(v: &serde_json::Value) -> serde_json::Value {
                 .map(|(k, vv)| (k.clone(), canonicalize_value(vv)))
                 .collect();
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
-            Value::Object(pairs.into_iter().collect())
+            Value::Object(Map::from_iter(pairs))
         }
         Value::Array(items) => Value::Array(items.iter().map(canonicalize_value).collect()),
         other => other.clone(),
     }
 }
 
-/// Canonical bytes over a JSON string: re-parse, sort keys, re-emit compactly.
+/// Canonical JSON string of a Value: sorted keys, compact (no whitespace).
+pub fn canonical_json_value(v: &Value) -> String {
+    serde_json::to_string(&canonicalize_value(v)).expect("canonical json infallible")
+}
+
+/// Canonical bytes over a raw JSON string: parse, canonicalize, re-emit compactly.
 pub fn canonical_bytes(json: &str) -> Result<Vec<u8>, serde_json::Error> {
-    let v: serde_json::Value = serde_json::from_str(json)?;
-    Ok(canonical_json(&canonicalize_value(&v))?.into_bytes())
+    let v: Value = serde_json::from_str(json)?;
+    Ok(canonical_json_value(&v).into_bytes())
 }
 ```
 
-Note: `serde_json::Serializer::with_formatter` expects a `Formatter`. If the API surface differs across versions, fall back to: parse to `Value`, `canonicalize_value`, then `serde_json::to_vec` (compact by default). Keep the canonical-key recursion either way — **that is the part that matters for determinism.**
+Note: canonicalization happens at the `serde_json::Value` layer (parse → recursively sort object keys → compact `to_string`). `serde_json`'s compact scalar output is already deterministic; key order is the only non-determinism, and sorting removes it. No custom `Formatter` is needed (and `serde_json::ser::Format` is not a real trait).
 
 - [ ] **Step 3: Write the failing property tests for canonicalization**
 
@@ -849,15 +846,15 @@ mod tests {
         #[test]
         fn canonical_is_deterministic(s in "[a-z]{0,20}") {
             let v = serde_json::json!({ "b": 1, "a": { "y": 2, "x": 1 }, "c": &s });
-            let c1 = canonical_json(&canonicalize_value(&v)).unwrap();
-            let c2 = canonical_json(&canonicalize_value(&v)).unwrap();
+            let c1 = canonical_json_value(&v);
+            let c2 = canonical_json_value(&v);
             prop_assert_eq!(c1, c2);
         }
 
         #[test]
         fn keys_are_sorted(v in "[a-z]{1,5}") {
             let unsorted = serde_json::json!({ &v: 1, "a": 2, "z": 3 });
-            let canon = canonical_json(&canonicalize_value(&unsorted)).unwrap();
+            let canon = canonical_json_value(&unsorted);
             // keys appear in sorted order: a, then v, then z (lexicographic)
             let mut keys: Vec<&str> = canon
                 .trim_matches(|c| c == '{' || c == '}')
@@ -875,7 +872,7 @@ mod tests {
 - [ ] **Step 4: Run tests, verify pass**
 
 Run: `cargo test -p oxibrain-core canonical`
-Expected: PASS (after fixing the formatter API in Step 2 to compile).
+Expected: PASS.
 
 - [ ] **Step 5: Write `id.rs` (content-derived ids, DESIGN.md §5.6)**
 
@@ -883,8 +880,8 @@ Expected: PASS (after fixing the formatter API in Step 2 to compile).
 //! Content-derived ids. Every projection id is derived from content, not random,
 //! so reprojection is byte-identical (DESIGN.md §5.6, P1).
 
-use crate::canonical::canonical_json;
-use crate::types::{ContentHash, EpisodeKind, SourceRef, TrustTier};
+use crate::canonical;
+use crate::types::{ContentHash, SourceRef};
 use blake3::Hasher;
 use oxibrain_ports::Timestamp;
 
@@ -915,7 +912,10 @@ pub fn episode_id(
     occurred_at: Timestamp,
 ) -> Id {
     // source serialized canonically so the id is stable
-    let source_json = serde_json::to_string(source).expect("source serializable");
+    let source_json = serde_json::to_value(source)
+        .ok()
+        .map(|v| canonical::canonical_json_value(&v))
+        .expect("source serializable");
     hex(derive(&[
         ("space", space),
         ("content_hash", &content_hash.hex()),
@@ -944,7 +944,7 @@ pub fn normalize_content(s: &str) -> String {
         .to_string()
 }
 ```
-Add to core `[dependencies]`: `hex = "0.4"`, `unicode-normalization = "0.1"`.
+`hex` and `unicode-normalization` are in `[workspace.dependencies]`; core's `Cargo.toml` adds both (Task 1 Step 5).
 
 - [ ] **Step 6: Write the failing id-determinism test**
 
@@ -1010,7 +1010,7 @@ pub mod canonical;
 pub mod id;
 pub mod types;
 
-pub use canonical::canonical_json;
+pub use canonical::{canonical_bytes, canonical_json_value, canonicalize_value};
 pub use id::{content_hash, episode_id, normalize_content, Id};
 pub use types::{ContentHash, Episode, EpisodeKind, Space, SourceRef, TrustTier};
 ```
@@ -1040,7 +1040,7 @@ Property tests: canonical determinism, key ordering, hash stability."
 - Create: `crates/oxibrain-store/src/migrations/v1.sql`
 - Create: `crates/oxibrain-store/src/lock.rs`
 - Create: `crates/oxibrain-store/src/meta.rs`
-- Modify: `crates/oxibrain-store/Cargo.toml` (add `From<rusqlite::Error>` for BrainError locally, or a `StoreError`)
+- Modify: `crates/oxibrain-store/src/lib.rs` (store-local `sql_err`/`io_err` helpers)
 
 **Interfaces:**
 - Produces: `Store::open(path) -> Result<Store>` (applies migrations, acquires advisory lock, sets PRAGMAs); `Store::user_version() -> i64`; current schema version constant `LEDGER_SCHEMA_VERSION = 1`.
@@ -1250,22 +1250,23 @@ pub const PROJECTION_VERSION: i64 = 1;
 //! Forward-only migrations via PRAGMA user_version. Every migration has an up-test.
 
 use crate::schema::LEDGER_SCHEMA_VERSION;
+use crate::sql_err;
 use oxibrain_ports::BrainError;
 use rusqlite::Connection;
 
 /// Apply all pending migrations. Returns the new user_version.
 pub fn run(conn: &Connection) -> Result<i64, BrainError> {
-    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(sql_err)?;
     if current > LEDGER_SCHEMA_VERSION {
         return Err(BrainError::Migration { found: current, expected: LEDGER_SCHEMA_VERSION });
     }
     if current < 1 {
         let sql = include_str!("migrations/v1.sql");
-        conn.execute_batch(sql)?;
-        conn.pragma_update(None, "user_version", 1i64)?;
+        conn.execute_batch(sql).map_err(sql_err)?;
+        conn.pragma_update(None, "user_version", 1i64).map_err(sql_err)?;
     }
     // future: current < 2 => run v2.sql, etc.
-    let now: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let now: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(sql_err)?;
     Ok(now)
 }
 
@@ -1296,66 +1297,57 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Write `lock.rs` (cross-process advisory lock via a lockfile + fcntl)**
+- [ ] **Step 4: Write `lock.rs` (cross-process advisory lock via `fs2`, fail-fast)
 
 ```rust
-//! One writer per store (P8). Cross-process advisory lock held for the process lifetime.
+//! One writer per store (P8). Cross-process advisory lock, fail-fast (DESIGN §4.3).
 
+use crate::io_err;
+use fs2::FileExt;
 use oxibrain_ports::BrainError;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct AdvisoryLock {
     _file: File,
-    path: PathBuf,
 }
 
 impl AdvisoryLock {
-    /// Acquire an exclusive lock on `<dir>/.oxibrain.lock`. Blocks until acquired.
+    /// Acquire an exclusive lock on `<dir>/.oxibrain.lock`. Fails fast with
+    /// `BrainError::Locked` if another oxibrain process holds it (no blocking).
     pub fn acquire(dir: &Path) -> Result<Self, BrainError> {
+        std::fs::create_dir_all(dir).map_err(io_err)?;
         let lock_path = dir.join(".oxibrain.lock");
-        if let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| BrainError::Storage(e.to_string()))?;
-        }
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .open(&lock_path)
-            .map_err(|e| BrainError::Storage(e.to_string()))?;
-        // libc flock for cross-process exclusion
-        use std::os::fd::AsRawFd;
-        let fd = file.as_raw_fd();
-        // LOCK_EX = 2
-        let rc = unsafe { flock_raw(fd, 2) };
-        if rc != 0 {
-            return Err(BrainError::Locked {
-                holder: format!("could not lock {}", lock_path.display()),
-            });
+            .map_err(io_err)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(BrainError::Locked {
+                holder: format!("another oxibrain process holds {}", lock_path.display()),
+            }),
+            Err(e) => Err(io_err(e)),
         }
-        Ok(Self { _file: file, path: lock_path })
     }
 }
 
 impl Drop for AdvisoryLock {
     fn drop(&mut self) {
-        let _ = writeln!(std::fs::File::create(&self.path), "released");
+        let _ = self._file.unlock();
     }
-}
-
-extern "C" {
-    #[link_name = "flock"]
-    fn flock_raw(fd: i32, operation: i32) -> i32;
 }
 ```
 
-Note: `flock` is POSIX (macOS/Linux). On Windows, replace with `LockFileEx`. M0 targets the macOS/Linux laptop per AGENTS.md; document the Windows path as a TODO guarded by `#[cfg(unix)]`/`#[cfg(windows)]`.
+Note: `fs2` provides cross-platform advisory locking (fcntl on unix, LockFileEx on Windows). `try_lock_exclusive` makes acquisition fail fast with `BrainError::Locked` when another process holds the store (DESIGN §4.3) — a blocking lock would hang a second writer, which is the wrong behavior. `fs2` is in `[workspace.dependencies]`; store's `Cargo.toml` adds `fs2.workspace = true`.
 
-- [ ] **Step 5: Write `meta.rs` and the `From<rusqlite::Error>` conversion**
+- [ ] **Step 5: Write `meta.rs` and store-local error helpers**
 
 `crates/oxibrain-store/src/meta.rs`:
 ```rust
+use crate::sql_err;
 use oxibrain_ports::BrainError;
 use rusqlite::{params, Connection};
 
@@ -1372,7 +1364,8 @@ pub fn set(conn: &Connection, key: &str, value: &str) -> Result<(), BrainError> 
         "INSERT INTO meta(key, value) VALUES(?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         params![key, value],
-    )?;
+    )
+    .map_err(sql_err)?;
     Ok(())
 }
 
@@ -1389,7 +1382,6 @@ pub fn ensure_schema_versions(conn: &Connection) -> Result<(), BrainError> {
 ```
 
 Add to `crates/oxibrain-store/src/lib.rs` (top):
-```rust
 //! Store: the only crate that touches rusqlite.
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
@@ -1408,10 +1400,12 @@ pub struct Store {
     _lock: lock::AdvisoryLock,
 }
 
-/// rusqlite error conversion lives here (not in ports) to keep ports rusqlite-free.
-impl From<rusqlite::Error> for BrainError {
-    fn from(e: rusqlite::Error) -> Self { BrainError::Storage(e.to_string()) }
-}
+/// Convert a rusqlite error into a BrainError. Store-local by necessity: a blanket
+/// `From<rusqlite::Error> for BrainError` would violate the orphan rule (BrainError is
+/// foreign to this crate, and so is rusqlite). Use `.map_err(sql_err)?` at every rusqlite
+/// boundary; the `?`-on-rusqlite shortcut does not compile here.
+pub(crate) fn sql_err(e: rusqlite::Error) -> BrainError { BrainError::Storage(e.to_string()) }
+pub(crate) fn io_err(e: std::io::Error) -> BrainError { BrainError::Storage(e.to_string()) }
 
 impl Store {
     /// Open (or create) a store at `dir`. Acquires the advisory lock, applies migrations,
@@ -1420,11 +1414,11 @@ impl Store {
         let lock = lock::AdvisoryLock::acquire(dir)?;
         let db_path = dir.join("brain.db");
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| BrainError::Storage(e.to_string()))?;
+            std::fs::create_dir_all(parent).map_err(io_err)?;
         }
-        let write_conn = rusqlite::Connection::open(&db_path)?;
+        let write_conn = rusqlite::Connection::open(&db_path).map_err(sql_err)?;
         for p in schema::PRAGMAS {
-            write_conn.execute_batch(p)?;
+            write_conn.execute_batch(p).map_err(sql_err)?;
         }
         migration::run(&write_conn)?;
         meta::ensure_schema_versions(&write_conn)?;
@@ -1432,10 +1426,20 @@ impl Store {
     }
 
     pub fn user_version(&self) -> Result<i64, BrainError> {
-        Ok(self.write_conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+        Ok(self.write_conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(sql_err)?)
     }
 
+    /// Read-only handle to the write connection (backup, doctor). Writes go through the actor.
+    pub fn connection(&self) -> &rusqlite::Connection { &self.write_conn }
+
     pub fn db_path(&self) -> &Path { &self.path }
+
+    /// Move the write connection and advisory lock out of the store. The writer actor
+    /// holds both so the lock lives for the actor's lifetime (P8). Only callable in-crate.
+    pub(crate) fn into_parts(self) -> (rusqlite::Connection, lock::AdvisoryLock) {
+        let Store { write_conn, path: _, _lock } = self;
+        (write_conn, _lock)
+    }
 }
 ```
 
@@ -1496,17 +1500,16 @@ meta ledger/projection versions. rusqlite error conversion local to store."
 
 - [ ] **Step 1: Write `writer.rs`**
 
-```rust
 //! One writer actor per store. All writes serialize through an owned thread
 //! holding the write connection (DESIGN.md §13.1, P8).
 
+use crate::sql_err;
 use crate::Store;
 use oxibrain_ports::BrainError;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
-/// A write operation: a closure run inside the writer thread on the write conn.
+/// A write operation: a closure run inside the writer thread, on the write connection, in a tx.
 pub type WriteOp = Box<dyn FnOnce(&rusqlite::Connection) -> Result<(), BrainError> + Send>;
 
 /// Commands to the writer thread.
@@ -1522,29 +1525,20 @@ pub struct WriterActor {
 }
 
 impl WriterActor {
-    /// Spawn the writer thread over the store's write connection.
-    /// Takes ownership of the connection out of the store.
-    pub fn spawn(mut store: Store) -> Self {
+    /// Spawn the writer thread. Takes ownership of the store's write connection and its
+    /// advisory lock; the lock is held for the actor's lifetime (P8: one writer per store).
+    pub fn spawn(store: Store) -> Self {
         let (tx, rx) = mpsc::channel::<Cmd>();
         let handle = thread::Builder::new()
             .name("oxibrain-writer".into())
             .spawn(move || {
-                let conn = std::mem::replace(
-                    &mut store.write_conn,
-                    rusqlite::Connection::open_in_memory().expect("placeholder conn"),
-                );
-                let _drop_store = store; // keep lock alive
-                // coalescing window
-                let coalesce = Duration::from_millis(2);
+                let (conn, _lock) = store.into_parts();
                 loop {
                     match rx.recv() {
                         Ok(Cmd::Write(op)) => {
-                            // run immediately; coalescing is over the batch boundary
                             if let Err(e) = run_in_tx(&conn, op) {
                                 tracing::warn!(error = %e, "write op failed");
                             }
-                            // drain any immediately-available ops into the same tx window
-                            drain_window(&rx, coalesce, &conn);
                         }
                         Ok(Cmd::Flush(reply)) => {
                             let _ = reply.send(Ok(()));
@@ -1581,18 +1575,11 @@ impl Drop for WriterActor {
 }
 
 fn run_in_tx(conn: &rusqlite::Connection, op: WriteOp) -> Result<(), BrainError> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction().map_err(sql_err)?;
     op(&tx)?;
-    tx.commit()?;
+    tx.commit().map_err(sql_err)?;
     Ok(())
 }
-
-fn drain_window(rx: &mpsc::Receiver<Cmd>, window: Duration, conn: &rusqlite::Connection) {
-    // collect ops that arrive within `window` into the current transaction scope
-    let _ = rx.recv_timeout(window); // best-effort; further coalescing is a M1 optimization
-    // NOTE: full cross-op coalescing into one tx is left to M1; M0 serializes one op per tx.
-}
-```
 
 Note: M0 ships **one op per transaction** for clarity and crash-testability. Coalescing multiple queued ops into a single transaction (DESIGN.md §13.1 "coalesces queued operations into one transaction up to a size/time bound") is explicitly an M1 optimization; the comment above documents the intent.
 
@@ -1601,6 +1588,7 @@ Note: M0 ships **one op per transaction** for clarity and crash-testability. Coa
 ```rust
 //! Reader pool: N read-only WAL connections. Readers never block on the writer.
 
+use crate::sql_err;
 use oxibrain_ports::BrainError;
 use rusqlite::Connection;
 use std::path::Path;
@@ -1615,8 +1603,8 @@ impl ReaderPool {
         let mut conns = Vec::with_capacity(size);
         for _ in 0..size {
             // open a *new* connection that shares the db file; read-only via query discipline
-            let conn = Connection::open(db_path)?;
-            conn.execute_batch("PRAGMA query_only=ON; PRAGMA foreign_keys=ON;")?;
+            let conn = Connection::open(db_path).map_err(sql_err)?;
+            conn.execute_batch("PRAGMA query_only=ON; PRAGMA foreign_keys=ON;").map_err(sql_err)?;
             conns.push(Mutex::new(conn));
         }
         Ok(Self { conns })
@@ -1671,7 +1659,8 @@ impl StoreHandle {
 
 `crates/oxibrain-store/tests/concurrency.rs`:
 ```rust
-use oxibrain_store::StoreHandle;
+use oxibrain_ports::Timestamp;
+use oxibrain_store::{ledger, StoreHandle};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
@@ -1682,11 +1671,12 @@ fn readers_dont_block_writer_under_load() {
     let handle = Arc::new(StoreHandle::open(dir.path()).expect("open"));
     // seed a space so reads have something
     let h = handle.clone();
-    h.writer.submit(Box::new(|conn| {
-        conn.execute("INSERT INTO spaces(id, name, created_at) VALUES(?1, ?2, ?3)",
-            rusqlite::params!["s1", "personal", 0i64])?;
-        Ok(())
-    })).unwrap();
+    h.writer
+        .submit(Box::new(move |conn| {
+            ledger::create_space(conn, "personal", Timestamp(0))?;
+            Ok(())
+        }))
+        .unwrap();
     h.writer.flush().unwrap();
 
     let start = Instant::now();
@@ -1695,13 +1685,13 @@ fn readers_dont_block_writer_under_load() {
         let h = handle.clone();
         threads.push(std::thread::spawn(move || {
             for _ in 0..50 {
-                let _ = h.readers.read(|conn| {
-                    conn.query_row::<i64, _, _>("SELECT COUNT(*) FROM spaces", [], |r| r.get(0))
-                });
+                let _ = h.readers.read(|conn| ledger::episode_count(conn));
             }
         }));
     }
-    for t in threads { t.join().unwrap(); }
+    for t in threads {
+        t.join().unwrap();
+    }
     assert!(start.elapsed() < Duration::from_secs(5), "readers stalled");
 }
 ```
@@ -1739,7 +1729,7 @@ owns both. Concurrency test: 8 reader threads under load stay within budget."
 ```rust
 //! Ledger-zone writes/reads: spaces and episodes. M0 only; knowledge writes land in M1.
 
-use crate::meta;
+use crate::sql_err;
 use oxibrain_core::{content_hash, episode_id, Episode, EpisodeKind, SourceRef, TrustTier};
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::{params, Connection};
@@ -1747,14 +1737,15 @@ use rusqlite::{params, Connection};
 /// Idempotently create a space, returning its id. Id is derived from name (deterministic).
 pub fn create_space(conn: &Connection, name: &str, now: Timestamp) -> Result<String, BrainError> {
     let id = space_id(name);
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM spaces WHERE id = ?1", params![id], |r| r.get(0),
-    )?;
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM spaces WHERE id = ?1", params![id], |r| r.get(0))
+        .map_err(sql_err)?;
     if n == 0 {
         conn.execute(
             "INSERT INTO spaces(id, name, created_at) VALUES(?1, ?2, ?3)",
             params![id, name, now.millis()],
-        )?;
+        )
+        .map_err(sql_err)?;
     }
     Ok(id)
 }
@@ -1769,7 +1760,7 @@ fn space_id(name: &str) -> String {
 }
 
 pub fn get_space(conn: &Connection, id: &str) -> Result<Option<String>, BrainError> {
-    let name: Option<String> = conn
+    let name = conn
         .query_row("SELECT name FROM spaces WHERE id = ?1", params![id], |r| r.get(0))
         .map(Some)
         .unwrap_or(None);
@@ -1794,11 +1785,13 @@ pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainEr
     let ch = content_hash(&ep.content);
     let id = episode_id(&ep.space, &ch, &ep.source, ep.occurred_at);
     // idempotency check
-    let exists: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM episodes WHERE space_id = ?1 AND content_hash = ?2",
-        params![ep.space, ch.as_bytes()],
-        |r| r.get(0),
-    )?;
+    let exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM episodes WHERE space_id = ?1 AND content_hash = ?2",
+            params![ep.space, ch.as_bytes()],
+            |r| r.get(0),
+        )
+        .map_err(sql_err)?;
     if exists > 0 {
         ep.id = id;
         ep.content_hash = ch;
@@ -1817,7 +1810,8 @@ pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainEr
             ep.occurred_at.millis(), ep.ingested_at.millis(),
             ep.redacted_at.map(|t| t.millis()),
         ],
-    )?;
+    )
+    .map_err(sql_err)?;
     ep.id = id;
     ep.seq = seq;
     ep.content_hash = ch;
@@ -1825,31 +1819,27 @@ pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainEr
 }
 
 pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, BrainError> {
-    let row = conn
-        .query_row(
-            "SELECT id, space_id, seq, content_hash, content, source_kind, source_ref,
-                     trust, kind, occurred_at, ingested_at, redacted_at
-              FROM episodes WHERE id = ?1",
-            params![id],
-            |r| {
-                let ch_blob: Vec<u8> = r.get(3)?;
-                let mut ch = [0u8; 32];
-                if ch_blob.len() == 32 { ch.copy_from_slice(&ch_blob); }
-                let source_kind: String = r.get(5)?;
-                let source_ref: Option<String> = r.get(6)?;
-                let trust_s: String = r.get(7)?;
-                let kind_s: String = r.get(8)?;
-                Ok((
-                    r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64,
-                    ch, r.get::<_, String>(4)?, source_kind, source_ref,
-                    trust_s, kind_s,
-                    r.get::<_, i64>(9)?, r.get::<_, i64>(10)?, r.get::<_, Option<i64>>(11)?,
-                ))
-            },
-        );
+    let row = conn.query_row(
+        "SELECT id, space_id, seq, content_hash, content, source_kind, source_ref,
+                 trust, kind, occurred_at, ingested_at, redacted_at
+          FROM episodes WHERE id = ?1",
+        params![id],
+        |r| {
+            let ch_blob: Vec<u8> = r.get(3)?;
+            let mut ch = [0u8; 32];
+            if ch_blob.len() == 32 { ch.copy_from_slice(&ch_blob); }
+            Ok((
+                r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64,
+                ch, r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?, r.get::<_, Option<String>>(6)?,
+                r.get::<_, String>(7)?, r.get::<_, String>(8)?,
+                r.get::<_, i64>(9)?, r.get::<_, i64>(10)?, r.get::<_, Option<i64>>(11)?,
+            ))
+        },
+    );
     match row {
         Ok((id, space, seq, ch, content, sk, sr, trust_s, kind_s, occ, ing, red)) => {
-            let source = decode_source(&sk, sr);
+            let source = decode_source(&sk, sr)?;
             let trust = TrustTier::parse_db(&trust_s)
                 .ok_or_else(|| BrainError::Corruption(format!("bad trust tier: {trust_s}")))?;
             let kind = EpisodeKind::parse_db(&kind_s)
@@ -1863,20 +1853,27 @@ pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, Brain
             }))
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(sql_err(e)),
     }
 }
 
-fn decode_source(kind: &str, r#ref: Option<String>) -> SourceRef {
+/// Count episodes in the store (used by facade + tests so rusqlite stays in store).
+pub fn episode_count(conn: &Connection) -> Result<i64, BrainError> {
+    Ok(conn
+        .query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get::<_, i64>(0))
+        .map_err(sql_err)?)
+}
+
+fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainError> {
     match kind {
-        "note" => SourceRef::Note { path: r#ref.unwrap_or_default() },
-        "document" => SourceRef::Document { uri: r#ref.unwrap_or_default() },
-        "conversation" => SourceRef::Conversation,
-        "message" => SourceRef::Message,
-        "agent_trace" => SourceRef::AgentTrace,
-        "declaration" => SourceRef::Declaration,
-        "derived" => SourceRef::Derived { of: r#ref.unwrap_or_default() },
-        other => panic!("unknown source kind: {other}"),
+        "note" => Ok(SourceRef::Note { path: r#ref.unwrap_or_default() }),
+        "document" => Ok(SourceRef::Document { uri: r#ref.unwrap_or_default() }),
+        "conversation" => Ok(SourceRef::Conversation),
+        "message" => Ok(SourceRef::Message),
+        "agent_trace" => Ok(SourceRef::AgentTrace),
+        "declaration" => Ok(SourceRef::Declaration),
+        "derived" => Ok(SourceRef::Derived { of: r#ref.unwrap_or_default() }),
+        other => Err(BrainError::Corruption(format!("unknown source kind: {other}"))),
     }
 }
 ```
@@ -1983,9 +1980,7 @@ fn reinsert_same_content_is_noop() {
         })).unwrap();
     }
     h.writer.flush().unwrap();
-    let count: i64 = h.readers.read(|conn| {
-        Ok(conn.query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get(0))?)
-    }).unwrap();
+    let count: i64 = h.readers.read(|conn| ledger::episode_count(conn)).unwrap();
     assert_eq!(count, 1, "idempotent insert must not duplicate");
 }
 ```
@@ -2048,7 +2043,6 @@ pub use config::BrainConfig;
 pub use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier};
 pub use oxibrain_ports::{BrainError, ClockPort, SystemClock, Timestamp};
 
-use oxibrain_core::{content_hash, episode_id};
 use oxibrain_store::{ledger, StoreHandle};
 use std::sync::Arc;
 
@@ -2132,7 +2126,7 @@ impl Brain {
     pub async fn episode_count(&self) -> Result<i64, BrainError> {
         let h = self.handle.clone();
         tokio::task::spawn_blocking(move || {
-            h.readers.read(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get::<_, i64>(0))?))
+            h.readers.read(|conn| ledger::episode_count(conn))
         }).await.map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 }
@@ -2307,13 +2301,13 @@ pub async fn run(dir: &Path, space: &str) -> anyhow::Result<()> {
 
 `crates/oxibrain-cli/src/cmd/ingest.rs`:
 ```rust
-use oxibrain::{Brain, BrainConfig, TrustTier};
+use oxibrain::{Brain, BrainConfig};
 use oxibrain_ports::{ClockPort, SystemClock};
 use std::io::Read;
 use std::path::Path;
 
 pub async fn run(dir: &Path, path: std::path::PathBuf, space: &str, _trust: &str) -> anyhow::Result<()> {
-    let content = if path == Path::new("-") {
+    let content = if path.as_path() == Path::new("-") {
         let mut s = String::new();
         std::io::stdin().read_to_string(&mut s)?;
         s
@@ -2429,6 +2423,8 @@ backup (file-copy + manifest interim; online API in task 9), restore stub."
 ```rust
 //! Online backup (WAL-safe) via SQLite's backup API. DESIGN.md §13.4.
 
+use crate::io_err;
+use crate::sql_err;
 use oxibrain_ports::BrainError;
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
@@ -2445,18 +2441,22 @@ pub struct BackupManifest {
 /// Back up the source connection's main db into `dest_path` using the online API.
 pub fn online_backup(src: &Connection, dest_path: &Path) -> Result<(), BrainError> {
     if let Some(parent) = dest_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| BrainError::Storage(e.to_string()))?;
+        std::fs::create_dir_all(parent).map_err(io_err)?;
     }
     let dest = Connection::open_with_flags(
         dest_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI,
-    )?;
-    let backup = dest.backup(Some("main"), src, Some("main"))?;
-    backup.run_to_completion(100, std::time::Duration::from_millis(10), None)?;
+    )
+    .map_err(sql_err)?;
+    // Called on the SOURCE: src.backup(db_name, &dest, dst_name).
+    let mut backup = src.backup(Some("main"), &dest, Some("main")).map_err(sql_err)?;
+    backup
+        .run_to_completion(100, std::time::Duration::from_millis(10), None)
+        .map_err(sql_err)?;
     Ok(())
 }
 ```
-Add `rusqlite` already provides `backup` via the `backup` feature — enable it in store `Cargo.toml`: `rusqlite = { workspace = true, features = ["bundled", "backup"] }`. Update the workspace dep to `rusqlite = { version = "0.32", features = ["bundled", "backup"] }`.
+The `backup` feature is enabled on `rusqlite` in `[workspace.dependencies]` (Task 1). The online API is called on the *source* connection — `src.backup(Some("main"), &dest, Some("main"))` — not the destination.
 
 - [ ] **Step 2: Re-export and wire**
 
@@ -2478,11 +2478,11 @@ fn online_backup_produces_readable_copy() {
     let src_dir = tempdir().unwrap();
     let store = Store::open(src_dir.path()).unwrap();
     // seed
-    store.write_conn.execute(
+    store.connection().execute(
         "INSERT INTO spaces(id, name, created_at) VALUES('s1','personal',0)", [],
     ).unwrap();
     let dest = src_dir.path().join("backup.db");
-    online_backup(&store.write_conn, &dest).unwrap();
+    online_backup(store.connection(), &dest).unwrap();
     // read back
     let r = rusqlite::Connection::open(&dest).unwrap();
     let name: String = r.query_row("SELECT name FROM spaces WHERE id='s1'", [], |row| row.get(0)).unwrap();
@@ -2544,9 +2544,7 @@ fn reopen_after_drop_recovers_no_duplicates() {
             ledger::insert_episode(conn, &mut ep)
         })).unwrap();
         h.writer.flush().unwrap();
-        let count: i64 = h.readers.read(|conn| {
-            Ok(conn.query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get(0))?)
-        }).unwrap();
+        let count: i64 = h.readers.read(|conn| ledger::episode_count(conn)).unwrap();
         assert_eq!(count, 1, "reinsert after reopen must be idempotent (no dup)");
     }
 }
@@ -2660,7 +2658,7 @@ git commit -m "test(m0): verify exit criteria — init, ingest+read, crash recov
 - `Brain::connect` (daemon mode) is M4 — not stubbed, just absent.
 - Knowledge tables (entities/statements/beliefs/...) exist in schema but have no read/write paths; those land in M1.
 
-**Type consistency:** `Episode`, `ContentHash`, `SourceRef`, `TrustTier`, `EpisodeKind`, `Timestamp`, `BrainError` names match across tasks. `episode_id`, `content_hash`, `canonical_json`, `insert_episode`, `get_episode`, `create_space` signatures stable.
+**Type consistency:** `Episode`, `ContentHash`, `SourceRef`, `TrustTier`, `EpisodeKind`, `Timestamp`, `BrainError` names match across tasks. `episode_id`, `content_hash`, `canonical_json_value`, `insert_episode`, `get_episode`, `create_space`, `episode_count`, `sql_err`/`io_err` signatures stable. No `impl From<rusqlite::Error> for BrainError` exists (orphan rule); rusqlite boundaries use `.map_err(sql_err)?`. `fs2::try_lock_exclusive` makes the store fail-fast under a second writer.
 
 ## Execution Handoff
 
