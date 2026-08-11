@@ -323,6 +323,19 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
+    /// Snapshot the index tables (FTS5, TF-IDF, communities) for a space into
+    /// a deterministic string. Used by determinism tests.
+    pub async fn snapshot_indexes(&self, space: &str) -> Result<String, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::index_ops::snapshot_indexes(conn, &space))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
     pub async fn rebuild_communities(&self, space: &str) -> Result<(), BrainError> {
         let h = self.handle.clone();
         let space = space.to_string();

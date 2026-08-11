@@ -165,6 +165,60 @@ pub fn rebuild_salience(conn: &Connection, space: &str) -> Result<(), BrainError
     .map_err(sql_err)?;
     Ok(())
 }
+/// Snapshot the index tables (FTS, TF-IDF vectors, communities) for a space
+/// into a single deterministic string. Used by determinism tests to assert
+/// that reproject produces byte-identical derived state.
+pub fn snapshot_indexes(conn: &Connection, space: &str) -> Result<String, BrainError> {
+    let mut out = String::new();
+    for (label, sql) in [
+        (
+            "fts",
+            "SELECT target_kind, target_id, body FROM episodes_fts WHERE space_id = ?1 ORDER BY target_kind, target_id",
+        ),
+        (
+            "vec",
+            "SELECT target_kind, target_id, hex(vector) FROM tfidf_vectors WHERE space_id = ?1 ORDER BY target_kind, target_id",
+        ),
+        (
+            "com",
+            "SELECT id, label FROM communities WHERE space_id = ?1 ORDER BY id",
+        ),
+    ] {
+        let mut stmt = conn.prepare(sql).map_err(sql_err)?;
+        // Each SQL above returns exactly 3 columns.
+        const N: usize = 3;
+        let rows: Vec<String> = stmt
+            .query_map(params![space], |r| {
+                let mut parts = Vec::with_capacity(N);
+                for i in 0..N {
+                    let part = match r.get_ref(i) {
+                        Ok(rusqlite::types::ValueRef::Text(t)) => {
+                            String::from_utf8_lossy(t).into_owned()
+                        }
+                        Ok(rusqlite::types::ValueRef::Null) => String::new(),
+                        Ok(rusqlite::types::ValueRef::Integer(j)) => j.to_string(),
+                        Ok(rusqlite::types::ValueRef::Real(f)) => f.to_string(),
+                        Ok(rusqlite::types::ValueRef::Blob(b)) => {
+                            format!("blob({})", b.len())
+                        }
+                        Err(_) => String::new(),
+                    };
+                    parts.push(part);
+                }
+                Ok(parts.join("|"))
+            })
+            .map_err(sql_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_err)?;
+        drop(stmt);
+        out.push_str(&format!("---{label}---\n"));
+        for r in rows {
+            out.push_str(&r);
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
 
 /// Full index rebuild for a space: FTS + TF-IDF + salience.
 pub fn rebuild_indexes(conn: &Connection, space: &str) -> Result<(), BrainError> {

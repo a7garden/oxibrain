@@ -61,6 +61,25 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
         let decl = parse_declaration(content)?;
         project_declaration(conn, space, &decl, Timestamp(*ingested_at))?;
     }
+    drop(episodes);
+
+    // 4. Rebuild indexes (FTS5, TF-IDF, salience) and communities for every
+    //    space that survived replay. Index tables are derived state, so they
+    //    must be rebuilt to match the freshly replayed projection — and doing
+    //    so here makes reproject the canonical source of truth.
+    let mut space_stmt = conn
+        .prepare("SELECT DISTINCT id FROM spaces")
+        .map_err(sql_err)?;
+    let spaces: Vec<String> = space_stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    drop(space_stmt);
+    for space in &spaces {
+        crate::index_ops::rebuild_indexes(conn, space)?;
+        crate::communities::rebuild_communities(conn, space)?;
+    }
 
     Ok(())
 }
