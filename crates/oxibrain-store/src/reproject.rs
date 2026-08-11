@@ -63,6 +63,49 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
     }
     drop(episodes);
 
+    // 3.5. Replay extractions from cache (deterministic — no LLM call).
+    //      Reads cached raw responses and re-projects their claims.
+    //      Canonical order: (episode.seq, extractor_id).
+    let mut ext_stmt = conn
+        .prepare(
+            "SELECT e.id, e.space_id, e.content, e.ingested_at,
+                    x.extractor_id, x.raw_response
+             FROM extractions x
+             JOIN episodes e ON x.episode_id = e.id
+             WHERE e.kind = 'primary'
+             ORDER BY e.seq ASC, x.extractor_id ASC",
+        )
+        .map_err(sql_err)?;
+
+    let extractions: Vec<(String, String, String, i64, String, String)> = ext_stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?, // episode_id
+                r.get::<_, String>(1)?, // space_id
+                r.get::<_, String>(2)?, // content
+                r.get::<_, i64>(3)?,    // ingested_at
+                r.get::<_, String>(4)?, // extractor_id
+                r.get::<_, String>(5)?, // raw_response
+            ))
+        })
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    drop(ext_stmt);
+
+    for (ep_id, space, content, ingested_at, extractor_id, raw) in &extractions {
+        crate::extraction::project_from_cache(
+            conn,
+            space,
+            ep_id,
+            extractor_id,
+            raw,
+            content,
+            Timestamp(*ingested_at),
+        )?;
+    }
+    drop(extractions);
+
     // 4. Rebuild indexes (FTS5, TF-IDF, salience) and communities for every
     //    space that survived replay. Index tables are derived state, so they
     //    must be rebuilt to match the freshly replayed projection — and doing
