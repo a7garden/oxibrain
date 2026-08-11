@@ -1,0 +1,21 @@
+[package]
+name = "oxibrain"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["http-llm"]
+http-llm = []   # placeholder until M3 ships the real adapter
+
+[dependencies]
+oxibrain-core.workspace = true
+oxibrain-store.workspace = true
+oxibrain-ports.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true

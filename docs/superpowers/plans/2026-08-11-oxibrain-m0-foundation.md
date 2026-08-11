@@ -154,10 +154,10 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 
 [workspace.dependencies]
-oxibrain = { path = "crates/oxibrain" }
-oxibrain-core = { path = "crates/oxibrain-core" }
-oxibrain-ports = { path = "crates/oxibrain-ports" }
-oxibrain-store = { path = "crates/oxibrain-store" }
+oxibrain = { path = "crates/oxibrain", version = "0.1.0" }
+oxibrain-core = { path = "crates/oxibrain-core", version = "0.1.0" }
+oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.1.0" }
+oxibrain-store = { path = "crates/oxibrain-store", version = "0.1.0" }
 blake3 = "1.5"
 hex = "0.4"
 unicode-normalization = "0.1"
@@ -276,6 +276,8 @@ oxibrain-core.workspace = true
 rusqlite.workspace = true
 hex.workspace = true
 fs2.workspace = true
+blake3.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -327,10 +329,10 @@ path = "src/main.rs"
 [dependencies]
 oxibrain.workspace = true
 oxibrain-ports.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 anyhow.workspace = true
 ```
 
@@ -540,7 +542,7 @@ impl ClockPort for SystemClock {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FakeClock {
     current: std::sync::atomic::AtomicI64,
 }
@@ -895,9 +897,9 @@ fn derive(fields: &[(&str, &str)]) -> [u8; 32] {
     let mut h = Hasher::new();
     for (k, v) in fields {
         h.update(k.as_bytes());
-        h.update(0u8); // key/value separator
+        h.update(&[0u8]); // key/value separator
         h.update(v.as_bytes());
-        h.update(0u8);
+        h.update(&[0u8]);
     }
     let mut out = [0u8; 32];
     h.finalize_xof().fill(&mut out);
@@ -924,7 +926,7 @@ pub fn episode_id(
     ]))
 }
 
-/// Content hash over normalized content. M0 normalization: NFC + CRLF→LF + trim trailing ws.
+/// Content hash over normalized content. M0 normalization: NFKC + CR/CRLF→LF + trim trailing ws.
 pub fn content_hash(content: &str) -> ContentHash {
     let normalized = normalize_content(content);
     let mut h = Hasher::new();
@@ -934,10 +936,10 @@ pub fn content_hash(content: &str) -> ContentHash {
     ContentHash(out)
 }
 
-/// NFC unicode normalization + CRLF→LF + trailing-whitespace trim.
+/// NFKC unicode normalization + CR/CRLF→LF + trailing-whitespace trim.
 pub fn normalize_content(s: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
-    s.replace("\r\n", "\n")
+    s.replace("\r\n", "\n").replace('\r', "\n")
         .nfkc()
         .collect::<String>()
         .trim_end()
@@ -1352,10 +1354,13 @@ use oxibrain_ports::BrainError;
 use rusqlite::{params, Connection};
 
 pub fn get(conn: &Connection, key: &str) -> Result<Option<String>, BrainError> {
-    let v: Option<String> = conn
+    let v = match conn
         .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0))
-        .map(Some)
-        .unwrap_or(None);
+    {
+        Ok(s) => Some(s),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(sql_err(e)),
+    };
     Ok(v)
 }
 
@@ -1532,11 +1537,11 @@ impl WriterActor {
         let handle = thread::Builder::new()
             .name("oxibrain-writer".into())
             .spawn(move || {
-                let (conn, _lock) = store.into_parts();
+                let (mut conn, _lock) = store.into_parts();
                 loop {
                     match rx.recv() {
                         Ok(Cmd::Write(op)) => {
-                            if let Err(e) = run_in_tx(&conn, op) {
+                            if let Err(e) = run_in_tx(&mut conn, op) {
                                 tracing::warn!(error = %e, "write op failed");
                             }
                         }
@@ -1574,7 +1579,7 @@ impl Drop for WriterActor {
     fn drop(&mut self) { self.stop(); }
 }
 
-fn run_in_tx(conn: &rusqlite::Connection, op: WriteOp) -> Result<(), BrainError> {
+fn run_in_tx(conn: &mut rusqlite::Connection, op: WriteOp) -> Result<(), BrainError> {
     let tx = conn.transaction().map_err(sql_err)?;
     op(&tx)?;
     tx.commit().map_err(sql_err)?;
@@ -1659,8 +1664,8 @@ impl StoreHandle {
 
 `crates/oxibrain-store/tests/concurrency.rs`:
 ```rust
-use oxibrain_ports::Timestamp;
-use oxibrain_store::{ledger, StoreHandle};
+use oxibrain_ports::BrainError;
+use oxibrain_store::StoreHandle;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
@@ -1669,11 +1674,15 @@ use tempfile::tempdir;
 fn readers_dont_block_writer_under_load() {
     let dir = tempdir().unwrap();
     let handle = Arc::new(StoreHandle::open(dir.path()).expect("open"));
-    // seed a space so reads have something
+    // seed a space so reads have something (raw SQL — the ledger module lands in Task 6)
     let h = handle.clone();
     h.writer
-        .submit(Box::new(move |conn| {
-            ledger::create_space(conn, "personal", Timestamp(0))?;
+        .submit(Box::new(|conn| {
+            conn.execute(
+                "INSERT INTO spaces(id, name, created_at) VALUES(?1, ?2, ?3)",
+                rusqlite::params!["s1", "personal", 0i64],
+            )
+            .map_err(|e| BrainError::Storage(e.to_string()))?;
             Ok(())
         }))
         .unwrap();
@@ -1685,7 +1694,13 @@ fn readers_dont_block_writer_under_load() {
         let h = handle.clone();
         threads.push(std::thread::spawn(move || {
             for _ in 0..50 {
-                let _ = h.readers.read(|conn| ledger::episode_count(conn));
+                // .unwrap_or(0) sidesteps the rusqlite->BrainError conversion here;
+                // the point is lock/path behavior under load, not the row count.
+                let _ = h.readers.read(|conn| {
+                    Ok(conn
+                        .query_row::<i64, _, _>("SELECT COUNT(*) FROM spaces", [], |r| r.get(0))
+                        .unwrap_or(0))
+                });
             }
         }));
     }
@@ -1760,10 +1775,13 @@ fn space_id(name: &str) -> String {
 }
 
 pub fn get_space(conn: &Connection, id: &str) -> Result<Option<String>, BrainError> {
-    let name = conn
+    let name = match conn
         .query_row("SELECT name FROM spaces WHERE id = ?1", params![id], |r| r.get(0))
-        .map(Some)
-        .unwrap_or(None);
+    {
+        Ok(n) => Some(n),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(sql_err(e)),
+    };
     Ok(name)
 }
 
@@ -1775,7 +1793,7 @@ pub fn next_seq(conn: &Connection, space: &str) -> Result<u64, BrainError> {
             params![space],
             |r| r.get(0),
         )
-        .unwrap_or(None);
+        .map_err(sql_err)?;
     Ok(max.map(|m| m as u64 + 1).unwrap_or(0))
 }
 
@@ -1923,19 +1941,22 @@ fn episode_round_trip() {
     let h = Arc::new(StoreHandle::open(dir.path()).unwrap());
     let t = SystemClock.now();
 
-    let space = "s1";
+    // create_space returns a deterministic blake3 id; capture it for the episode FK
+    let (stx, srx) = std::sync::mpsc::channel();
     h.writer.submit(Box::new(move |conn| {
         let id = ledger::create_space(conn, "personal", t)?;
-        assert_eq!(id, space);
+        let _ = stx.send(id);
         Ok(())
     })).unwrap();
     h.writer.flush().unwrap();
+    let space: String = srx.recv().unwrap();
 
-    // insert an episode
+    // insert an episode using that space id
     let (tx, rx) = std::sync::mpsc::channel();
+    let space_for_ep = space.clone();
     h.writer.submit(Box::new(move |conn| {
         let mut ep = Episode {
-            id: String::new(), space: space.into(), seq: 0,
+            id: String::new(), space: space_for_ep, seq: 0,
             content_hash: oxibrain_core::ContentHash([0u8; 32]),
             content: "first note".into(),
             source: SourceRef::Note { path: "n.md".into() },
@@ -1944,7 +1965,7 @@ fn episode_round_trip() {
             occurred_at: t, ingested_at: t, redacted_at: None,
         };
         ledger::insert_episode(conn, &mut ep)?;
-        tx.send(ep.id).unwrap();
+        let _ = tx.send(ep.id);
         Ok(())
     })).unwrap();
     h.writer.flush().unwrap();
@@ -1962,14 +1983,20 @@ fn reinsert_same_content_is_noop() {
     let dir = tempdir().unwrap();
     let h = Arc::new(StoreHandle::open(dir.path()).unwrap());
     let t = SystemClock.now();
-    let space = "s1";
-    h.writer.submit(Box::new(move |conn| { ledger::create_space(conn, "personal", t)?; Ok(()) })).unwrap();
+    let (stx, srx) = std::sync::mpsc::channel();
+    h.writer.submit(Box::new(move |conn| {
+        let id = ledger::create_space(conn, "personal", t)?;
+        let _ = stx.send(id);
+        Ok(())
+    })).unwrap();
     h.writer.flush().unwrap();
+    let space: String = srx.recv().unwrap();
 
     for _ in 0..3 {
+        let space_for_ep = space.clone();
         h.writer.submit(Box::new(move |conn| {
             let mut ep = Episode {
-                id: String::new(), space: space.into(), seq: 0,
+                id: String::new(), space: space_for_ep, seq: 0,
                 content_hash: oxibrain_core::ContentHash([0u8; 32]),
                 content: "dup note".into(),
                 source: SourceRef::Note { path: "d.md".into() },
@@ -2137,7 +2164,7 @@ impl Brain {
 `crates/oxibrain/tests/facade.rs`:
 ```rust
 use oxibrain::{Brain, BrainConfig};
-use oxibrain_ports::SystemClock;
+use oxibrain_ports::{ClockPort, SystemClock};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -2315,7 +2342,8 @@ pub async fn run(dir: &Path, path: std::path::PathBuf, space: &str, _trust: &str
         std::fs::read_to_string(&path)?
     };
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let id = brain.ingest_note(space, &path.display().to_string(), content, SystemClock.now()).await?;
+    let space_id = brain.ensure_space(space).await?;
+    let id = brain.ingest_note(&space_id, &path.display().to_string(), content, SystemClock.now()).await?;
     println!("ingested episode {id}");
     Ok(())
 }
@@ -2365,9 +2393,7 @@ pub async fn run_backup(dir: &Path, _no_projection: bool, _no_cache: bool, out: 
     // copy db files
     for name in ["brain.db", "brain.db-wal", "brain.db-shm"] {
         let src = dir.join(name);
-        if src.exists() {
-            if let Ok(_) = tokio::fs::copy(&src, out_dir.join(name)).await { /* ok */ }
-        }
+        if src.exists() && tokio::fs::copy(&src, out_dir.join(name)).await.is_ok() { /* ok */ }
     }
     println!("backup written to {}", out_dir.display());
     Ok(())
@@ -2426,7 +2452,7 @@ backup (file-copy + manifest interim; online API in task 9), restore stub."
 use crate::io_err;
 use crate::sql_err;
 use oxibrain_ports::BrainError;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, backup};
 use std::path::Path;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2443,20 +2469,26 @@ pub fn online_backup(src: &Connection, dest_path: &Path) -> Result<(), BrainErro
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent).map_err(io_err)?;
     }
-    let dest = Connection::open_with_flags(
+    let mut dest = Connection::open_with_flags(
         dest_path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
     )
     .map_err(sql_err)?;
-    // Called on the SOURCE: src.backup(db_name, &dest, dst_name).
-    let mut backup = src.backup(Some("main"), &dest, Some("main")).map_err(sql_err)?;
-    backup
-        .run_to_completion(100, std::time::Duration::from_millis(10), None)
+    // Source-initiated online backup (rusqlite 0.32): Backup::new_with_names
+    // borrows src and dest together; src drives sqlite3_backup_step. dest is &mut.
+    let bkp = backup::Backup::new_with_names(
+        src,
+        rusqlite::DatabaseName::Main,
+        &mut dest,
+        rusqlite::DatabaseName::Main,
+    )
+    .map_err(sql_err)?;
+    bkp.run_to_completion(100, std::time::Duration::from_millis(10), None)
         .map_err(sql_err)?;
     Ok(())
 }
 ```
-The `backup` feature is enabled on `rusqlite` in `[workspace.dependencies]` (Task 1). The online API is called on the *source* connection — `src.backup(Some("main"), &dest, Some("main"))` — not the destination.
+The `backup` feature is enabled on `rusqlite` in `[workspace.dependencies]` (Task 1). rusqlite 0.32 exposes the online backup via `backup::Backup::new_with_names(src, DatabaseName::Main, &mut dest, DatabaseName::Main)` — source-initiated; `dest` must be a `&mut Connection`.
 
 - [ ] **Step 2: Re-export and wire**
 
@@ -2513,9 +2545,9 @@ fn reopen_after_drop_recovers_no_duplicates() {
     {
         let h = Arc::new(StoreHandle::open(dir.path()).unwrap());
         h.writer.submit(Box::new(move |conn| {
-            ledger::create_space(conn, "personal", t)?;
+            let space_id = ledger::create_space(conn, "personal", t)?;
             let mut ep = Episode {
-                id: String::new(), space: "s1".into(), seq: 0,
+                id: String::new(), space: space_id, seq: 0,
                 content_hash: oxibrain_core::ContentHash([0u8; 32]),
                 content: "crash test note".into(),
                 source: SourceRef::Note { path: "c.md".into() },
@@ -2533,8 +2565,9 @@ fn reopen_after_drop_recovers_no_duplicates() {
     {
         let h = Arc::new(StoreHandle::open(dir.path()).unwrap());
         h.writer.submit(Box::new(move |conn| {
+            let space_id = ledger::create_space(conn, "personal", t)?;
             let mut ep = Episode {
-                id: String::new(), space: "s1".into(), seq: 0,
+                id: String::new(), space: space_id, seq: 0,
                 content_hash: oxibrain_core::ContentHash([0u8; 32]),
                 content: "crash test note".into(),
                 source: SourceRef::Note { path: "c.md".into() },

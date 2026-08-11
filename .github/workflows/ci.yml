@@ -1,0 +1,41 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked || true
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: deny
+        run: cargo deny check
+      - name: standalone build
+        run: cargo build -p oxibrain --no-default-features --features http-llm
+      - name: standalone guarantee (no oxi crates)
+        run: |
+          if cargo tree -p oxibrain | grep -E 'oxios-|oxicode-'; then
+            echo "oxi-ecosystem crate leaked into default build"; exit 1
+          fi
+      - name: rusqlite isolation (only store references it)
+        run: |
+          if grep -rn 'use rusqlite' --include='*.rs' crates \
+             | grep -v 'crates/oxibrain-store/'; then
+            echo "rusqlite referenced outside oxibrain-store"; exit 1
+          fi
+      - name: test
+        run: cargo test --all-features

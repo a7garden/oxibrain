@@ -1,0 +1,47 @@
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "oxibrain",
+    version,
+    about = "A second brain for humans and agents"
+)]
+pub struct Cli {
+    #[arg(long, env = "OXIBRAIN_DIR", global = true)]
+    pub dir: Option<PathBuf>,
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Initialize a new brain store.
+    Init {
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Ingest a file or stdin as an episode.
+    Ingest {
+        /// File path, or `-` for stdin.
+        path: PathBuf,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Show store statistics.
+    Stats,
+    /// Health check.
+    Doctor,
+    /// Back up the store.
+    Backup {
+        #[arg(long)]
+        no_projection: bool,
+        #[arg(long)]
+        no_cache: bool,
+        /// Output directory (default: sibling of store dir).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Restore from a backup.
+    Restore { backup: PathBuf },
+}

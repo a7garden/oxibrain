@@ -12,3 +12,9 @@ dist/
 
 # OMP harness local state
 /.omp/
+
+# SDD workspace scratch
+.superpowers/
+
+# proptest failure artifacts
+proptest-regressions/
