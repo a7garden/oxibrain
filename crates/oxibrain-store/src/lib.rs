@@ -4,8 +4,10 @@
 
 pub mod backup;
 pub mod communities;
+pub mod consolidation;
 pub mod context;
 pub mod explain;
+pub mod extraction;
 pub mod index_ops;
 pub mod knowledge;
 pub mod ledger;
@@ -14,6 +16,7 @@ pub mod lock;
 pub mod meta;
 pub mod migration;
 pub mod project;
+pub mod quarantine;
 pub mod query;
 pub mod reader;
 pub mod registry;

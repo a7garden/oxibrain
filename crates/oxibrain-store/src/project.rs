@@ -86,7 +86,7 @@ pub fn parse_declaration(content: &str) -> Result<Declaration, BrainError> {
 
 /// Resolve or create an entity from a surface form + type.
 /// Returns (entity_id, mention_method).
-fn resolve_or_create(
+pub(crate) fn resolve_or_create(
     conn: &Connection,
     space: &str,
     eref: &EntityRef,
