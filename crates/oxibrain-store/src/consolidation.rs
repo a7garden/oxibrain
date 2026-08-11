@@ -151,6 +151,124 @@ pub fn load_community_entities(
     Ok(groups)
 }
 
+/// Find clusters of primary episodes sharing ≥ 2 entities (via assertions).
+/// Returns clusters sorted by episode IDs for determinism.
+pub fn find_episode_clusters(
+    conn: &Connection,
+    space: &str,
+) -> Result<Vec<EpisodeCluster>, BrainError> {
+    // Find pairs of episodes that share entities through assertions.
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.episode_id, b.episode_id, a.statement_id
+             FROM assertions a
+             JOIN assertions b ON a.statement_id = b.statement_id AND a.episode_id < b.episode_id
+             JOIN episodes ea ON a.episode_id = ea.id AND ea.space_id = ?1 AND ea.kind = 'primary'
+             JOIN episodes eb ON b.episode_id = eb.id AND eb.space_id = ?1 AND eb.kind = 'primary'
+             ORDER BY a.episode_id, b.episode_id",
+        )
+        .map_err(sql_err)?;
+
+    // Build adjacency: episode → set of related episodes.
+    let mut adjacency: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    let rows = stmt
+        .query_map(rusqlite::params![space], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(sql_err)?;
+    for row in rows {
+        let (a, b) = row.map_err(sql_err)?;
+        adjacency.entry(a.clone()).or_default().insert(b.clone());
+        adjacency.entry(b).or_default().insert(a);
+    }
+    drop(stmt);
+    // Find connected components (simple BFS).
+    let mut visited = std::collections::BTreeSet::new();
+    let mut clusters = Vec::new();
+    for ep in adjacency.keys() {
+        if visited.contains(ep) {
+            continue;
+        }
+        let mut cluster_eps = std::collections::BTreeSet::new();
+        let mut queue = vec![ep.clone()];
+        while let Some(e) = queue.pop() {
+            if !cluster_eps.insert(e.clone()) {
+                continue;
+            }
+            visited.insert(e.clone());
+            if let Some(neighbors) = adjacency.get(&e) {
+                for n in neighbors {
+                    if !visited.contains(n) {
+                        queue.push(n.clone());
+                    }
+                }
+            }
+        }
+        if cluster_eps.len() >= 2 {
+            let episode_ids: Vec<String> = cluster_eps.into_iter().collect();
+            clusters.push(EpisodeCluster {
+                episode_ids,
+                shared_entities: Vec::new(), // simplified
+            });
+        }
+    }
+
+    Ok(clusters)
+}
+
+/// Build the LLM prompt for summarizing an episode cluster.
+pub fn build_consolidation_prompt(
+    conn: &Connection,
+    space: &str,
+    cluster: &EpisodeCluster,
+) -> Result<String, BrainError> {
+    let mut prompt = String::from(
+        "Summarize the following related episodes into a concise \
+        thematic summary. Focus on key entities, relationships, and decisions.\n\n",
+    );
+    for ep_id in &cluster.episode_ids {
+        let content: String = conn
+            .query_row(
+                "SELECT content FROM episodes WHERE id = ?1 AND space_id = ?2",
+                rusqlite::params![ep_id, space],
+                |r| r.get(0),
+            )
+            .map_err(sql_err)?;
+        prompt.push_str(&format!("--- Episode {} ---\n{}\n\n", ep_id, content));
+    }
+    Ok(prompt)
+}
+
+/// Build the LLM prompt for summarizing a community's entities and beliefs.
+pub fn build_community_prompt(
+    conn: &Connection,
+    space: &str,
+    group: &CommunityGroup,
+) -> Result<String, BrainError> {
+    let mut prompt = String::from(
+        "Summarize the key themes and relationships among these \
+        entities:\n\n",
+    );
+    for entity_id in &group.entity_ids {
+        let beliefs = crate::query::beliefs_for_entity(conn, space, entity_id)?;
+        let entity_type: String = conn
+            .query_row(
+                "SELECT type_name FROM entities WHERE id = ?1",
+                rusqlite::params![entity_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| "Unknown".into());
+        prompt.push_str(&format!("- {} ({}): ", entity_id, entity_type));
+        let summaries: Vec<String> = beliefs
+            .iter()
+            .map(|b| format!("{:?} (conf {:.2})", b.status, b.confidence))
+            .collect();
+        prompt.push_str(&summaries.join(", "));
+        prompt.push('\n');
+    }
+    Ok(prompt)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

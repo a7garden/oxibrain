@@ -764,4 +764,245 @@ impl Brain {
         }
         Ok(total)
     }
+
+    /// Consolidate related episodes into Derived episodes with cached summaries (§10).
+    /// Clusters episodes by shared entities → LLM summarize → Derived episode.
+    pub async fn consolidate(
+        &self,
+        space: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+    ) -> Result<Vec<String>, BrainError> {
+        let llm = self.require_llm()?.clone();
+        let now = self.clock.now();
+        let h = self.handle.clone();
+        let space_owned = space.to_string();
+        let extractor_id = config.id();
+
+        // 1. Read episode clusters [reader].
+        let clusters = tokio::task::spawn_blocking({
+            let h = h.clone();
+            let space_owned = space_owned.clone();
+            move || {
+                h.readers.read(|conn| {
+                    oxibrain_store::consolidation::find_episode_clusters(conn, &space_owned)
+                })
+            }
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+
+        // 2. For each cluster: check cache, call LLM if miss.
+        let mut summaries: Vec<(Vec<String>, String)> = Vec::new();
+        for cluster in clusters {
+            let episode_ids = cluster.episode_ids.clone();
+            let member_hash = oxibrain_store::consolidation::hash_member_set(&episode_ids);
+            let cached = tokio::task::spawn_blocking({
+                let h = h.clone();
+                let extractor_id = extractor_id.clone();
+                move || {
+                    h.readers.read(|conn| {
+                        oxibrain_store::consolidation::get_cached_summary(
+                            conn,
+                            "consolidation",
+                            &member_hash,
+                            &extractor_id,
+                        )
+                    })
+                }
+            })
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+
+            if let Some(text) = cached {
+                summaries.push((episode_ids.clone(), text));
+            } else {
+                // Build prompt and call LLM.
+                let prompt = tokio::task::spawn_blocking({
+                    let h = h.clone();
+                    let space_owned = space_owned.clone();
+                    let prompt_ids = episode_ids.clone();
+                    let prompt_shared = cluster.shared_entities.clone();
+                    move || {
+                        h.readers.read(|conn| {
+                            oxibrain_store::consolidation::build_consolidation_prompt(
+                                conn,
+                                &space_owned,
+                                &oxibrain_store::consolidation::EpisodeCluster {
+                                    episode_ids: prompt_ids,
+                                    shared_entities: prompt_shared,
+                                },
+                            )
+                        })
+                    }
+                })
+                .await
+                .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+
+                let response = llm
+                    .complete(LlmRequest {
+                        model: config.model_id.clone(),
+                        system: Some("Summarize related episodes concisely.".into()),
+                        prompt,
+                        json_schema: None,
+                        max_tokens: config.max_tokens,
+                    })
+                    .await?;
+                summaries.push((episode_ids, response.text));
+            }
+        }
+
+        // 3. Write Derived episodes + cache [WriteOp].
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                let mut ids = Vec::new();
+                for (episode_ids, text) in &summaries {
+                    let member_hash = oxibrain_store::consolidation::hash_member_set(episode_ids);
+                    oxibrain_store::consolidation::cache_summary(
+                        conn,
+                        "consolidation",
+                        &member_hash,
+                        &extractor_id,
+                        text,
+                        now,
+                    )?;
+                    let id = oxibrain_store::consolidation::write_derived_episode(
+                        conn,
+                        &space_owned,
+                        text,
+                        episode_ids,
+                        now,
+                    )?;
+                    ids.push(id);
+                }
+                let _ = tx.send(ids);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("consolidate channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Generate community summary text as cached Derived episodes (§9.4, §5.3).
+    pub async fn summarize_communities(
+        &self,
+        space: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+    ) -> Result<usize, BrainError> {
+        let llm = self.require_llm()?.clone();
+        let now = self.clock.now();
+        let h = self.handle.clone();
+        let space_owned = space.to_string();
+        let extractor_id = config.id();
+
+        // 1. Read community groups [reader].
+        let groups = tokio::task::spawn_blocking({
+            let h = h.clone();
+            let space_owned = space_owned.clone();
+            move || {
+                h.readers.read(|conn| {
+                    oxibrain_store::consolidation::load_community_entities(conn, &space_owned)
+                })
+            }
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+
+        // 2. For each group: check cache, call LLM if miss.
+        let mut summaries: Vec<(Vec<String>, String)> = Vec::new();
+        for group in groups {
+            let entity_ids = group.entity_ids.clone();
+            let member_hash = oxibrain_store::consolidation::hash_member_set(&group.entity_ids);
+            let cached = tokio::task::spawn_blocking({
+                let h = h.clone();
+                let extractor_id = extractor_id.clone();
+                move || {
+                    h.readers.read(|conn| {
+                        oxibrain_store::consolidation::get_cached_summary(
+                            conn,
+                            "community",
+                            &member_hash,
+                            &extractor_id,
+                        )
+                    })
+                }
+            })
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+
+            if cached.is_some() {
+                continue; // cache hit
+            }
+
+            // Build prompt and call LLM.
+            let prompt = tokio::task::spawn_blocking({
+                let h = h.clone();
+                let space_owned = space_owned.clone();
+                move || {
+                    h.readers.read(|conn| {
+                        oxibrain_store::consolidation::build_community_prompt(
+                            conn,
+                            &space_owned,
+                            &group,
+                        )
+                    })
+                }
+            })
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+
+            let response = llm
+                .complete(LlmRequest {
+                    model: config.model_id.clone(),
+                    system: Some("Summarize the themes among these entities.".into()),
+                    prompt,
+                    json_schema: None,
+                    max_tokens: config.max_tokens,
+                })
+                .await?;
+            summaries.push((entity_ids, response.text));
+        }
+
+        // 3. Write Derived episodes + cache [WriteOp].
+        let count = summaries.len();
+        if count > 0 {
+            tokio::task::spawn_blocking(move || {
+                let (tx, rx) = std::sync::mpsc::channel();
+                h.writer.submit(Box::new(move |conn| {
+                    for (entity_ids, text) in &summaries {
+                        let member_hash =
+                            oxibrain_store::consolidation::hash_member_set(entity_ids);
+                        oxibrain_store::consolidation::cache_summary(
+                            conn,
+                            "community",
+                            &member_hash,
+                            &extractor_id,
+                            text,
+                            now,
+                        )?;
+                        // Write as a Derived episode linking to episodes mentioning these entities.
+                        oxibrain_store::consolidation::write_derived_episode(
+                            conn,
+                            &space_owned,
+                            text,
+                            &[],
+                            now,
+                        )?;
+                    }
+                    let _ = tx.send(());
+                    Ok(())
+                }))?;
+                h.writer.flush()?;
+                rx.recv().map_err(|_| {
+                    BrainError::Storage("summarize_communities channel dropped".into())
+                })
+            })
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+        }
+        Ok(count)
+    }
 }
