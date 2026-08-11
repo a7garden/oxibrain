@@ -10,6 +10,8 @@ pub mod migration;
 pub mod reader;
 pub mod schema;
 pub mod writer;
+pub mod knowledge;
+pub mod registry;
 
 pub use backup::{BackupManifest, online_backup};
 pub use reader::ReaderPool;

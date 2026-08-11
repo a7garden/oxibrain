@@ -451,6 +451,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "strsim",
  "thiserror",
  "unicode-normalization",
 ]
@@ -478,6 +479,7 @@ dependencies = [
  "proptest",
  "rusqlite",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tracing",

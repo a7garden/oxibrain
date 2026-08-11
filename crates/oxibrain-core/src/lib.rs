@@ -22,13 +22,13 @@ pub use knowledge::{
     MentionRole, MergeDecision, Object, Polarity, ResolutionMethod, Statement, Support,
     TypedValue, claim_repr, object_repr,
 };
+pub use types::{ContentHash, Episode, EpisodeKind, SourceRef, Space, TrustTier};
 
 pub use registry::{
     core_v1, Cardinality, Invalidation, LiteralType, ObjectKind, PredicateDef, Temporality,
     CORE_V1_MAJOR, CORE_V1_MINOR,
 };
 pub mod resolution;
-pub use resolution::{normalize, resolve, score, Decision, ResolutionConfig};
 
 pub mod fold;
 pub use fold::{fold, StatementEntry};
