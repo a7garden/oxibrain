@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 60f48df3d227906f72040658af7f67874014857b66a62e1cd0bc3df27c8f1b55 # shrinks to group = [StatementEntry { statement: Statement { id: "st_0", space: "s1", subject: "e1", predicate: "p", object: Entity("obj_0") }, assertions: [Assertion { id: "a_st_0_ep1", statement: "st_0", episode: "ep1", extractor: None, polarity: Affirm, claimed_from: Timestamp(1220), claimed_to: Timestamp(1404), confidence: 1.0, recorded_at: Timestamp(1), retracted_at: None }] }, StatementEntry { statement: Statement { id: "st_1", space: "s1", subject: "e1", predicate: "p", object: Entity("obj_1") }, assertions: [Assertion { id: "a_st_1_ep1", statement: "st_1", episode: "ep1", extractor: None, polarity: Affirm, claimed_from: Timestamp(1404), claimed_to: Timestamp(1404), confidence: 1.0, recorded_at: Timestamp(1), retracted_at: None }] }]

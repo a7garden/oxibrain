@@ -264,7 +264,7 @@ fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
                     if let Some(last) = beliefs.last_mut() {
                         if last.statement == cur.stmt
                             && last.status == BeliefStatus::Active
-                            && last.valid_to > iv.start
+                            && last.valid_to >= iv.start
                         {
                             last.valid_to = Timestamp(iv.start.millis() - 1);
                             last.status = BeliefStatus::Superseded;

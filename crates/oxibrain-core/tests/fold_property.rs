@@ -5,10 +5,10 @@
 //! "Property tests for the temporal fold".
 
 use oxibrain_core::{
-    Assertion, BeliefStatus, Cardinality, Interval, Invalidation, Object, ObjectKind, Polarity,
-    PredicateDef, Statement, StatementEntry, Temporality, fold, overlaps,
+    fold, overlaps, Assertion, BeliefStatus, Cardinality, Interval, Invalidation, Object,
+    ObjectKind, Polarity, PredicateDef, Statement, StatementEntry, Temporality,
 };
-use oxibrain_ports::{TIME_MAX, Timestamp};
+use oxibrain_ports::{Timestamp, TIME_MAX};
 use proptest::prelude::*;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -294,4 +294,46 @@ fn single_affirm_produces_one_active() {
         assert_eq!(beliefs[0].valid_from, ts(100));
         assert_eq!(beliefs[0].valid_to, ts(500));
     }
+}
+
+/// Regression: when one interval ends exactly where another begins
+/// (valid_to == new_valid_from), the supersede fold must clip the previous
+/// belief. Before the fix, both were Active and overlapped at the boundary.
+#[test]
+fn supersede_boundary_no_overlap_at_shared_endpoint() {
+    let group = vec![
+        StatementEntry {
+            statement: make_stmt("st_a", "acme"),
+            assertions: vec![make_assertion("st_a", "ep1", Polarity::Affirm, 100, 200)],
+        },
+        StatementEntry {
+            statement: make_stmt("st_b", "globex"),
+            assertions: vec![make_assertion("st_b", "ep2", Polarity::Affirm, 200, 300)],
+        },
+    ];
+    let beliefs = fold(&def_supersede(), &group, TIME_MAX);
+    // st_a must be Superseded [100, 199], st_b must be Active [200, 300].
+    let st_a = beliefs
+        .iter()
+        .find(|b| b.statement == "st_a")
+        .expect("st_a");
+    let st_b = beliefs
+        .iter()
+        .find(|b| b.statement == "st_b")
+        .expect("st_b");
+    assert_eq!(st_a.status, BeliefStatus::Superseded);
+    assert_eq!(
+        st_a.valid_to,
+        ts(199),
+        "st_a must be clipped to 199, not 200"
+    );
+    assert_eq!(st_b.status, BeliefStatus::Active);
+    assert_eq!(st_b.valid_from, ts(200));
+    // Verify no overlap.
+    let a_iv = Interval::new(st_a.valid_from, st_a.valid_to);
+    let b_iv = Interval::new(st_b.valid_from, st_b.valid_to);
+    assert!(
+        !overlaps(&a_iv, &b_iv),
+        "superseded and active must not overlap"
+    );
 }
