@@ -11,9 +11,11 @@ pub mod reader;
 pub mod schema;
 pub mod writer;
 pub mod knowledge;
+pub mod project;
 pub mod registry;
 
 pub use backup::{BackupManifest, online_backup};
+pub use project::{canonical_declaration_content, parse_declaration, project_declaration, Declaration, DeclObject, EntityRef};
 pub use reader::ReaderPool;
 pub use writer::WriterActor;
 
