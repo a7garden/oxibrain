@@ -21,3 +21,8 @@ proptest.workspace = true
 tempfile.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "budget"
+harness = false
