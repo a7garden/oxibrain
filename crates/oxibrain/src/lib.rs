@@ -323,5 +323,40 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
+    pub async fn rebuild_communities(&self, space: &str) -> Result<(), BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                oxibrain_store::communities::rebuild_communities(conn, &space)?;
+                let _ = tx.send(());
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv().map_err(|_| {
+                BrainError::Storage("rebuild_communities channel dropped".into())
+            })
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+    pub async fn community_members(
+        &self,
+        space: &str,
+        entity_id: &str,
+    ) -> Result<Vec<String>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let entity_id = entity_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| {
+                oxibrain_store::communities::community_members(conn, &space, &entity_id)
+            })
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
 
 }

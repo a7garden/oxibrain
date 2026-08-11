@@ -16,6 +16,7 @@ pub mod registry;
 pub mod reproject;
 pub mod schema;
 pub mod writer;
+pub mod communities;
 pub mod timeline;
 pub mod explain;
 

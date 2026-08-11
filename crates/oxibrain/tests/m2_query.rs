@@ -238,3 +238,84 @@ async fn timeline_diff_why_supersession() {
         explain.confidence_breakdown.support_count
     );
 }
+#[tokio::test]
+async fn rebuild_communities_separates_clusters() {
+    let dir = tempdir().expect("tempdir");
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
+        1_700_000_000_000,
+    )));
+    let brain = Brain::with_clock(
+        oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
+        clock,
+    )
+    .await
+    .expect("open");
+    let space = brain.ensure_space("test").await.expect("space");
+
+    // Two disconnected clusters: A-B-C and X-Y-Z.
+    for (s, o) in [
+        ("A", "B"),
+        ("B", "C"),
+        ("X", "Y"),
+        ("Y", "Z"),
+    ] {
+        brain
+            .declare(&space, decl_add(s, "Concept", "knows", o, "Concept"))
+            .await
+            .expect("declare");
+    }
+
+    let a_id = brain
+        .resolve_entity_id(&space, "Concept", "A")
+        .await
+        .expect("resolve")
+        .expect("A declared");
+    let x_id = brain
+        .resolve_entity_id(&space, "Concept", "X")
+        .await
+        .expect("resolve")
+        .expect("X declared");
+
+    // Rebuild communities.
+    brain
+        .rebuild_communities(&space)
+        .await
+        .expect("rebuild_communities");
+
+    // Read which community each entity is in.
+    let a_members = brain
+        .community_members(&space, &a_id)
+        .await
+        .expect("community_members A");
+    let x_members = brain
+        .community_members(&space, &x_id)
+        .await
+        .expect("community_members X");
+
+    let mut a_sorted = a_members.clone();
+    a_sorted.sort();
+    let mut x_sorted = x_members.clone();
+    x_sorted.sort();
+
+    // Each cluster should self-organize into its own community.
+    assert!(
+        a_sorted.contains(&a_id),
+        "A's community should include A, got {:?}",
+        a_sorted
+    );
+    assert!(
+        x_sorted.contains(&x_id),
+        "X's community should include X, got {:?}",
+        x_sorted
+    );
+    // The two clusters must not overlap — A's community and X's community are
+    // disjoint.
+    for m in &a_sorted {
+        assert!(
+            !x_sorted.contains(m),
+            "cluster overlap: {} appears in both A and X communities",
+            m
+        );
+    }
+}
+
