@@ -32,8 +32,8 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
         .prepare(
             "SELECT id, space_id, content, ingested_at
              FROM episodes
-             WHERE kind = 'declaration'
-             ORDER BY seq ASC",
+            WHERE kind = 'declaration' AND redacted_at IS NULL
+            ORDER BY seq ASC",
         )
         .map_err(sql_err)?;
 
@@ -72,8 +72,8 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
                     x.extractor_id, x.raw_response
              FROM extractions x
              JOIN episodes e ON x.episode_id = e.id
-             WHERE e.kind = 'primary'
-             ORDER BY e.seq ASC, x.extractor_id ASC",
+            WHERE e.kind = 'primary' AND e.redacted_at IS NULL
+            ORDER BY e.seq ASC, x.extractor_id ASC",
         )
         .map_err(sql_err)?;
 
@@ -105,6 +105,20 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
         )?;
     }
     drop(extractions);
+
+    // 3.6. Replay redactions (entity-scoped). After extraction replay, deleted
+    //      assertions have been re-created from cache. Redactions recorded in
+    //      the `redactions` table delete them again, so the projection matches
+    //      the incremental path. Episode-scoped redaction is already handled
+    //      by the `redacted_at IS NULL` filters above.
+    let redactions = crate::security::list_redactions(conn)?;
+    for (target_json, _reason) in &redactions {
+        if let Ok(target) =
+            serde_json::from_str::<oxibrain_core::security::RedactTarget>(target_json)
+        {
+            crate::redaction::apply_replay(conn, &target)?;
+        }
+    }
 
     // 4. Rebuild indexes (FTS5, TF-IDF, salience) and communities for every
     //    space that survived replay. Index tables are derived state, so they

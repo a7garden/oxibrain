@@ -24,6 +24,9 @@ pub mod reproject;
 pub mod schema;
 pub mod timeline;
 pub mod writer;
+pub mod redaction;
+pub mod security;
+pub use security::{AuditRow, list_audit, write_audit};
 
 pub use backup::{BackupManifest, online_backup};
 pub use project::{

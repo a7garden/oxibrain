@@ -12,6 +12,7 @@ oxibrain-index.workspace = true
 rusqlite.workspace = true
 blake3.workspace = true
 hex.workspace = true
+sha2 = "0.10"
 fs2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

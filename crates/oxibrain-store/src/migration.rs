@@ -36,6 +36,12 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.pragma_update(None, "user_version", 3i64)
             .map_err(sql_err)?;
     }
+    if current < 4 {
+        let sql = include_str!("migrations/v4.sql");
+        conn.execute_batch(sql).map_err(sql_err)?;
+        conn.pragma_update(None, "user_version", 4i64)
+            .map_err(sql_err)?;
+    }
     let now: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sql_err)?;
@@ -74,7 +80,7 @@ mod tests {
             err,
             BrainError::Migration {
                 found: 999,
-                expected: 3
+                expected: 4
             }
         ));
     }
