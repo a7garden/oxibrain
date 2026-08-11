@@ -12,11 +12,13 @@ pub mod schema;
 pub mod writer;
 pub mod knowledge;
 pub mod project;
+pub mod query;
 pub mod registry;
-
+pub mod reproject;
 pub use backup::{BackupManifest, online_backup};
 pub use project::{canonical_declaration_content, parse_declaration, project_declaration, Declaration, DeclObject, EntityRef};
 pub use reader::ReaderPool;
+pub use reproject::reproject;
 pub use writer::WriterActor;
 
 use oxibrain_ports::BrainError;
