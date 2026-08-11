@@ -1,11 +1,15 @@
-//! Read queries: beliefs for an entity, as-of queries, contradictions.
+//! Read queries: beliefs for an entity, as-of queries, contradictions, plus
+//! lexical (FTS5), semantic (TF-IDF kNN), and hybrid (RRF) search.
 
 use crate::knowledge as kcrud;
 use crate::sql_err;
 use oxibrain_core::knowledge::Object;
+
+use oxibrain_core::retrieval::{QueryMode, SearchHit, SearchTarget};
 use oxibrain_core::{Belief, Statement};
+use oxibrain_index::{KnnIndex, TfIdfModel, TfIdfVector};
 use oxibrain_ports::{BrainError, Timestamp};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 /// Current beliefs where `entity` is the subject (follows merge chain).
 pub fn beliefs_for_entity(
@@ -136,4 +140,132 @@ fn statement_ids_for_subject(
         result.push(row.map_err(sql_err)?);
     }
     Ok(result)
+}
+
+/// FTS5/BM25 lexical search over the indexed body texts. Returns hits
+/// sorted by BM25 score descending (FTS5 rank is negated so higher = better).
+pub fn fts_search(
+    conn: &Connection,
+    space: &str,
+    query_text: &str,
+    limit: usize,
+) -> Result<Vec<SearchHit>, BrainError> {
+    // FTS5 implicit-AND query: space-separated tokens.
+    let fts_query: String = query_text
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if fts_query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT target_kind, target_id, rank
+             FROM episodes_fts
+             WHERE episodes_fts MATCH ?1 AND space_id = ?2
+             ORDER BY rank
+             LIMIT ?3",
+        )
+        .map_err(sql_err)?;
+    let hits = stmt
+        .query_map(params![&fts_query, space, limit as i64], |r| {
+            let kind: String = r.get(0)?;
+            let id: String = r.get(1)?;
+            let rank: f64 = r.get(2)?;
+            let target = match kind.as_str() {
+                "statement" => SearchTarget::Statement { id },
+                "entity" => SearchTarget::Entity { id },
+                _ => SearchTarget::Episode { id },
+            };
+            // FTS5 rank: lower = better. Negate so higher = better.
+            Ok(SearchHit {
+                target,
+                score: -rank,
+                mode: QueryMode::Lexical,
+            })
+        })
+        .map_err(sql_err)?;
+    let mut results = Vec::new();
+    for hit in hits {
+        results.push(hit.map_err(sql_err)?);
+    }
+    Ok(results)
+}
+
+/// Load the TF-IDF model for a space, fitted on the live (non-redacted)
+/// episode contents. Statement rendering is kept out of the model so the
+/// model is cheap to rebuild on each query.
+pub fn load_tfidf_model(
+    conn: &Connection,
+    space: &str,
+    dim: usize,
+) -> Result<TfIdfModel, BrainError> {
+    let mut stmt = conn
+        .prepare("SELECT content FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL")
+        .map_err(sql_err)?;
+    let texts: Vec<String> = stmt
+        .query_map(params![space], |r| r.get::<_, String>(0))
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    drop(stmt);
+    let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+    Ok(TfIdfModel::fit(&text_refs, dim))
+}
+
+/// Load all persisted TF-IDF vectors for a space into an in-memory KnnIndex.
+pub fn load_knn_index(conn: &Connection, space: &str) -> Result<KnnIndex, BrainError> {
+    let mut index = KnnIndex::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT target_kind, target_id, vector FROM tfidf_vectors WHERE space_id = ?1",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space], |r| {
+            let kind: String = r.get(0)?;
+            let id: String = r.get(1)?;
+            let vector_blob: Vec<u8> = r.get(2)?;
+            Ok((kind, id, vector_blob))
+        })
+        .map_err(sql_err)?;
+    for row in rows {
+        let (kind, id, blob) = row.map_err(sql_err)?;
+        let key = format!("{kind}:{id}");
+        let vector = TfIdfVector::from_bytes(&blob);
+        index.insert(key, vector);
+    }
+    Ok(index)
+}
+
+/// Semantic (TF-IDF kNN) search: transform the query into a TF-IDF vector and
+/// rank all persisted vectors by cosine similarity.
+pub fn semantic_search(
+    conn: &Connection,
+    space: &str,
+    query_text: &str,
+    limit: usize,
+) -> Result<Vec<SearchHit>, BrainError> {
+    let model = load_tfidf_model(conn, space, 1024)?;
+    let query_vec = model.transform(query_text);
+    let index = load_knn_index(conn, space)?;
+    let results = index.search(&query_vec, limit);
+    let hits = results
+        .into_iter()
+        .map(|(key, score)| {
+            let (kind, id) = key.split_once(':').unwrap_or(("episode", &key));
+            let target = match kind {
+                "statement" => SearchTarget::Statement { id: id.to_string() },
+                "entity" => SearchTarget::Entity { id: id.to_string() },
+                _ => SearchTarget::Episode { id: id.to_string() },
+            };
+            SearchHit {
+                target,
+                score,
+                mode: QueryMode::Semantic,
+            }
+        })
+        .collect();
+    Ok(hits)
 }
