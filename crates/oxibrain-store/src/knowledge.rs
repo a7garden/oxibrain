@@ -3,13 +3,13 @@
 //! inside one writer-actor transaction.
 
 use crate::sql_err;
+use oxibrain_core::fold::StatementEntry;
+use oxibrain_core::knowledge::{KeyOrigin, Object, Polarity};
 use oxibrain_core::{
     Assertion, Belief, BeliefStatus, Entity, EntityKey, EntityMerge, Mention, Statement, Support,
 };
-use oxibrain_core::fold::StatementEntry;
-use oxibrain_core::knowledge::{KeyOrigin, Object, Polarity};
 use oxibrain_ports::BrainError;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 // ── Entities ───────────────────────────────────────────────────────────
 
@@ -60,7 +60,7 @@ pub fn resolve_entity(conn: &Connection, id: &str) -> Result<String, BrainError>
                 Ok(Some(target)) => Some(target),
                 Ok(None) => None,
                 Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    return Err(BrainError::NotFound(format!("entity {current}")))
+                    return Err(BrainError::NotFound(format!("entity {current}")));
                 }
                 Err(e) => return Err(sql_err(e)),
             }
@@ -116,8 +116,7 @@ pub fn find_keys_exact(
                 ty: r.get(3)?,
                 normalized: r.get(4)?,
                 surface: r.get(5)?,
-                origin: KeyOrigin::parse_db(&r.get::<_, String>(6)?)
-                    .expect("valid origin in db"),
+                origin: KeyOrigin::parse_db(&r.get::<_, String>(6)?).expect("valid origin in db"),
             })
         })
         .map_err(sql_err)?;
@@ -149,8 +148,7 @@ pub fn find_keys_for_type(
                 ty: r.get(3)?,
                 normalized: r.get(4)?,
                 surface: r.get(5)?,
-                origin: KeyOrigin::parse_db(&r.get::<_, String>(6)?)
-                    .expect("valid origin in db"),
+                origin: KeyOrigin::parse_db(&r.get::<_, String>(6)?).expect("valid origin in db"),
             })
         })
         .map_err(sql_err)?;
@@ -174,11 +172,7 @@ pub fn insert_merge(conn: &Connection, m: &EntityMerge) -> Result<(), BrainError
     Ok(())
 }
 
-pub fn set_merged_into(
-    conn: &Connection,
-    loser: &str,
-    winner: &str,
-) -> Result<(), BrainError> {
+pub fn set_merged_into(conn: &Connection, loser: &str, winner: &str) -> Result<(), BrainError> {
     conn.execute(
         "UPDATE entities SET merged_into = ?1 WHERE id = ?2",
         params![winner, loser],
@@ -192,9 +186,10 @@ pub fn set_merged_into(
 pub fn insert_statement(conn: &Connection, s: &Statement) -> Result<(), BrainError> {
     let (object_entity, object_literal): (Option<&str>, Option<String>) = match &s.object {
         Object::Entity(id) => (Some(id.as_str()), None),
-        Object::Literal(tv) => {
-            (None, Some(serde_json::to_string(tv).expect("typed value serializable")))
-        }
+        Object::Literal(tv) => (
+            None,
+            Some(serde_json::to_string(tv).expect("typed value serializable")),
+        ),
     };
     conn.execute(
         "INSERT OR IGNORE INTO statements (id, space_id, subject_id, predicate, object_entity, object_literal)
@@ -245,7 +240,7 @@ pub fn get_statement_group(
 
     let mut entries = Vec::new();
     for row_result in rows {
-        let statement = row_result.map_err(|e| sql_err(e))?;
+        let statement = row_result.map_err(sql_err)?;
         let assertions = get_assertions_for_statement(conn, &statement.id)?;
         if !assertions.is_empty() {
             entries.push(StatementEntry {
@@ -304,9 +299,7 @@ pub fn get_assertions_for_statement(
                 claimed_to: oxibrain_ports::Timestamp(r.get::<_, i64>(6)?),
                 confidence: r.get(7)?,
                 recorded_at: oxibrain_ports::Timestamp(r.get::<_, i64>(8)?),
-                retracted_at: r
-                    .get::<_, Option<i64>>(9)?
-                    .map(oxibrain_ports::Timestamp),
+                retracted_at: r.get::<_, Option<i64>>(9)?.map(oxibrain_ports::Timestamp),
             })
         })
         .map_err(sql_err)?;
@@ -407,8 +400,7 @@ pub fn get_beliefs_for_statement(
                 statement: r.get(0)?,
                 valid_from: oxibrain_ports::Timestamp(r.get::<_, i64>(1)?),
                 valid_to: oxibrain_ports::Timestamp(r.get::<_, i64>(2)?),
-                status: BeliefStatus::parse_db(&status_str)
-                    .expect("valid status in db"),
+                status: BeliefStatus::parse_db(&status_str).expect("valid status in db"),
                 confidence: r.get(4)?,
                 support,
             })

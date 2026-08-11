@@ -8,7 +8,8 @@ pub use config::BrainConfig;
 pub use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier};
 pub use oxibrain_ports::{BrainError, ClockPort, SystemClock, Timestamp};
 
-use oxibrain_store::{StoreHandle, ledger};
+pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
+use oxibrain_store::{StoreHandle, ledger, query, reproject};
 use std::sync::Arc;
 
 /// The brain. Embedded mode only in M0 (daemon/transport land in M4).
@@ -114,5 +115,92 @@ impl Brain {
         tokio::task::spawn_blocking(move || h.readers.read(ledger::episode_count))
             .await
             .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Drop and rebuild the entire projection from the ledger.
+    pub async fn reproject(&self) -> Result<(), BrainError> {
+        let h = self.handle.clone();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                reproject::reproject(conn)?;
+                let _ = tx.send(());
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("reproject channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Declare a statement, merge, or retraction. Returns the episode id.
+    pub async fn declare(&self, space: &str, decl: Declaration) -> Result<String, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let now = self.clock.now();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                let ep_id = oxibrain_store::project::project_declaration(conn, &space, &decl, now)?;
+                let _ = tx.send(ep_id);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("declare channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Current beliefs for an entity (follows merge chain).
+    pub async fn beliefs(
+        &self,
+        space: &str,
+        entity_id: &str,
+    ) -> Result<Vec<oxibrain_core::Belief>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let entity_id = entity_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| query::beliefs_for_entity(conn, &space, &entity_id))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Beliefs as of a valid-time point.
+    pub async fn beliefs_as_of(
+        &self,
+        space: &str,
+        entity_id: &str,
+        valid_at: oxibrain_ports::Timestamp,
+    ) -> Result<Vec<oxibrain_core::Belief>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let entity_id = entity_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| query::beliefs_as_of(conn, &space, &entity_id, Some(valid_at), None))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// All contradicted statements in a space.
+    pub async fn contradictions(
+        &self,
+        space: &str,
+    ) -> Result<Vec<oxibrain_core::Statement>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| query::contradictions(conn, &space))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 }

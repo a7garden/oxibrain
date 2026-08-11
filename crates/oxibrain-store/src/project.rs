@@ -9,9 +9,7 @@ use crate::registry;
 use crate::sql_err;
 use oxibrain_core::canonical::canonical_json_value;
 use oxibrain_core::fold::fold;
-use oxibrain_core::id::{
-    assertion_id, entity_id, entity_key_id, mention_id, statement_id,
-};
+use oxibrain_core::id::{assertion_id, entity_id, entity_key_id, mention_id, statement_id};
 use oxibrain_core::knowledge::{
     Assertion, Entity, EntityKey, KeyOrigin, Mention, MentionRole, Object, Polarity,
     ResolutionMethod, Statement, TypedValue,
@@ -82,7 +80,8 @@ pub fn canonical_declaration_content(decl: &Declaration) -> String {
 
 /// Parse a declaration from JSON content.
 pub fn parse_declaration(content: &str) -> Result<Declaration, BrainError> {
-    serde_json::from_str(content).map_err(|e| BrainError::Invalid(format!("declaration parse: {e}")))
+    serde_json::from_str(content)
+        .map_err(|e| BrainError::Invalid(format!("declaration parse: {e}")))
 }
 
 /// Resolve or create an entity from a surface form + type.
@@ -110,62 +109,77 @@ fn resolve_or_create(
         oxibrain_core::resolution::Decision::Link { entity, method, .. } => {
             // Add this surface as a key if it doesn't exist.
             let kid = entity_key_id(&entity, &normalized, &eref.ty);
-            kcrud::insert_entity_key(conn, &EntityKey {
-                id: kid,
-                space: space.into(),
-                entity: entity.clone(),
-                ty: eref.ty.clone(),
-                normalized: normalized.clone(),
-                surface: eref.surface.clone(),
-                origin: KeyOrigin::UserDeclared,
-            })?;
+            kcrud::insert_entity_key(
+                conn,
+                &EntityKey {
+                    id: kid,
+                    space: space.into(),
+                    entity: entity.clone(),
+                    ty: eref.ty.clone(),
+                    normalized: normalized.clone(),
+                    surface: eref.surface.clone(),
+                    origin: KeyOrigin::UserDeclared,
+                },
+            )?;
             Ok((entity, method))
         }
         oxibrain_core::resolution::Decision::New { method, .. } => {
             // Create a new entity.
             let eid = entity_id(space, &eref.ty, episode_id, span_start);
-            kcrud::insert_entity(conn, &Entity {
-                id: eid.clone(),
-                space: space.into(),
-                ty: eref.ty.clone(),
-                canonical_key: None,
-                created_at: now,
-                merged_into: None,
-            })?;
+            kcrud::insert_entity(
+                conn,
+                &Entity {
+                    id: eid.clone(),
+                    space: space.into(),
+                    ty: eref.ty.clone(),
+                    canonical_key: None,
+                    created_at: now,
+                    merged_into: None,
+                },
+            )?;
             let kid = entity_key_id(&eid, &normalized, &eref.ty);
-            kcrud::insert_entity_key(conn, &EntityKey {
-                id: kid,
-                space: space.into(),
-                entity: eid.clone(),
-                ty: eref.ty.clone(),
-                normalized,
-                surface: eref.surface.clone(),
-                origin: KeyOrigin::UserDeclared,
-            })?;
+            kcrud::insert_entity_key(
+                conn,
+                &EntityKey {
+                    id: kid,
+                    space: space.into(),
+                    entity: eid.clone(),
+                    ty: eref.ty.clone(),
+                    normalized,
+                    surface: eref.surface.clone(),
+                    origin: KeyOrigin::UserDeclared,
+                },
+            )?;
             Ok((eid, method))
         }
         oxibrain_core::resolution::Decision::Candidate { existing, .. } => {
             // Create a new entity AND record a merge candidate.
             let eid = entity_id(space, &eref.ty, episode_id, span_start);
-            kcrud::insert_entity(conn, &Entity {
-                id: eid.clone(),
-                space: space.into(),
-                ty: eref.ty.clone(),
-                canonical_key: None,
-                created_at: now,
-                merged_into: None,
-            })?;
+            kcrud::insert_entity(
+                conn,
+                &Entity {
+                    id: eid.clone(),
+                    space: space.into(),
+                    ty: eref.ty.clone(),
+                    canonical_key: None,
+                    created_at: now,
+                    merged_into: None,
+                },
+            )?;
             let normalized = resolution::normalize(&eref.surface, &eref.ty);
             let kid = entity_key_id(&eid, &normalized, &eref.ty);
-            kcrud::insert_entity_key(conn, &EntityKey {
-                id: kid,
-                space: space.into(),
-                entity: eid.clone(),
-                ty: eref.ty.clone(),
-                normalized,
-                surface: eref.surface.clone(),
-                origin: KeyOrigin::UserDeclared,
-            })?;
+            kcrud::insert_entity_key(
+                conn,
+                &EntityKey {
+                    id: kid,
+                    space: space.into(),
+                    entity: eid.clone(),
+                    ty: eref.ty.clone(),
+                    normalized,
+                    surface: eref.surface.clone(),
+                    origin: KeyOrigin::UserDeclared,
+                },
+            )?;
             // Record merge candidate (not auto-merged).
             // For M1, we just create the entity; the merge candidate is visible
             // via entity_merges table queries. The new entity is returned.
@@ -176,6 +190,16 @@ fn resolve_or_create(
 }
 
 /// Convert a DeclObject to an Object, resolving entity refs.
+/// Result of resolving a declaration object: the Object plus the surface/method
+/// needed to capture the object mention (entity objects only).
+struct ResolvedObject {
+    object: Object,
+    /// (entity_id, resolution_method) for entity objects; None for literals.
+    entity: Option<(String, ResolutionMethod)>,
+    surface: String,
+    ty: String,
+}
+
 fn resolve_object(
     conn: &Connection,
     space: &str,
@@ -183,17 +207,32 @@ fn resolve_object(
     episode_id: &str,
     span_start: u32,
     now: Timestamp,
-) -> Result<(Object, Option<(String, ResolutionMethod)>, String, String), BrainError> {
-    // Returns (Object, Option<(entity_id, method)>, surface, entity_type)
+) -> Result<ResolvedObject, BrainError> {
     match obj {
         DeclObject::Entity { surface, ty } => {
-            let eref = EntityRef { surface: surface.clone(), ty: ty.clone() };
+            let eref = EntityRef {
+                surface: surface.clone(),
+                ty: ty.clone(),
+            };
             let (eid, method) = resolve_or_create(conn, space, &eref, episode_id, span_start, now)?;
-            Ok((Object::Entity(eid.clone()), Some((eid, method)), surface.clone(), ty.clone()))
+            Ok(ResolvedObject {
+                object: Object::Entity(eid.clone()),
+                entity: Some((eid, method)),
+                surface: surface.clone(),
+                ty: ty.clone(),
+            })
         }
-        DeclObject::Literal { literal_type, value } => {
+        DeclObject::Literal {
+            literal_type,
+            value,
+        } => {
             let tv = parse_literal(literal_type, value)?;
-            Ok((Object::Literal(tv), None, value.clone(), literal_type.clone()))
+            Ok(ResolvedObject {
+                object: Object::Literal(tv),
+                entity: None,
+                surface: value.clone(),
+                ty: literal_type.clone(),
+            })
         }
     }
 }
@@ -204,11 +243,15 @@ fn parse_literal(lt: &str, value: &str) -> Result<TypedValue, BrainError> {
         "date" => Ok(TypedValue::Date(value.into())),
         "datetime" => Ok(TypedValue::DateTime(value.into())),
         "number" => {
-            let n: f64 = value.parse().map_err(|e| BrainError::Invalid(format!("number: {e}")))?;
+            let n: f64 = value
+                .parse()
+                .map_err(|e| BrainError::Invalid(format!("number: {e}")))?;
             Ok(TypedValue::Number(n))
         }
         "bool" => {
-            let b: bool = value.parse().map_err(|e| BrainError::Invalid(format!("bool: {e}")))?;
+            let b: bool = value
+                .parse()
+                .map_err(|e| BrainError::Invalid(format!("bool: {e}")))?;
             Ok(TypedValue::Bool(b))
         }
         _ => Err(BrainError::Invalid(format!("unknown literal type: {lt}"))),
@@ -268,22 +311,20 @@ pub fn project_declaration(
             };
 
             // Resolve subject entity.
-            let (subj_id, subj_method) =
-                resolve_or_create(conn, space, subject, &ep_id, 0, now)?;
+            let (subj_id, subj_method) = resolve_or_create(conn, space, subject, &ep_id, 0, now)?;
 
             // Resolve object.
-            let (obj, obj_resolve, obj_surface, obj_ty) =
-                resolve_object(conn, space, object, &ep_id, 100, now)?;
+            let obj_resolved = resolve_object(conn, space, object, &ep_id, 100, now)?;
 
             // Create statement (idempotent).
             let subj_for_hash = &subj_id;
-            let stmt_id = statement_id(space, subj_for_hash, predicate, &obj);
+            let stmt_id = statement_id(space, subj_for_hash, predicate, &obj_resolved.object);
             let stmt = Statement {
                 id: stmt_id.clone(),
                 space: space.into(),
                 subject: subj_id.clone(),
                 predicate: predicate.clone(),
-                object: obj.clone(),
+                object: obj_resolved.object.clone(),
             };
             kcrud::insert_statement(conn, &stmt)?;
 
@@ -324,13 +365,13 @@ pub fn project_declaration(
             };
             kcrud::insert_mention(conn, &subj_mention)?;
 
-            if let Some((obj_entity_id, obj_method)) = obj_resolve {
+            if let Some((obj_entity_id, obj_method)) = obj_resolved.entity {
                 let obj_mention = Mention {
                     id: mention_id(&aid, "object", 100),
                     assertion: aid.clone(),
                     role: MentionRole::Object,
-                    surface: obj_surface,
-                    span: (100, 100 + obj_ty.len() as u32),
+                    surface: obj_resolved.surface,
+                    span: (100, 100 + obj_resolved.ty.len() as u32),
                     resolved_to: Some(obj_entity_id),
                     method: obj_method,
                 };
@@ -345,7 +386,8 @@ pub fn project_declaration(
             let beliefs = fold(&pred_def, &group, now);
 
             // Collect all statement IDs in the group for belief replacement.
-            let group_stmt_ids: Vec<String> = group.iter().map(|e| e.statement.id.clone()).collect();
+            let group_stmt_ids: Vec<String> =
+                group.iter().map(|e| e.statement.id.clone()).collect();
             kcrud::replace_beliefs(conn, &group_stmt_ids, &beliefs)?;
         }
         Declaration::Merge { loser, winner } => {
@@ -353,16 +395,19 @@ pub fn project_declaration(
             let (winner_id, _) = resolve_or_create(conn, space, winner, &ep_id, 200, now)?;
 
             let merge_id = oxibrain_core::id::entity_merge_id(&loser_id, &winner_id, &ep_id);
-            kcrud::insert_merge(conn, &oxibrain_core::EntityMerge {
-                id: merge_id,
-                loser: loser_id.clone(),
-                winner: winner_id.clone(),
-                decided_by: oxibrain_core::MergeDecision::User,
-                provenance: ep_id.clone(),
-                evidence: vec![],
-                decided_at: now,
-                undone_at: None,
-            })?;
+            kcrud::insert_merge(
+                conn,
+                &oxibrain_core::EntityMerge {
+                    id: merge_id,
+                    loser: loser_id.clone(),
+                    winner: winner_id.clone(),
+                    decided_by: oxibrain_core::MergeDecision::User,
+                    provenance: ep_id.clone(),
+                    evidence: vec![],
+                    decided_at: now,
+                    undone_at: None,
+                },
+            )?;
             kcrud::set_merged_into(conn, &loser_id, &winner_id)?;
         }
         Declaration::Retract {
@@ -373,8 +418,8 @@ pub fn project_declaration(
         } => {
             // Resolve the statement to retract.
             let (subj_id, _) = resolve_or_create(conn, space, subject, &ep_id, 0, now)?;
-            let (obj, _, _, _) = resolve_object(conn, space, object, &ep_id, 100, now)?;
-            let stmt_id = statement_id(space, &subj_id, predicate, &obj);
+            let obj_resolved = resolve_object(conn, space, object, &ep_id, 100, now)?;
+            let stmt_id = statement_id(space, &subj_id, predicate, &obj_resolved.object);
 
             // Set retracted_at on matching assertions.
             conn.execute(

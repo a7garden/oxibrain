@@ -423,6 +423,8 @@ dependencies = [
  "oxibrain-ports",
  "oxibrain-store",
  "proptest",
+ "rusqlite",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
