@@ -11,6 +11,8 @@ fn setup() -> (Connection, FakeClock) {
         .unwrap();
     conn.execute_batch(include_str!("../src/migrations/v3.sql"))
         .unwrap();
+    conn.execute_batch(include_str!("../src/migrations/v4.sql"))
+        .unwrap();
     oxibrain_store::registry::seed_core_v1(&conn).unwrap();
     conn.execute(
         "INSERT INTO spaces (id, name, created_at) VALUES ('s1', 'test', 0)",

@@ -1,0 +1,16 @@
+[package]
+name = "oxibrain-mcp"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxibrain.workspace = true
+oxibrain-core.workspace = true
+rmcp = { version = "0.12", features = ["server", "transport-io"] }
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true

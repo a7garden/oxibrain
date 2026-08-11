@@ -13,9 +13,7 @@ use std::collections::BTreeSet;
 // ---------------------------------------------------------------------------
 
 /// What a token holder may do. DESIGN §11.2.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// search, recall, get_entity, traverse, timeline, why
@@ -85,7 +83,6 @@ pub struct Scope {
     pub expires_at: Option<Timestamp>,
 }
 
-
 impl Scope {
     /// Check if a capability is granted for a space and not expired.
     pub fn permits(&self, cap: Capability, space: &str, now: Timestamp) -> bool {
@@ -133,14 +130,9 @@ pub struct TokenInfo {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RedactTarget {
     /// Redact a single episode and everything extracted from it.
-    Episode {
-        id: String,
-    },
+    Episode { id: String },
     /// Redact all assertions about an entity across all episodes.
-    Entity {
-        space: String,
-        entity_id: String,
-    },
+    Entity { space: String, entity_id: String },
     /// Redact assertions for a specific predicate on an entity.
     PredicateScoped {
         space: String,

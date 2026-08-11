@@ -43,5 +43,70 @@ pub enum Command {
         out: Option<PathBuf>,
     },
     /// Restore from a backup.
-    Restore { backup: PathBuf },
+    Restore {
+        backup: PathBuf,
+    },
+    /// Ask a question (hybrid query).
+    Ask {
+        question: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Show entity beliefs.
+    EntityShow {
+        id: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Timeline for an entity.
+    Timeline {
+        entity_id: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Provenance for a statement.
+    Why {
+        statement_id: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// List contradicted statements.
+    Contradictions {
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Reproject the store.
+    Reproject,
+    /// Redact (the only true delete).
+    Redact {
+        target: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Export to JSONL.
+    Export {
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Import from JSONL.
+    Import {
+        file: PathBuf,
+    },
+    /// Token management.
+    TokenIssue {
+        #[arg(long, default_value = "personal")]
+        space: String,
+        #[arg(long)]
+        caps: String,
+        #[arg(long)]
+        label: Option<String>,
+    },
+    TokenList,
+    TokenRevoke {
+        id: String,
+    },
 }

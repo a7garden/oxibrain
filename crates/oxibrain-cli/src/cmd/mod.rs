@@ -1,5 +1,15 @@
+pub mod ask;
 pub mod backup;
+pub mod contradictions;
 pub mod doctor;
+pub mod entity_show;
+pub mod export_cmd;
+pub mod import_cmd;
 pub mod ingest;
 pub mod init;
+pub mod redact;
+pub mod reproject;
 pub mod stats;
+pub mod timeline;
+pub mod token;
+pub mod why;

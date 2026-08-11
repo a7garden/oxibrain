@@ -5,11 +5,11 @@
 pub mod config;
 
 pub use config::BrainConfig;
-pub use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier};
 pub use oxibrain_core::security::{
     AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
     TokenInfo,
 };
+pub use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier};
 pub use oxibrain_ports::{
     BrainError, ClockPort, LlmPort, LlmRequest, LlmResponse, SystemClock, Timestamp,
 };
@@ -509,7 +509,11 @@ impl Brain {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer.submit(Box::new(move |conn| {
                 let res = oxibrain_store::security::issue_token(
-                    conn, &scope, &issued_by, label.as_deref(), now,
+                    conn,
+                    &scope,
+                    &issued_by,
+                    label.as_deref(),
+                    now,
                 )?;
                 let _ = tx.send(res);
                 Ok(())
@@ -568,7 +572,8 @@ impl Brain {
     pub async fn audit_log(&self, limit: Option<i64>) -> Result<Vec<AuditRow>, BrainError> {
         let h = self.handle.clone();
         tokio::task::spawn_blocking(move || {
-            h.readers.read(|conn| oxibrain_store::security::list_audit(conn, limit))
+            h.readers
+                .read(|conn| oxibrain_store::security::list_audit(conn, limit))
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
