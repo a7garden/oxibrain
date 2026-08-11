@@ -237,16 +237,18 @@ pub struct AuditRow {
 }
 
 /// Read all redaction targets from the `redactions` table, ordered by time.
-/// Used by reproject to replay redactions.
-pub fn list_redactions(conn: &Connection) -> Result<Vec<(String, String)>, BrainError> {
+/// Returns (target_json, reason, redacted_at). Used by reproject to replay
+/// redactions with the correct fold timestamp.
+pub fn list_redactions(conn: &Connection) -> Result<Vec<(String, String, Timestamp)>, BrainError> {
     let mut stmt = conn
-        .prepare("SELECT target_json, reason FROM redactions ORDER BY redacted_at ASC")
+        .prepare("SELECT target_json, reason, redacted_at FROM redactions ORDER BY redacted_at ASC")
         .map_err(sql_err)?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
+                Timestamp::from_millis(r.get::<_, i64>(2)?),
             ))
         })
         .map_err(sql_err)?;

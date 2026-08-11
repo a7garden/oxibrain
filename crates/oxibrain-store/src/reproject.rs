@@ -112,11 +112,11 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
     //      the incremental path. Episode-scoped redaction is already handled
     //      by the `redacted_at IS NULL` filters above.
     let redactions = crate::security::list_redactions(conn)?;
-    for (target_json, _reason) in &redactions {
+    for (target_json, _reason, redacted_at) in &redactions {
         if let Ok(target) =
             serde_json::from_str::<oxibrain_core::security::RedactTarget>(target_json)
         {
-            crate::redaction::apply_replay(conn, &target)?;
+            crate::redaction::apply_replay(conn, &target, *redacted_at)?;
         }
     }
 

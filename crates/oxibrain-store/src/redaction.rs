@@ -264,7 +264,9 @@ pub fn execute_redaction(
 /// Replay a redaction during reproject. Deletes the affected assertions and
 /// re-folds. Does NOT tombstone (content/extractions are already filtered by
 /// `redacted_at IS NULL` in the replay queries) or write audit (already done).
-pub fn apply_replay(conn: &Connection, target: &RedactTarget) -> Result<usize, BrainError> {
+/// `at` is the original redaction timestamp — used as the fold's reference
+/// point so assertions with `recorded_at <= at` are visible.
+pub fn apply_replay(conn: &Connection, target: &RedactTarget, at: Timestamp) -> Result<usize, BrainError> {
     let closure = resolve_closure(conn, target)?;
     if closure.assertions.is_empty() {
         return Ok(0);
@@ -282,9 +284,8 @@ pub fn apply_replay(conn: &Connection, target: &RedactTarget) -> Result<usize, B
         delete_in(conn, "DELETE FROM statements WHERE id IN", &closure.statements)?;
     }
 
-    // Re-fold affected groups.
-    let now = Timestamp::from_millis(0); // fold doesn't use `now` for computation
-    let refolded = refold_affected(conn, target, now)?;
+    // Re-fold affected groups using the original redaction timestamp.
+    let refolded = refold_affected(conn, target, at)?;
     Ok(refolded)
 }
 
@@ -626,5 +627,49 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM redactions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn reproject_after_episode_redaction_preserves_projection() {
+        // Redact an episode → reproject → the redacted episode is NOT replayed
+        // (redacted_at IS NULL filter), and no beliefs are recreated.
+        let conn = fresh_db();
+        let now = Timestamp::from_millis(1000);
+        let ep_id = declare_alice_works_for_acme(&conn, now);
+
+        // Before redaction: 1 assertion, 1 belief.
+        let assert_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assertions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(assert_before, 1);
+        let beliefs_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(beliefs_before, 1);
+
+        // Redact the episode.
+        let target = RedactTarget::Episode { id: ep_id };
+        execute_redaction(&conn, &target, "test", "tester", now).unwrap();
+
+        // After redaction: 0 assertions, 0 beliefs.
+        let assert_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assertions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(assert_after, 0);
+
+        // Reproject.
+        crate::reproject::reproject(&conn).unwrap();
+
+        // Reproject does NOT recreate the assertions (episode is redacted).
+        let assert_reproj: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assertions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(assert_reproj, 0);
+
+        // No beliefs either.
+        let beliefs_reproj: i64 = conn
+            .query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(beliefs_reproj, 0);
     }
 }
