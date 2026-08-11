@@ -7,8 +7,10 @@ use oxibrain_core::knowledge::Object;
 
 use oxibrain_core::retrieval::{
     DroppedItem, Query, QueryMode, RankedItem, RankingResult, SearchHit, SearchTarget,
+    TraversalEdge, TraversalNode, TraversalResult, TraversalSpec,
 };
 use oxibrain_core::{Belief, Statement};
+use oxibrain_index::adjacency::{AdjacencyGraph, BfsSpec};
 use oxibrain_index::rrf;
 use oxibrain_index::{KnnIndex, TfIdfModel, TfIdfVector};
 
@@ -372,4 +374,99 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
         total_found,
         query: q.clone(),
     })
+}
+
+/// Load the entity→entity adjacency graph for a space from the statements table.
+/// Only entity-typed objects produce edges; literal-valued statements are skipped.
+pub fn load_adjacency(conn: &Connection, space: &str) -> Result<AdjacencyGraph, BrainError> {
+    let mut graph = AdjacencyGraph::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT subject_id, object_entity, predicate, id
+             FROM statements
+             WHERE space_id = ?1 AND object_entity IS NOT NULL",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(sql_err)?;
+    for row in rows {
+        let (subj, obj, pred, id) = row.map_err(sql_err)?;
+        graph.add_edge(&subj, &obj, &pred, &id);
+    }
+    Ok(graph)
+}
+
+/// Bounded BFS traversal over the statement-derived adjacency graph.
+/// Honors the spec's `max_depth`, `max_nodes`, `direction`, and predicate filter.
+pub fn traverse(
+    conn: &Connection,
+    space: &str,
+    spec: &TraversalSpec,
+) -> Result<TraversalResult, BrainError> {
+    let graph = load_adjacency(conn, space)?;
+    let bfs_spec = BfsSpec {
+        start: spec.start.clone(),
+        max_depth: spec.max_depth,
+        max_nodes: spec.max_nodes,
+        direction: spec.direction,
+        predicate_filter: spec.predicates.clone(),
+    };
+    let bfs_result = graph.bfs(&bfs_spec);
+
+    let nodes: Vec<TraversalNode> = bfs_result
+        .nodes
+        .iter()
+        .map(|(entity, &depth)| TraversalNode {
+            entity: entity.clone(),
+            depth,
+            salience: 1.0, // M2: default salience; decay recalculates per space.
+        })
+        .collect();
+    let edges: Vec<TraversalEdge> = bfs_result
+        .edges
+        .into_iter()
+        .map(|(from, to, predicate, statement_id, depth)| TraversalEdge {
+            from,
+            to,
+            predicate,
+            statement_id,
+            depth,
+        })
+        .collect();
+
+    Ok(TraversalResult {
+        nodes,
+        edges,
+        truncated: bfs_result.truncated,
+    })
+}
+
+/// Look up a previously-resolved entity_id by surface form + type, returning
+/// `None` if not yet declared. Cheap point query used by clients that need to
+/// bootstrap a traversal start from a known surface.
+pub fn resolve_entity_id(
+    conn: &Connection,
+    space: &str,
+    ty: &str,
+    surface: &str,
+) -> Result<Option<String>, BrainError> {
+    match conn.query_row(
+        "SELECT entity_id FROM entity_keys
+         WHERE space_id = ?1 AND type_name = ?2 AND surface = ?3
+         LIMIT 1",
+        params![space, ty, surface],
+        |r| r.get::<_, String>(0),
+    ) {
+        Ok(id) => Ok(Some(id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(sql_err(e)),
+    }
 }

@@ -238,4 +238,39 @@ impl Brain {
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
+    /// Bounded subgraph traversal over a space's statement graph.
+    pub async fn traverse(
+        &self,
+        space: &str,
+        spec: oxibrain_core::retrieval::TraversalSpec,
+    ) -> Result<oxibrain_core::retrieval::TraversalResult, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| query::traverse(conn, &space, &spec))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Look up the entity_id for a surface form + type within a space. Returns
+    /// `None` if the entity hasn't been declared yet.
+    pub async fn resolve_entity_id(
+        &self,
+        space: &str,
+        ty: &str,
+        surface: &str,
+    ) -> Result<Option<String>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let ty = ty.to_string();
+        let surface = surface.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| query::resolve_entity_id(conn, &space, &ty, &surface))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
 }
