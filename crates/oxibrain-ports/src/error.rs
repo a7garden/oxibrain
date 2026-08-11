@@ -24,6 +24,12 @@ pub enum BrainError {
     Extraction(String),
     #[error("budget exceeded: {0}")]
     Budget(String),
+    #[error("insufficient scope: requires {required}")]
+    Scope { required: String },
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
 }
 
 impl BrainError {

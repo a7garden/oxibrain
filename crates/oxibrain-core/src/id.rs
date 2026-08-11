@@ -146,6 +146,15 @@ pub fn entity_merge_id(loser: &str, winner: &str, provenance: &str) -> Id {
     ]))
 }
 
+/// Token id = blake3(token_hash, issued_at). Operational state (random nonce
+/// in the hash), not part of the reprojection contract.
+pub fn token_id(token_hash: &str, issued_at: Timestamp) -> Id {
+    hex(derive(&[
+        ("token_hash", token_hash),
+        ("issued_at", &issued_at.millis().to_string()),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

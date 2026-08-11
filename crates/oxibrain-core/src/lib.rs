@@ -39,6 +39,11 @@ pub mod eval;
 pub mod extraction;
 pub mod lifecycle;
 pub mod retrieval;
+pub mod security;
+pub use security::{
+    AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
+    TokenInfo,
+};
 
 pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens};
 pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};
