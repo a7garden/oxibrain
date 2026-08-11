@@ -318,4 +318,97 @@ async fn rebuild_communities_separates_clusters() {
         );
     }
 }
+#[tokio::test]
+async fn apply_decay_updates_salience() {
+    let dir = tempdir().expect("tempdir");
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
+        1_700_000_000_000,
+    )));
+    let brain = Brain::with_clock(
+        oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
+        clock.clone(),
+    )
+    .await
+    .expect("open");
+    let space = brain.ensure_space("test").await.expect("space");
+
+    // Declare an entity so something exists in the entities table.
+    brain
+        .declare(
+            &space,
+            decl_add("Alice", "Person", "employed_by", "Acme", "Organization"),
+        )
+        .await
+        .expect("declare");
+
+    // Rebuild indexes so last_activity gets populated.
+    brain
+        .rebuild_indexes(&space)
+        .await
+        .expect("rebuild_indexes");
+
+    // Advance several days, then apply decay.
+    clock.advance(10 * 86_400_000);
+    let updated = brain.apply_decay(&space).await.expect("apply_decay");
+    assert!(updated >= 1, "should update at least one entity, got {updated}");
+
+    // Verify decay applied: open the DB directly and read salience.
+    let db_path = dir.path().join("brain.db");
+    let conn = rusqlite::Connection::open(&db_path).expect("open db");
+    let salience: f64 = conn
+        .query_row(
+            "SELECT salience FROM entities WHERE space_id = ?1 LIMIT 1",
+            rusqlite::params![&space],
+            |r| r.get(0),
+        )
+        .expect("read salience");
+    // 10 days of decay with lambda=0.01 → e^(-0.1) ≈ 0.904. Floor is 0.05.
+    assert!(
+        (0.05..=1.0).contains(&salience),
+        "salience should be in [floor, 1.0], got {salience}"
+    );
+    // Specifically, it should be < 1.0 after 10 days.
+    assert!(
+        salience < 1.0,
+        "salience should have decreased after 10 days, got {salience}"
+    );
+}
+
+#[tokio::test]
+async fn compact_succeeds_and_keeps_content_readable() {
+    let dir = tempdir().expect("tempdir");
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(
+        1_700_000_000_000,
+    )));
+    let brain = Brain::with_clock(
+        oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
+        clock.clone(),
+    )
+    .await
+    .expect("open");
+    let space = brain.ensure_space("test").await.expect("space");
+
+    // Ingest a note.
+    let note_text = "this is a long body that should be compacted away".to_string();
+    let ep_id = brain
+        .ingest_note(
+            &space,
+            "note.md",
+            note_text.clone(),
+            Timestamp::from_millis(1_700_000_000_000),
+        )
+        .await
+        .expect("ingest_note");
+
+    // Advance well past the 90-day compaction threshold.
+    clock.advance(200 * 86_400_000);
+
+    let compacted = brain.compact(&space).await.expect("compact");
+    assert!(compacted >= 1, "should compact at least one episode, got {compacted}");
+
+    // The get_episode call should still return the content transparently.
+    let got = brain.get_episode(&ep_id).await.expect("get_episode").expect("some");
+    assert_eq!(got.content, note_text, "content should be transparently restored");
+}
+
 

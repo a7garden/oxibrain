@@ -359,4 +359,43 @@ impl Brain {
     }
 
 
+    pub async fn apply_decay(&self, space: &str) -> Result<usize, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let now = self.clock.now();
+        let config = oxibrain_core::lifecycle::DecayConfig::default();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                let count = oxibrain_store::lifecycle::apply_decay(conn, &space, now, &config)?;
+                let _ = tx.send(count);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("apply_decay channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    pub async fn compact(&self, space: &str) -> Result<usize, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let now = self.clock.now();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer.submit(Box::new(move |conn| {
+                let count =
+                    oxibrain_store::lifecycle::compact_episodes(conn, &space, now, 90)?;
+                let _ = tx.send(count);
+                Ok(())
+            }))?;
+            h.writer.flush()?;
+            rx.recv().map_err(|_| BrainError::Storage("compact channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
 }

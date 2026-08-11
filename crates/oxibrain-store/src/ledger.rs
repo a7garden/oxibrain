@@ -107,7 +107,7 @@ pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainEr
 pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, BrainError> {
     let row = conn.query_row(
         "SELECT id, space_id, seq, content_hash, content, source_kind, source_ref,
-                 trust, kind, occurred_at, ingested_at, redacted_at
+                 trust, kind, occurred_at, ingested_at, redacted_at, content_compacted
           FROM episodes WHERE id = ?1",
         params![id],
         |r| {
@@ -116,12 +116,27 @@ pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, Brain
             if ch_blob.len() == 32 {
                 ch.copy_from_slice(&ch_blob);
             }
+            let content: String = r.get(4)?;
+            // Transparent decompression: if `content` is empty and
+            // `content_compacted` is non-null, copy from the BLOB into
+            // `content`. M2 stores raw bytes in the BLOB (no compression yet),
+            // so this is a lossy UTF-8 conversion check: only valid UTF-8 is
+            // restored; otherwise the caller sees the empty content.
+            let content = if content.is_empty() {
+                let compacted: Option<Vec<u8>> = r.get(12)?;
+                match compacted {
+                    Some(bytes) => String::from_utf8(bytes).unwrap_or_default(),
+                    None => content,
+                }
+            } else {
+                content
+            };
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, i64>(2)? as u64,
                 ch,
-                r.get::<_, String>(4)?,
+                content,
                 r.get::<_, String>(5)?,
                 r.get::<_, Option<String>>(6)?,
                 r.get::<_, String>(7)?,

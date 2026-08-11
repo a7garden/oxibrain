@@ -18,6 +18,7 @@ pub mod schema;
 pub mod writer;
 pub mod communities;
 pub mod timeline;
+pub mod lifecycle;
 pub mod explain;
 
 pub use backup::{BackupManifest, online_backup};
