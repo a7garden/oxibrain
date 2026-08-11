@@ -1248,7 +1248,8 @@ use crate::knowledge::{
     Assertion, Belief, BeliefStatus, Polarity, Statement, StatementId, Support,
 };
 use crate::registry::{Cardinality, Invalidation, PredicateDef, Temporality};
-use oxibrain_ports::{Timestamp, TrustTier};
+use crate::types::TrustTier;
+use oxibrain_ports::Timestamp;
 
 /// A statement and its assertions — input to the fold for one (subject, predicate) group.
 #[derive(Debug, Clone)]
