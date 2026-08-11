@@ -22,7 +22,14 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.pragma_update(None, "user_version", 1i64)
             .map_err(sql_err)?;
     }
-    // future: current < 2 => run v2.sql, etc.
+    if current < 2 {
+        let sql = include_str!("migrations/v2.sql");
+        conn.execute_batch(sql).map_err(sql_err)?;
+        // Seed core/v1 predicates (data migration, not schema).
+        crate::registry::seed_core_v1(conn)?;
+        conn.pragma_update(None, "user_version", 2i64)
+            .map_err(sql_err)?;
+    }
     let now: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sql_err)?;
@@ -44,6 +51,11 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get(0))
             .expect("query");
         assert_eq!(count, 0);
+        // predicates were seeded
+        let pred_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM predicates", [], |r| r.get(0))
+            .expect("query");
+        assert!(pred_count > 0, "core/v1 predicates should be seeded");
     }
 
     #[test]
@@ -56,7 +68,7 @@ mod tests {
             err,
             BrainError::Migration {
                 found: 999,
-                expected: 1
+                expected: 2
             }
         ));
     }
