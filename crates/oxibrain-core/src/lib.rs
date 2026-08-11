@@ -10,6 +10,7 @@ pub mod interval;
 pub use interval::{clip, merge_overlapping, overlaps, Interval};
 
 pub mod knowledge;
+pub mod registry;
 
 pub use canonical::{canonical_bytes, canonical_json_value, canonicalize_value};
 pub use id::{
@@ -21,4 +22,11 @@ pub use knowledge::{
     MentionRole, MergeDecision, Object, Polarity, ResolutionMethod, Statement, Support,
     TypedValue, claim_repr, object_repr,
 };
+
+pub use registry::{
+    core_v1, Cardinality, Invalidation, LiteralType, ObjectKind, PredicateDef, Temporality,
+    CORE_V1_MAJOR, CORE_V1_MINOR,
+};
+pub mod resolution;
+pub use resolution::{normalize, resolve, score, Decision, ResolutionConfig};
 
