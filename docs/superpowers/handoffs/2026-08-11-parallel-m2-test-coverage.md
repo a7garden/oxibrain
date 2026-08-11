@@ -110,8 +110,34 @@ operations. M3d should add benchmarks for the remaining 4 (`get_entity`,
 
 ## Test Count
 
-Workspace total: **103 tests** (was 78 at M2 exit + M3 additions + this session's 20).
-0 failures. Clippy `-D warnings` clean. `cargo fmt --check` clean.
+Workspace total: **128+ tests** (78 at M2 exit + M3 additions + this session's 22).
+0 failures (excluding other session's in-progress `fast_eval_suite`).
+Clippy `-D warnings` clean.
+
+---
+
+## 5. Bug Found by Property Test: Supersede Boundary
+
+**File:** `crates/oxibrain-core/src/fold.rs:267`
+**Commit:** `ed9cef3`
+
+The `supersede_no_overlapping_active` property test found a boundary-condition
+bug in `fold_supersede`. When one interval ends exactly where another begins
+(`valid_to == new_start`), the clipping condition used strict `>` instead of `>=`.
+This left two Active beliefs overlapping at a single point, violating the
+Functional invariant (at most one value at any point in time).
+
+**Counterexample:** `st_a [100, 200]` and `st_b [200, 300]` — both were Active,
+overlapping at point 200.
+
+**Fix:** `>` → `>=` at `fold.rs:267`. The previous belief is now correctly clipped
+to `[valid_from, iv.start - 1]` and marked Superseded.
+
+**Regression test:** `supersede_boundary_no_overlap_at_shared_endpoint` in
+`fold_property.rs`.
+
+This validates the AGENTS.md requirement for property tests — the bug was
+invisible to all 8 existing example-based tests.
 
 ---
 
