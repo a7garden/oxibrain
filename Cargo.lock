@@ -459,6 +459,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxibrain-index"
+version = "0.1.0"
+dependencies = [
+ "oxibrain-core",
+ "oxibrain-ports",
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "oxibrain-ports"
 version = "0.1.0"
 dependencies = [
@@ -477,6 +487,7 @@ dependencies = [
  "fs2",
  "hex",
  "oxibrain-core",
+ "oxibrain-index",
  "oxibrain-ports",
  "proptest",
  "rusqlite",

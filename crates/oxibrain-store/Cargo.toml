@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 oxibrain-ports.workspace = true
 oxibrain-core.workspace = true
+oxibrain-index.workspace = true
 rusqlite.workspace = true
 blake3.workspace = true
 hex.workspace = true

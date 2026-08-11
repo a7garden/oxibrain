@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/oxibrain-ports",
     "crates/oxibrain-core",
+    "crates/oxibrain-index",
     "crates/oxibrain-store",
     "crates/oxibrain",
     "crates/oxibrain-cli",
@@ -17,6 +18,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 oxibrain = { path = "crates/oxibrain", version = "0.1.0" }
 oxibrain-core = { path = "crates/oxibrain-core", version = "0.1.0" }
+oxibrain-index = { path = "crates/oxibrain-index", version = "0.1.0" }
 oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.1.0" }
 oxibrain-store = { path = "crates/oxibrain-store", version = "0.1.0" }
 blake3 = "1.5"
@@ -36,6 +38,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 thiserror = "1"
 anyhow = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [profile.release]
 lto = "thin"

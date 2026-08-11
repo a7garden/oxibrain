@@ -32,3 +32,17 @@ pub mod resolution;
 
 pub mod fold;
 pub use fold::{fold, StatementEntry};
+
+pub mod retrieval;
+pub mod lifecycle;
+pub mod context;
+
+pub use retrieval::{
+    Direction, DropReason, DroppedItem, PredicateFilter, Query, QueryMode,
+    RankedItem, RankingResult, SearchHit, SearchTarget, Strategy, TraversalEdge,
+    TraversalNode, TraversalResult, TraversalSpec,
+};
+pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};
+pub use context::{
+    ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens,
+};
