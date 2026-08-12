@@ -15,6 +15,7 @@ oxibrain-core.workspace = true
 oxibrain-mcp.workspace = true
 oxibrain-llm-http.workspace = true
 oxibrain-ports.workspace = true
+oxibrain-connectors.workspace = true
 clap = { workspace = true, features = ["env"] }
 tokio.workspace = true
 tracing.workspace = true

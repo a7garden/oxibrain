@@ -90,6 +90,14 @@ pub enum Command {
     },
     /// Import from JSONL.
     Import { file: PathBuf },
+    /// Import from an oxios-memory SQLite database (DESIGN §16.3).
+    ImportOxios {
+        /// Path to the oxios-memory `memory.db` file.
+        db: PathBuf,
+        /// Target space (default: personal).
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
     /// Token management (DESIGN §12.4: `token issue|list|revoke`).
     Token {
         #[command(subcommand)]

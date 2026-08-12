@@ -7,6 +7,7 @@ pub mod eval;
 pub mod export_cmd;
 pub mod extract;
 pub mod import_cmd;
+pub mod import_oxios;
 pub mod ingest;
 pub mod init;
 pub mod llm;

@@ -904,6 +904,7 @@ dependencies = [
  "anyhow",
  "clap",
  "oxibrain",
+ "oxibrain-connectors",
  "oxibrain-core",
  "oxibrain-llm-http",
  "oxibrain-mcp",
@@ -927,6 +928,19 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "oxibrain-connectors"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "walkdir",
 ]
 
 [[package]]

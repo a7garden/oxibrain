@@ -57,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         } => cmd::redact::run(&dir, &target, &space, dry_run, &reason).await,
         Command::Export { out } => cmd::export_cmd::run(&dir, out).await,
         Command::Import { file } => cmd::import_cmd::run(&dir, &file).await,
+        Command::ImportOxios { db, space } => cmd::import_oxios::run(&dir, &db, &space).await,
         Command::Token { command } => match command {
             cli::TokenCmd::Issue { space, caps, label } => {
                 cmd::token::run_issue(&dir, &space, &caps, label.as_deref()).await

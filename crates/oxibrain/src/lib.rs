@@ -2,6 +2,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+mod compat;
 pub mod config;
 
 pub use config::BrainConfig;

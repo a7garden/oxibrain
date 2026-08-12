@@ -10,6 +10,7 @@ members = [
     "crates/oxibrain-llm-http",
     "crates/oxibrain-mcp",
     "crates/oxibrain-client",
+    "crates/oxibrain-connectors",
 ]
 
 [workspace.package]
@@ -26,6 +27,7 @@ oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.1.0" }
 oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.1.0" }
 oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.1.0" }
 oxibrain-client = { path = "crates/oxibrain-client", version = "0.1.0" }
+oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.1.0" }
 oxibrain-store = { path = "crates/oxibrain-store", version = "0.1.0" }
 blake3 = "1.5"
 hex = "0.4"
