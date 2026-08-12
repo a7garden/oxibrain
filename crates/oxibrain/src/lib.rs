@@ -279,6 +279,39 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
+
+    /// List entities in a space (excluding merged-away), up to `limit`.
+    /// Used by the `space://` resource.
+    pub async fn list_entities(
+        &self,
+        space: &str,
+        limit: usize,
+    ) -> Result<Vec<oxibrain_core::Entity>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::knowledge::list_entities(conn, &space, limit))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// List merge records in a space, most recent first.
+    /// Used by the `review_merges` MCP tool.
+    pub async fn list_merges(
+        &self,
+        space: &str,
+    ) -> Result<Vec<oxibrain_core::EntityMerge>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::knowledge::list_merges(conn, &space))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
     pub async fn timeline(
         &self,
         space: &str,

@@ -9,9 +9,13 @@ use crate::protocol::{
     INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, Message, UNAUTHORIZED, error, success,
     text_result, tool_error,
 };
-use oxibrain::{Brain, BrainConfig, Capability, Declaration, Scope};
-use oxibrain_core::retrieval::{Query, QueryMode};
-use oxibrain_ports::{ClockPort, SystemClock};
+use oxibrain::{
+    Brain, BrainConfig, Capability, DeclObject, Declaration, EntityRef, RedactTarget, Scope,
+};
+use oxibrain_core::retrieval::{
+    Direction, PredicateFilter, Query, QueryMode, Strategy, TraversalSpec,
+};
+use oxibrain_ports::{ClockPort, SystemClock, Timestamp};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::io::{
@@ -82,9 +86,11 @@ impl BrainServer {
     /// `None` for unknown tools — dispatch then returns method-not-found.
     fn required_capability(tool: &str) -> Option<Capability> {
         match tool {
-            "search" | "recall" | "get_entity" | "why" | "contradictions" => Some(Capability::Read),
+            "search" | "recall" | "get_entity" | "why" | "contradictions" | "traverse"
+            | "timeline" | "review_merges" => Some(Capability::Read),
             "ingest" => Some(Capability::Ingest),
-            "declare" => Some(Capability::Write),
+            "declare" | "remember" | "retract" | "merge_entities" => Some(Capability::Write),
+            "redact" => Some(Capability::Redact),
             _ => None,
         }
     }
@@ -150,6 +156,16 @@ impl BrainServer {
             "notifications/initialized" | "initialized" => None,
             "ping" => msg.id.map(|id| success(id, json!({}))),
             "tools/list" => msg.id.map(|id| success(id, tool_list())),
+            "resources/list" => msg
+                .id
+                .map(|id| success(id, self.resources_list(msg.params.as_ref()))),
+            "resources/read" => match msg.id {
+                Some(id) => match self.resources_read(msg.params.as_ref()).await {
+                    Ok(v) => Some(success(id, v)),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
             "tools/call" => match msg.id {
                 Some(id) => match self.call_tool(msg.params.as_ref(), session).await {
                     Ok(v) => Some(success(id, v)),
@@ -177,7 +193,10 @@ impl BrainServer {
         };
         json!({
             "protocolVersion": version,
-            "capabilities": { "tools": { "listChanged": false } },
+            "capabilities": {
+                "tools": { "listChanged": false },
+                "resources": { "listChanged": false, "subscribe": false, "read": true }
+            },
             "serverInfo": { "name": "oxibrain", "version": env!("CARGO_PKG_VERSION") }
         })
     }
@@ -198,10 +217,17 @@ impl BrainServer {
             "search" => self.tool_search(&args).await,
             "recall" => self.tool_recall(&args).await,
             "get_entity" => self.tool_get_entity(&args).await,
-            "ingest" => self.tool_ingest(&args, session).await,
-            "declare" => self.tool_declare(&args).await,
+            "traverse" => self.tool_traverse(&args).await,
+            "timeline" => self.tool_timeline(&args).await,
             "why" => self.tool_why(&args).await,
             "contradictions" => self.tool_contradictions(&args).await,
+            "review_merges" => self.tool_review_merges(&args).await,
+            "ingest" => self.tool_ingest(&args, session).await,
+            "remember" => self.tool_remember(&args, session).await,
+            "declare" => self.tool_declare(&args).await,
+            "retract" => self.tool_retract(&args).await,
+            "merge_entities" => self.tool_merge_entities(&args).await,
+            "redact" => self.tool_redact(&args).await,
             other => return Err((METHOD_NOT_FOUND, format!("unknown tool: {other}"))),
         };
         match outcome {
@@ -365,6 +391,341 @@ impl BrainServer {
             .map_err(ToolErr::run)?;
         to_json(&stmts)
     }
+
+    // ── Read tools: traverse, timeline, review_merges ────────────────────
+
+    async fn tool_traverse(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let start = args
+            .get("start")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolErr::Params("missing required argument 'start'".into()))?;
+        let start_ids: Vec<String> = start
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        if start_ids.is_empty() {
+            return Err(ToolErr::Params(
+                "'start' must contain at least one entity ID".into(),
+            ));
+        }
+        let max_depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
+        let max_nodes = args
+            .get("max_nodes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(256) as u32;
+        let direction = match str_arg_or(args, "direction", "both").as_str() {
+            "out" => Direction::Out,
+            "in" => Direction::In,
+            _ => Direction::Both,
+        };
+        let spec = TraversalSpec {
+            start: start_ids,
+            max_depth,
+            max_nodes,
+            predicates: PredicateFilter::AllowAll,
+            direction,
+            valid_at: None,
+            min_confidence: 0.0,
+            strategy: Strategy::Bfs,
+        };
+        let result = self
+            .brain
+            .traverse(&space_id, spec)
+            .await
+            .map_err(ToolErr::run)?;
+        to_json(&result)
+    }
+
+    async fn tool_timeline(&self, args: &Value) -> Result<String, ToolErr> {
+        let entity_id = str_arg(args, "entity_id")?;
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let from = args.get("from").and_then(|v| v.as_i64()).map(Timestamp);
+        let to = args.get("to").and_then(|v| v.as_i64()).map(Timestamp);
+        let entries = self
+            .brain
+            .timeline(&space_id, entity_id, from, to)
+            .await
+            .map_err(ToolErr::run)?;
+        to_json(&entries)
+    }
+
+    async fn tool_review_merges(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let merges = self
+            .brain
+            .list_merges(&space_id)
+            .await
+            .map_err(ToolErr::run)?;
+        to_json(&merges)
+    }
+
+    // ── Write tools: remember, retract, merge_entities ───────────────────
+
+    async fn tool_remember(
+        &self,
+        args: &Value,
+        session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
+    ) -> Result<String, ToolErr> {
+        let content = str_arg(args, "content")?;
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let path = str_arg_or(args, "source_path", "remember");
+        let now = SystemClock.now();
+        let id = self
+            .brain
+            .ingest_note(&space_id, &path, content.to_string(), now)
+            .await
+            .map_err(ToolErr::run)?;
+        // remember always extracts synchronously (DESIGN §12.2).
+        self.try_sample_extract(&space_id, &id, session).await
+    }
+
+    async fn tool_retract(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let subject: EntityRef =
+            serde_json::from_value(args.get("subject").cloned().unwrap_or_default())
+                .map_err(|e| ToolErr::Params(format!("parse subject: {e}")))?;
+        let predicate = str_arg(args, "predicate")?;
+        let object: DeclObject =
+            serde_json::from_value(args.get("object").cloned().unwrap_or_default())
+                .map_err(|e| ToolErr::Params(format!("parse object: {e}")))?;
+        let episode = str_arg(args, "episode")?;
+        let decl = Declaration::Retract {
+            subject,
+            predicate: predicate.to_string(),
+            object,
+            episode: episode.to_string(),
+        };
+        let id = self
+            .brain
+            .declare(&space_id, decl)
+            .await
+            .map_err(ToolErr::run)?;
+        Ok(format!("Retracted as episode: {id}"))
+    }
+
+    async fn tool_merge_entities(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let loser: EntityRef =
+            serde_json::from_value(args.get("loser").cloned().unwrap_or_default())
+                .map_err(|e| ToolErr::Params(format!("parse loser: {e}")))?;
+        let winner: EntityRef =
+            serde_json::from_value(args.get("winner").cloned().unwrap_or_default())
+                .map_err(|e| ToolErr::Params(format!("parse winner: {e}")))?;
+        let decl = Declaration::Merge { loser, winner };
+        let id = self
+            .brain
+            .declare(&space_id, decl)
+            .await
+            .map_err(ToolErr::run)?;
+        Ok(format!("Merged as episode: {id}"))
+    }
+
+    // ── Redact tool ──────────────────────────────────────────────────────
+
+    async fn tool_redact(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let kind = str_arg(args, "target_kind")?;
+        let target_id = str_arg(args, "target_id")?;
+        let reason = str_arg_or(args, "reason", "mcp redact");
+        let dry_run = args
+            .get("dry_run")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let target = match kind {
+            "episode" => RedactTarget::Episode {
+                id: target_id.to_string(),
+            },
+            "entity" => RedactTarget::Entity {
+                space: space_id,
+                entity_id: target_id.to_string(),
+            },
+            "predicate" => {
+                let (entity_id, predicate) = target_id.split_once('/').ok_or_else(|| {
+                    ToolErr::Params("predicate target_id must be 'entity_id/predicate'".into())
+                })?;
+                RedactTarget::PredicateScoped {
+                    space: space_id,
+                    entity_id: entity_id.to_string(),
+                    predicate: predicate.to_string(),
+                }
+            }
+            other => {
+                return Err(ToolErr::Params(format!(
+                    "unknown target_kind '{other}' (expected episode|entity|predicate)"
+                )));
+            }
+        };
+        if dry_run {
+            let closure = self
+                .brain
+                .redact_dry_run(&target)
+                .await
+                .map_err(ToolErr::run)?;
+            to_json(&closure)
+        } else {
+            let result = self
+                .brain
+                .redact(&target, &reason, "mcp")
+                .await
+                .map_err(ToolErr::run)?;
+            to_json(&result)
+        }
+    }
+
+    // ── Resources (DESIGN §12.2) ─────────────────────────────────────────
+
+    fn resources_list(&self, _params: Option<&Value>) -> Value {
+        json!({
+            "resources": [{
+                "uri": "space://personal",
+                "name": "Space: personal",
+                "description": "Space overview: entity count, episode count, contradictions, recent entities.",
+                "mimeType": "application/json"
+            }],
+            "resourceTemplates": [{
+                "uriTemplate": "space://{name}",
+                "name": "Space by name",
+                "description": "Overview of any space by name.",
+                "mimeType": "application/json"
+            }, {
+                "uriTemplate": "entity://{id}",
+                "name": "Entity by ID",
+                "description": "An entity's current beliefs. Optional ?space=name.",
+                "mimeType": "application/json"
+            }, {
+                "uriTemplate": "episode://{id}",
+                "name": "Episode by ID",
+                "description": "Full episode record. Optional ?space=name.",
+                "mimeType": "application/json"
+            }, {
+                "uriTemplate": "graph://{entity}?depth=n",
+                "name": "Graph around entity",
+                "description": "Bounded subgraph. Optional &space=name &direction=out|in|both.",
+                "mimeType": "application/json"
+            }]
+        })
+    }
+
+    async fn resources_read(&self, params: Option<&Value>) -> Result<Value, (i64, String)> {
+        let p = params.ok_or((INVALID_PARAMS, "missing 'params'".into()))?;
+        let uri = p
+            .get("uri")
+            .and_then(|v| v.as_str())
+            .ok_or((INVALID_PARAMS, "missing 'uri'".into()))?;
+        let (scheme, rest) = uri
+            .split_once("://")
+            .ok_or((INVALID_PARAMS, format!("invalid URI: {uri}")))?;
+        let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let qp: std::collections::HashMap<&str, &str> = query
+            .split('&')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.split_once('='))
+            .collect();
+        // For space:// URIs the path IS the space name. For entity/episode/graph
+        // URIs, the space comes from the ?space= query param (default: personal).
+        let space_name = if scheme == "space" {
+            path
+        } else {
+            qp.get("space").copied().unwrap_or("personal")
+        };
+        let space_id = self
+            .brain
+            .ensure_space(space_name)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, format!("ensure_space: {e}")))?;
+
+        let text = match scheme {
+            "space" => {
+                let entities = self
+                    .brain
+                    .list_entities(&space_id, 100)
+                    .await
+                    .map_err(|e| (INTERNAL_ERROR, format!("list_entities: {e}")))?;
+                let episode_count = self
+                    .brain
+                    .episode_count()
+                    .await
+                    .map_err(|e| (INTERNAL_ERROR, format!("episode_count: {e}")))?;
+                let contradictions = self
+                    .brain
+                    .contradictions(&space_id)
+                    .await
+                    .map_err(|e| (INTERNAL_ERROR, format!("contradictions: {e}")))?;
+                let summary = json!({
+                    "space": path,
+                    "space_id": space_id,
+                    "entity_count": entities.len(),
+                    "episode_count": episode_count,
+                    "contradiction_count": contradictions.len(),
+                    "recent_entities": entities.iter().take(20).map(|e| json!({
+                        "id": e.id, "type": e.ty, "canonical_key": e.canonical_key
+                    })).collect::<Vec<_>>()
+                });
+                serde_json::to_string_pretty(&summary).unwrap_or_default()
+            }
+            "entity" => {
+                let entity_id = path.trim_start_matches('/');
+                let beliefs = self
+                    .brain
+                    .beliefs(&space_id, entity_id)
+                    .await
+                    .map_err(|e| (INTERNAL_ERROR, format!("beliefs: {e}")))?;
+                serde_json::to_string_pretty(&beliefs).unwrap_or_default()
+            }
+            "episode" => {
+                let episode_id = path.trim_start_matches('/');
+                let episode = self
+                    .brain
+                    .get_episode(episode_id)
+                    .await
+                    .map_err(|e| (INTERNAL_ERROR, format!("get_episode: {e}")))?;
+                match episode {
+                    Some(ep) => serde_json::to_string_pretty(&ep).unwrap_or_default(),
+                    None => {
+                        return Err((INVALID_PARAMS, format!("episode not found: {episode_id}")));
+                    }
+                }
+            }
+            "graph" => {
+                let entity_id = path.trim_start_matches('/');
+                let depth = qp
+                    .get("depth")
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .unwrap_or(2);
+                let direction = match qp.get("direction").copied() {
+                    Some("out") => Direction::Out,
+                    Some("in") => Direction::In,
+                    _ => Direction::Both,
+                };
+                let spec = TraversalSpec {
+                    start: vec![entity_id.to_string()],
+                    max_depth: depth,
+                    max_nodes: 256,
+                    predicates: PredicateFilter::AllowAll,
+                    direction,
+                    valid_at: None,
+                    min_confidence: 0.0,
+                    strategy: Strategy::Bfs,
+                };
+                let result = self
+                    .brain
+                    .traverse(&space_id, spec)
+                    .await
+                    .map_err(|e| (INTERNAL_ERROR, format!("traverse: {e}")))?;
+                serde_json::to_string_pretty(&result).unwrap_or_default()
+            }
+            other => {
+                return Err((
+                    METHOD_NOT_FOUND,
+                    format!("unknown resource scheme: {other}"),
+                ));
+            }
+        };
+        Ok(json!({
+            "contents": [{ "uri": uri, "mimeType": "application/json", "text": text }]
+        }))
+    }
 }
 
 // ── Argument helpers ───────────────────────────────────────────────────────
@@ -498,7 +859,88 @@ fn tool_list() -> Value {
                     "properties": {
                         "space": { "type": "string", "description": "Space name (default: personal)." }
                     }
-                }))
+                })),
+            tool("traverse",
+                "Bounded subgraph traversal from a set of start entities. Returns nodes and edges within the depth/node budget. Useful for multi-hop recall (ToG driver).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "start": { "type": "array", "items": { "type": "string" }, "description": "Entity IDs to start from (at least one required)." },
+                        "space": { "type": "string", "description": "Space name (default: personal)." },
+                        "depth": { "type": "integer", "minimum": 1, "description": "Max traversal depth (default: 3)." },
+                        "max_nodes": { "type": "integer", "minimum": 1, "description": "Max nodes to return (default: 256)." },
+                        "direction": { "type": "string", "enum": ["out","in","both"], "description": "Edge direction (default: both)." }
+                    },
+                    "required": ["start"]
+                })),
+            tool("timeline",
+                "Belief intervals for an entity over a time range. Returns statements with validity windows, status, and recording timestamps.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "entity_id": { "type": "string", "description": "The entity's content-derived ID." },
+                        "space": { "type": "string", "description": "Space name (default: personal)." },
+                        "from": { "type": "integer", "description": "Start of range in Unix milliseconds (optional)." },
+                        "to": { "type": "integer", "description": "End of range in Unix milliseconds (optional)." }
+                    },
+                    "required": ["entity_id"]
+                })),
+            tool("review_merges",
+                "List entity merge records in a space — which entities were merged, by whom (rule/user/import), and when.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                    }
+                })),
+            tool("remember",
+                "One-shot ingest + sync extraction for short user facts. Ingests text as a Primary episode and immediately extracts claims via client sampling. Requires the Sample capability on authenticated sessions.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "content": { "type": "string", "description": "The fact or note to remember." },
+                        "space": { "type": "string", "description": "Space name (default: personal)." },
+                        "source_path": { "type": "string", "description": "Optional source label (default: remember)." }
+                    },
+                    "required": ["content"]
+                })),
+            tool("retract",
+                "Write a denying assertion — retract a statement extracted from a specific episode. Creates a Declaration episode.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "subject": { "type": "object", "description": "Entity ref: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
+                        "predicate": { "type": "string", "description": "Predicate name." },
+                        "object": { "type": "object", "description": "Entity or literal object.", "properties": { "kind": {"type":"string","enum":["entity","literal"]} }, "required": ["kind"] },
+                        "episode": { "type": "string", "description": "Episode ID the retraction applies to." },
+                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                    },
+                    "required": ["subject", "predicate", "object", "episode"]
+                })),
+            tool("merge_entities",
+                "Merge two entities: the loser is redirected to the winner. Creates a Declaration episode. Both refs use surface form + type.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "loser": { "type": "object", "description": "Entity to merge away: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
+                        "winner": { "type": "object", "description": "Entity to keep: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
+                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                    },
+                    "required": ["loser", "winner"]
+                })),
+            tool("redact",
+                "Destructive: remove episodes, entities, or predicates from the brain. Writes audit first, then tombstones. Use dry_run to preview the closure first.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "target_kind": { "type": "string", "enum": ["episode","entity","predicate"], "description": "What to redact." },
+                        "target_id": { "type": "string", "description": "Episode ID, entity ID, or 'entity_id/predicate' for predicate kind." },
+                        "reason": { "type": "string", "description": "Audit reason (default: 'mcp redact')." },
+                        "dry_run": { "type": "boolean", "description": "Preview the closure without modifying anything (default: false)." },
+                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                    },
+                    "required": ["target_kind", "target_id"]
+                })),
         ]
     })
 }
@@ -974,6 +1416,7 @@ mod tests {
         assert_eq!(resp["result"]["protocolVersion"], DEFAULT_PROTOCOL_VERSION);
         assert_eq!(resp["result"]["serverInfo"]["name"], "oxibrain");
         assert!(resp["result"]["capabilities"]["tools"].is_object());
+        assert!(resp["result"]["capabilities"]["resources"].is_object());
 
         // 2026-07-28 is echoed when requested.
         let resp = server
@@ -988,7 +1431,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_advertises_all_seven_tools() {
+    async fn tools_list_advertises_full_surface() {
         let (_dir, server) = fresh_server().await;
         let resp = server.handle(msg(1, "tools/list", None)).await.unwrap();
         let names: Vec<&str> = resp["result"]["tools"]
@@ -1001,13 +1444,19 @@ mod tests {
             "search",
             "recall",
             "get_entity",
-            "ingest",
-            "declare",
+            "traverse",
+            "timeline",
             "why",
             "contradictions",
+            "review_merges",
+            "ingest",
+            "remember",
+            "declare",
+            "retract",
+            "merge_entities",
+            "redact",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
-            // Every tool must carry a JSON-Schema inputSchema.
             let tool = resp["result"]["tools"]
                 .as_array()
                 .unwrap()
@@ -1612,6 +2061,339 @@ mod tests {
         assert!(response_str.contains("200 OK"), "got: {response_str}");
         assert!(response_str.contains("\"id\":1"), "got: {response_str}");
         assert!(response_str.contains("\"result\""), "got: {response_str}");
+    }
+
+    // ── Tests for new §12.2 tools ────────────────────────────────────────
+
+    /// Helper: declare a statement and return the episode id + subject entity id.
+    async fn declare_alice(server: &BrainServer, space: &str) -> (String, String) {
+        let decl = json!({
+            "op": "add_statement",
+            "subject": { "surface": "Alice", "type": "Person" },
+            "predicate": "employed_by",
+            "object": { "kind": "entity", "surface": "Acme Corp", "type": "Organization" },
+            "polarity": "affirm",
+            "valid_from": 1_000,
+            "valid_to": TIME_MAX.0
+        });
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "declare",
+                    "arguments": { "space": space, "declaration_json": decl.to_string() }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let ep_id = text.replace("Declared as episode: ", "");
+        let space_id = server.brain.ensure_space(space).await.unwrap();
+        let alice = server
+            .brain
+            .resolve_entity_id(&space_id, "Person", "Alice")
+            .await
+            .unwrap()
+            .expect("Alice should exist");
+        (ep_id, alice)
+    }
+
+    #[tokio::test]
+    async fn traverse_returns_subgraph() {
+        let (_dir, server) = fresh_server().await;
+        let (_ep, alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "traverse",
+                    "arguments": { "space": "t", "start": [alice], "depth": 2 }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let result: Value = serde_json::from_str(text).expect("traverse parse");
+        assert!(
+            !result["nodes"].as_array().unwrap().is_empty(),
+            "got: {text}"
+        );
+        assert!(
+            !result["edges"].as_array().unwrap().is_empty(),
+            "got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn traverse_missing_start_is_invalid_params() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "traverse",
+                    "arguments": { "space": "t", "start": [] }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn timeline_returns_entries() {
+        let (_dir, server) = fresh_server().await;
+        let (_ep, alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "timeline",
+                    "arguments": { "space": "t", "entity_id": alice }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let entries: Vec<Value> = serde_json::from_str(text).expect("timeline parse");
+        assert!(!entries.is_empty(), "should have timeline entries");
+        assert_eq!(entries[0]["predicate"], "employed_by");
+    }
+
+    #[tokio::test]
+    async fn review_merges_lists_records() {
+        let (_dir, server) = fresh_server().await;
+        let (_ep, alice) = declare_alice(&server, "t").await;
+
+        // Declare a second entity, then merge it into Alice.
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "merge_entities",
+                    "arguments": {
+                        "space": "t",
+                        "loser": { "surface": "Aliss", "type": "Person" },
+                        "winner": { "surface": "Alice", "type": "Person" }
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Merged as episode"), "got: {text}");
+
+        // review_merges should show the merge record.
+        let resp = server
+            .handle(msg(
+                3,
+                "tools/call",
+                Some(json!({
+                    "name": "review_merges",
+                    "arguments": { "space": "t" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let merges: Vec<Value> = serde_json::from_str(text).expect("merges parse");
+        assert_eq!(merges.len(), 1);
+        assert_eq!(merges[0]["winner"], alice);
+    }
+
+    #[tokio::test]
+    async fn retract_denies_a_statement() {
+        let (_dir, server) = fresh_server().await;
+        let (ep_id, _alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(2, "tools/call", Some(json!({
+                "name": "retract",
+                "arguments": {
+                    "space": "t",
+                    "subject": { "surface": "Alice", "type": "Person" },
+                    "predicate": "employed_by",
+                    "object": { "kind": "entity", "surface": "Acme Corp", "type": "Organization" },
+                    "episode": ep_id
+                }
+            }))))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Retracted as episode"), "got: {text}");
+    }
+
+    #[tokio::test]
+    async fn redact_dry_run_previews_closure() {
+        let (_dir, server) = fresh_server().await;
+        let (ep_id, _alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "redact",
+                    "arguments": {
+                        "space": "t",
+                        "target_kind": "episode",
+                        "target_id": ep_id,
+                        "dry_run": true
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let closure: Value = serde_json::from_str(text).expect("closure parse");
+        assert!(
+            closure["episodes"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(ep_id))
+        );
+    }
+
+    #[tokio::test]
+    async fn remember_ingests_without_session() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "remember",
+                    "arguments": { "space": "t", "content": "Quick fact: the sky is blue." }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        // Without a sampling session, extraction is skipped but episode ingested.
+        assert!(text.contains("Ingested as episode"), "got: {text}");
+        assert!(text.contains("extraction skipped"), "got: {text}");
+    }
+
+    #[tokio::test]
+    async fn scoped_read_denies_redact() {
+        let (_dir, server) = fresh_scoped(&[Capability::Read], &["t"]).await;
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "redact",
+                    "arguments": { "space": "t", "target_kind": "episode", "target_id": "x" }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], UNAUTHORIZED);
+    }
+
+    // ── Resources tests ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn resources_list_returns_templates() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server.handle(msg(1, "resources/list", None)).await.unwrap();
+        let templates = resp["result"]["resourceTemplates"].as_array().unwrap();
+        let uris: Vec<&str> = templates
+            .iter()
+            .map(|t| t["uriTemplate"].as_str().unwrap())
+            .collect();
+        assert!(uris.contains(&"entity://{id}"));
+        assert!(uris.contains(&"episode://{id}"));
+        assert!(uris.contains(&"graph://{entity}?depth=n"));
+    }
+
+    #[tokio::test]
+    async fn resources_read_space_returns_overview() {
+        let (_dir, server) = fresh_server().await;
+        let (_ep, _alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(
+                1,
+                "resources/read",
+                Some(json!({
+                    "uri": "space://t"
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["contents"][0]["text"].as_str().unwrap();
+        let overview: Value = serde_json::from_str(text).expect("space parse");
+        assert!(overview["entity_count"].as_u64().unwrap() >= 1);
+        assert!(overview["episode_count"].as_u64().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn resources_read_entity_returns_beliefs() {
+        let (_dir, server) = fresh_server().await;
+        let (_ep, alice) = declare_alice(&server, "t").await;
+
+        let uri = format!("entity://{alice}?space=t");
+        let resp = server
+            .handle(msg(1, "resources/read", Some(json!({ "uri": uri }))))
+            .await
+            .unwrap();
+        let text = resp["result"]["contents"][0]["text"].as_str().unwrap();
+        let beliefs: Vec<Value> = serde_json::from_str(text).expect("beliefs parse");
+        assert_eq!(beliefs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn resources_read_episode_returns_record() {
+        let (_dir, server) = fresh_server().await;
+        let (ep_id, _alice) = declare_alice(&server, "t").await;
+
+        let uri = format!("episode://{ep_id}?space=t");
+        let resp = server
+            .handle(msg(1, "resources/read", Some(json!({ "uri": uri }))))
+            .await
+            .unwrap();
+        let text = resp["result"]["contents"][0]["text"].as_str().unwrap();
+        let episode: Value = serde_json::from_str(text).expect("episode parse");
+        assert_eq!(episode["id"], ep_id);
+    }
+
+    #[tokio::test]
+    async fn resources_read_graph_returns_traversal() {
+        let (_dir, server) = fresh_server().await;
+        let (_ep, alice) = declare_alice(&server, "t").await;
+
+        let uri = format!("graph://{alice}?depth=2&space=t");
+        let resp = server
+            .handle(msg(1, "resources/read", Some(json!({ "uri": uri }))))
+            .await
+            .unwrap();
+        let text = resp["result"]["contents"][0]["text"].as_str().unwrap();
+        let result: Value = serde_json::from_str(text).expect("graph parse");
+        assert!(!result["nodes"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn resources_read_unknown_scheme_is_error() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                "resources/read",
+                Some(json!({
+                    "uri": "ftp://nope"
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], METHOD_NOT_FOUND);
     }
 
     #[tokio::test]

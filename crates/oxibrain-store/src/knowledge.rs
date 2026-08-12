@@ -6,7 +6,8 @@ use crate::sql_err;
 use oxibrain_core::fold::StatementEntry;
 use oxibrain_core::knowledge::{KeyOrigin, Object, Polarity};
 use oxibrain_core::{
-    Assertion, Belief, BeliefStatus, Entity, EntityKey, EntityMerge, Mention, Statement, Support,
+    Assertion, Belief, BeliefStatus, Entity, EntityKey, EntityMerge, Mention, MergeDecision,
+    Statement, Support,
 };
 use oxibrain_ports::BrainError;
 use rusqlite::{Connection, params};
@@ -80,6 +81,39 @@ pub fn resolve_entity(conn: &Connection, id: &str) -> Result<String, BrainError>
         }
     }
     Ok(current)
+}
+
+/// List entities in a space (not merged-away), newest-first, up to `limit`.
+/// Used by the `space://` resource and `review_merges`.
+pub fn list_entities(
+    conn: &Connection,
+    space: &str,
+    limit: usize,
+) -> Result<Vec<Entity>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, space_id, type_name, canonical_key, created_at, merged_into
+             FROM entities WHERE space_id = ?1 AND merged_into IS NULL
+             ORDER BY created_at DESC LIMIT ?2",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space, limit as i64], |r| {
+            Ok(Entity {
+                id: r.get(0)?,
+                space: r.get(1)?,
+                ty: r.get(2)?,
+                canonical_key: r.get(3)?,
+                created_at: oxibrain_ports::Timestamp(r.get::<_, i64>(4)?),
+                merged_into: r.get(5)?,
+            })
+        })
+        .map_err(sql_err)?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(sql_err)?);
+    }
+    Ok(result)
 }
 
 // ── Entity keys ──────────────────────────────────────────────────────────
@@ -179,6 +213,43 @@ pub fn set_merged_into(conn: &Connection, loser: &str, winner: &str) -> Result<(
     )
     .map_err(sql_err)?;
     Ok(())
+}
+
+/// List merge records for entities in a space, most recent first.
+/// Used by the `review_merges` tool and MCP `review_merges`.
+pub fn list_merges(conn: &Connection, space: &str) -> Result<Vec<EntityMerge>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.id, m.loser_id, m.winner_id, m.decided_by, m.score,
+                    m.provenance, m.decided_at, m.undone_at
+             FROM entity_merges m
+             JOIN entities e ON e.id = m.loser_id
+             WHERE e.space_id = ?1
+             ORDER BY m.decided_at DESC",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space], |r| {
+            let decided_by = r.get::<_, String>(3)?;
+            let score: Option<f64> = r.get(4).ok();
+            Ok(EntityMerge {
+                id: r.get(0)?,
+                loser: r.get(1)?,
+                winner: r.get(2)?,
+                decided_by: MergeDecision::parse_db(&decided_by, score)
+                    .expect("valid decided_by in db"),
+                provenance: r.get(5)?,
+                evidence: Vec::new(),
+                decided_at: oxibrain_ports::Timestamp(r.get::<_, i64>(6)?),
+                undone_at: r.get::<_, Option<i64>>(7)?.map(oxibrain_ports::Timestamp),
+            })
+        })
+        .map_err(sql_err)?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(sql_err)?);
+    }
+    Ok(result)
 }
 
 // ── Statements ──────────────────────────────────────────────────────────
