@@ -117,6 +117,66 @@ pub fn hash_member_set(ids: &[String]) -> [u8; 32] {
     out
 }
 
+// ── Consolidation checkpoints (DESIGN §10, sub-project L2) ────────────
+// Cache table (not ledger) — reproject ignores and rebuilds.
+
+/// Mark a cluster as in-progress. Idempotent: existing rows are overwritten.
+pub fn checkpoint_begin(
+    conn: &Connection,
+    cluster_hash: &[u8; 32],
+    extractor_id: &str,
+    now: Timestamp,
+) -> Result<(), BrainError> {
+    let hash_hex = hex::encode(cluster_hash);
+    conn.execute(
+        "INSERT OR REPLACE INTO consolidation_checkpoints
+         (cluster_hash, extractor_id, status, started_at)
+         VALUES (?1, ?2, 'in_progress', ?3)",
+        rusqlite::params![hash_hex, extractor_id, now.millis()],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+/// Mark a cluster as completed.
+pub fn checkpoint_complete(
+    conn: &Connection,
+    cluster_hash: &[u8; 32],
+    now: Timestamp,
+) -> Result<(), BrainError> {
+    let hash_hex = hex::encode(cluster_hash);
+    conn.execute(
+        "UPDATE consolidation_checkpoints
+         SET status = 'completed', completed_at = ?2
+         WHERE cluster_hash = ?1",
+        rusqlite::params![hash_hex, now.millis()],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+/// Filter clusters to skip already-completed ones. Returns the set of
+/// completed cluster hashes as hex strings.
+pub fn completed_clusters(
+    conn: &Connection,
+    extractor_id: &str,
+) -> Result<std::collections::HashSet<String>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT cluster_hash FROM consolidation_checkpoints
+             WHERE extractor_id = ?1 AND status = 'completed'",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(rusqlite::params![extractor_id], |r| r.get::<_, String>(0))
+        .map_err(sql_err)?;
+    let mut set = std::collections::HashSet::new();
+    for row in rows {
+        set.insert(row.map_err(sql_err)?);
+    }
+    Ok(set)
+}
+
 /// Load community entities grouped by label.
 pub fn load_community_entities(
     conn: &Connection,
@@ -304,5 +364,29 @@ mod tests {
         let h1 = hash_member_set(&["b".into(), "a".into()]);
         let h2 = hash_member_set(&["a".into(), "b".into()]);
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn checkpoint_lifecycle() {
+        use crate::migration;
+        use rusqlite::Connection;
+        migration::ensure_vec_extension();
+        let conn = Connection::open_in_memory().unwrap();
+        migration::run(&conn).unwrap();
+
+        let h1 = [1u8; 32];
+        let h2 = [2u8; 32];
+        let now = oxibrain_ports::Timestamp::from_millis(1);
+        // Start two clusters.
+        checkpoint_begin(&conn, &h1, "ext_a", now).unwrap();
+        checkpoint_begin(&conn, &h2, "ext_a", now).unwrap();
+
+        // Complete one.
+        checkpoint_complete(&conn, &h1, now).unwrap();
+
+        // Filter: h1 should appear as completed, h2 should not.
+        let done = completed_clusters(&conn, "ext_a").unwrap();
+        assert_eq!(done.len(), 1);
+        assert!(!done.contains(hex::encode(h2).as_str()));
     }
 }
