@@ -8,9 +8,12 @@ rust-version.workspace = true
 [dependencies]
 oxibrain.workspace = true
 oxibrain-core.workspace = true
-rmcp = { version = "0.12", features = ["server", "transport-io"] }
-schemars = "1"
+oxibrain-ports.workspace = true
+anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util", "io-std"] }
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

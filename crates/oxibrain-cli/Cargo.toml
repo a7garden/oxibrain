@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 oxibrain.workspace = true
 oxibrain-core.workspace = true
+oxibrain-mcp.workspace = true
+oxibrain-llm-http.workspace = true
 oxibrain-ports.workspace = true
 clap = { workspace = true, features = ["env"] }
 tokio.workspace = true

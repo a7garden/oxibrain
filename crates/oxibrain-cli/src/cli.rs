@@ -109,4 +109,20 @@ pub enum Command {
     TokenRevoke {
         id: String,
     },
+    /// Start the MCP server on stdio (for Claude Desktop and other MCP clients).
+    Serve,
+    /// List predicates in the core/v1 registry.
+    PredicateList,
+    /// Extract a single episode (calls the LLM, validates, projects).
+    Extract {
+        /// Episode ID to extract.
+        episode_id: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Re-extract all primary episodes with the configured extractor.
+    Reextract {
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
 }

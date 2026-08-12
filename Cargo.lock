@@ -905,6 +905,8 @@ dependencies = [
  "clap",
  "oxibrain",
  "oxibrain-core",
+ "oxibrain-llm-http",
+ "oxibrain-mcp",
  "oxibrain-ports",
  "tokio",
  "tracing",
@@ -954,6 +956,21 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "oxibrain-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "oxibrain",
+ "oxibrain-core",
+ "oxibrain-ports",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
