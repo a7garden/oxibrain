@@ -329,9 +329,6 @@ fn parse_key(key: &str) -> SearchTarget {
 
 /// Hybrid (or mode-specific) query: run the matching modes, fuse their result
 /// lists with RRF (`k=60`), and emit a [`RankingResult`] with provenance.
-///
-/// M2 simplification: `QueryMode::Graph` reuses lexical hits on entities and
-/// re-labels them — full neighbor expansion lands in Task 8.
 pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, BrainError> {
     let limit = q.limit;
     let mut mode_lists: Vec<Vec<SearchHit>> = Vec::new();
@@ -339,6 +336,7 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
     let run_lexical = matches!(q.mode, QueryMode::Hybrid | QueryMode::Lexical);
     let run_semantic = matches!(q.mode, QueryMode::Hybrid | QueryMode::Semantic);
     let run_graph = matches!(q.mode, QueryMode::Hybrid | QueryMode::Graph);
+    let run_community = matches!(q.mode, QueryMode::Hybrid | QueryMode::Community);
 
     let dropped: Vec<DroppedItem> = Vec::new();
 
@@ -351,17 +349,102 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
         mode_lists.push(hits);
     }
     if run_graph {
-        // Graph mode: lexical hits on entities only, re-tagged as Graph.
-        let hits = fts_search(conn, &q.space, &q.text, limit)?
+        // Graph mode: seed from lexical entity hits, then BFS-expand to neighbors.
+        let seed_hits = fts_search(conn, &q.space, &q.text, limit / 2)?
             .into_iter()
             .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
-            .map(|mut h| {
-                h.mode = QueryMode::Graph;
-                h
-            })
             .collect::<Vec<_>>();
-        if !hits.is_empty() {
-            mode_lists.push(hits);
+        let seeds: Vec<String> = seed_hits
+            .iter()
+            .filter_map(|h| match &h.target {
+                SearchTarget::Entity { id } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if !seeds.is_empty() {
+            // BFS expand from seed entities.
+            let graph = load_adjacency(conn, &q.space)?;
+            let bfs_spec = BfsSpec {
+                start: seeds.clone(),
+                max_depth: 2,
+                max_nodes: (limit * 2) as u32,
+                direction: oxibrain_core::retrieval::Direction::Both,
+                predicate_filter: oxibrain_core::retrieval::PredicateFilter::AllowAll,
+            };
+            let bfs_result = graph.bfs(&bfs_spec);
+
+            // Convert BFS nodes to SearchHit entries (neighbors that aren't seeds).
+            let seed_set: std::collections::HashSet<&str> =
+                seeds.iter().map(|s| s.as_str()).collect();
+            let graph_hits: Vec<SearchHit> = bfs_result
+                .nodes
+                .keys()
+                .filter(|id| !seed_set.contains(id.as_str()))
+                .map(|id| SearchHit {
+                    target: SearchTarget::Entity { id: id.clone() },
+                    score: 0.5, // graph-expanded hits get a moderate base score
+                    mode: QueryMode::Graph,
+                })
+                .collect();
+
+            // Include the seed hits too (re-tagged).
+            let mut all_graph = seed_hits
+                .into_iter()
+                .map(|mut h| {
+                    h.mode = QueryMode::Graph;
+                    h
+                })
+                .collect::<Vec<_>>();
+            all_graph.extend(graph_hits);
+            if !all_graph.is_empty() {
+                mode_lists.push(all_graph);
+            }
+        }
+    }
+    if run_community {
+        // Community mode: seed from lexical hits, expand to community members.
+        let seed_hits = fts_search(conn, &q.space, &q.text, limit / 2)?
+            .into_iter()
+            .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
+            .collect::<Vec<_>>();
+        let seeds: Vec<String> = seed_hits
+            .iter()
+            .filter_map(|h| match &h.target {
+                SearchTarget::Entity { id } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if !seeds.is_empty() {
+            let mut seen: std::collections::HashSet<String> = seeds.iter().cloned().collect();
+            let mut community_hits: Vec<SearchHit> = Vec::new();
+            for seed_id in &seeds {
+                if let Ok(members) = crate::communities::community_members(conn, &q.space, seed_id)
+                {
+                    for member_id in members {
+                        if seen.insert(member_id.clone()) {
+                            community_hits.push(SearchHit {
+                                target: SearchTarget::Entity { id: member_id },
+                                score: 0.4,
+                                mode: QueryMode::Community,
+                            });
+                        }
+                    }
+                }
+            }
+            // Include seed hits too (re-tagged).
+            let mut all_community = seed_hits
+                .into_iter()
+                .map(|mut h| {
+                    h.mode = QueryMode::Community;
+                    h
+                })
+                .collect::<Vec<_>>();
+            all_community.extend(community_hits);
+            if !all_community.is_empty() {
+                mode_lists.push(all_community);
+            }
         }
     }
 
