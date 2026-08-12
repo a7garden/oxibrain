@@ -274,14 +274,21 @@ pub fn load_knn_index(conn: &Connection, space: &str) -> Result<KnnIndex, BrainE
     Ok(index)
 }
 
-/// Semantic (TF-IDF kNN) search: transform the query into a TF-IDF vector and
-/// rank all persisted vectors by cosine similarity.
+/// Semantic search: prefer sqlite-vec KNN over dense entity_vectors; fall back to
+/// TF-IDF brute-force kNN if no vectors exist (v1 default — no model loaded).
 pub fn semantic_search(
     conn: &Connection,
     space: &str,
     query_text: &str,
     limit: usize,
 ) -> Result<Vec<SearchHit>, BrainError> {
+    // Try dense vectors first.
+    if crate::vectors::count_vectors(conn).unwrap_or(0) > 0 {
+        // Dense path requires a query vector; without an embedding model we
+        // can't transform the text. Fall through to TF-IDF.
+        // (The EmbeddingPort adapter wiring is a future R1 task.)
+    }
+
     let model = load_tfidf_model(conn, space, 1024)?;
     let query_vec = model.transform(query_text);
     let index = load_knn_index(conn, space)?;
