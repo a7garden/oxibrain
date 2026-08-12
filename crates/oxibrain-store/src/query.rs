@@ -17,6 +17,37 @@ use oxibrain_index::{KnnIndex, TfIdfModel, TfIdfVector};
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::{Connection, params};
 
+/// Batch-fetch salience values for a set of entity IDs.
+/// Returns a map of entity_id → salience (default 1.0 if not found).
+fn fetch_salience(
+    conn: &Connection,
+    space: &str,
+    entity_ids: &[String],
+) -> Result<std::collections::HashMap<String, f64>, BrainError> {
+    if entity_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = entity_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql =
+        format!("SELECT id, salience FROM entities WHERE space_id = ? AND id IN ({placeholders})");
+    let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+    let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&space as &dyn rusqlite::ToSql];
+    for id in entity_ids {
+        params_vec.push(id);
+    }
+    let rows = stmt
+        .query_map(&params_vec[..], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+        })
+        .map_err(sql_err)?;
+    let mut map = std::collections::HashMap::new();
+    for row in rows {
+        let (id, salience) = row.map_err(sql_err)?;
+        map.insert(id, salience);
+    }
+    Ok(map)
+}
+
 /// Current beliefs where `entity` is the subject (follows merge chain).
 pub fn beliefs_for_entity(
     conn: &Connection,
@@ -343,13 +374,19 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
 
     let fused = rrf::fuse(&rrf_lists, 60);
 
+    // Batch-fetch salience for entity targets.
+    let entity_ids: Vec<String> = fused
+        .iter()
+        .filter_map(|item| item.key.strip_prefix("entity:").map(String::from))
+        .collect();
+    let salience_map = fetch_salience(conn, &q.space, &entity_ids)?;
+
     let total_found = fused.len();
     let items: Vec<RankedItem> = fused
         .into_iter()
         .take(limit)
         .enumerate()
         .map(|(rank, item)| {
-            // For each mode that returned this item, record its rank inside that list.
             let mode_ranks: Vec<(QueryMode, usize)> = mode_lists
                 .iter()
                 .filter_map(|hits| {
@@ -358,12 +395,17 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
                     Some((mode, pos))
                 })
                 .collect();
+            let target = parse_key(&item.key);
+            let salience = match &target {
+                SearchTarget::Entity { id } => *salience_map.get(id).unwrap_or(&1.0),
+                _ => 1.0,
+            };
             RankedItem {
-                target: parse_key(&item.key),
+                target,
                 fused_score: item.score,
                 rank,
                 mode_ranks,
-                salience: 1.0, // M2: salience default; decay recalculates per space.
+                salience,
             }
         })
         .collect();
@@ -421,13 +463,17 @@ pub fn traverse(
     };
     let bfs_result = graph.bfs(&bfs_spec);
 
+    // Batch-fetch salience for all traversal nodes.
+    let entity_ids: Vec<String> = bfs_result.nodes.keys().cloned().collect();
+    let salience_map = fetch_salience(conn, space, &entity_ids)?;
+
     let nodes: Vec<TraversalNode> = bfs_result
         .nodes
         .iter()
         .map(|(entity, &depth)| TraversalNode {
             entity: entity.clone(),
             depth,
-            salience: 1.0, // M2: default salience; decay recalculates per space.
+            salience: *salience_map.get(entity).unwrap_or(&1.0),
         })
         .collect();
     let edges: Vec<TraversalEdge> = bfs_result
