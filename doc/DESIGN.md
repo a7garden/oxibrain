@@ -972,21 +972,21 @@ Full-fidelity JSONL export of ledger + cache + audit, round-trip tested: `export
 
 At 10⁵ episodes / 10⁵ entities / 10⁶ assertions on a laptop-class machine:
 
-| Operation | p95 budget | M2 measurement (200 ent / 500 stmt fixture, Apple M4) |
+| Operation | p95 budget | Measurement (200 ent / 500 stmt fixture, Apple M4) |
 |---|---|---|
-| declaration write | < 5 ms | **0.42 ms** ✅ |
-| `get_entity` | < 10 ms | not yet benchmarked |
-| hybrid query (top 20) | < 80 ms | **1.44 ms** ✅ |
-| traversal, depth 3, ≤256 nodes | < 100 ms | **0.32 ms** ✅ |
-| `assemble_context` (3K tokens) | < 150 ms | not yet benchmarked |
-| reproject from cache (whole store) | < 5 min | not yet benchmarked |
-| cold start (index load) | < 2 s | not yet benchmarked |
+| declaration write | < 5 ms | **0.42 ms** ✅ (M2), **0.38 ms** ✅ (M6) |
+| `get_entity` | < 10 ms | **0.16 ms** ✅ (M6) |
+| hybrid query (top 20) | < 80 ms | **1.44 ms** ✅ (M2) |
+| traversal, depth 3, ≤256 nodes | < 100 ms | **0.32 ms** ✅ (M2), **0.29 ms** ✅ (M6) |
+| `assemble_context` (3K tokens) | < 150 ms | **0.19 ms** ✅ (M6) |
+| reproject from cache (whole store) | < 5 min | **42.7 ms** ✅ (M6) |
+| cold start (index load) | < 2 s | not yet benchmarked — requires larger fixture |
 
-**First measurement: 2026-08-11, Apple M4 (release build), criterion 30-sample median.**
+**Measurements: 2026-08-11/12, Apple M4 (release build), criterion 10–30 samples.**
 Fixture scale is 200 entities / 500 statements — a functional smoke fixture, not the
-target 10⁵/10⁵/10⁶ scale. All three measured operations are well within budget at
-this scale (≤8% utilization). The four unmeasured operations require larger fixtures
-and are deferred to M3/M4. No budget revisions needed at this time.
+target 10⁵/10⁵/10⁶ scale. All six measured operations are well within budget at
+this scale (≤1% utilization). Cold-start requires a custom harness (drop + reopen
+the Brain) and a larger fixture. No budget revisions needed.
 
 **These are budgets, not commitments.** They are estimates made before a line of code exists, and calling them commitments — as v0.3 did — would be false precision. The contract is: a committed bench suite measures them from M1; each budget may be revised **once**, with the measurement and the reason recorded here; after that revision it is a regression gate.
 

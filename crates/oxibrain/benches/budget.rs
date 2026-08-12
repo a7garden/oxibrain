@@ -145,10 +145,65 @@ fn bench_traversal(c: &mut Criterion) {
     });
 }
 
+fn bench_get_entity(c: &mut Criterion) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let brain = build_fixture(dir.path());
+    let space = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(brain.ensure_space("bench"))
+        .expect("space");
+    let entity_id = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(brain.resolve_entity_id(&space, "Concept", "Entity0"))
+        .expect("resolve")
+        .expect("entity exists");
+    c.bench_function("get_entity", |b| {
+        b.iter(|| {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(brain.beliefs(&space, &entity_id))
+                .expect("beliefs");
+        });
+    });
+}
+
+fn bench_assemble_context(c: &mut Criterion) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let brain = build_fixture(dir.path());
+    let space = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(brain.ensure_space("bench"))
+        .expect("space");
+    c.bench_function("assemble_context_3k", |b| {
+        b.iter(|| {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(brain.assemble_context(&space, "Entity0 knows Entity1", 3000))
+                .expect("context");
+        });
+    });
+}
+
+fn bench_reproject(c: &mut Criterion) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let brain = build_fixture(dir.path());
+    c.bench_function("reproject_whole_store", |b| {
+        b.iter(|| {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(brain.reproject())
+                .expect("reproject");
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_declaration_write,
     bench_hybrid_query,
+    bench_get_entity,
+    bench_assemble_context,
+    bench_reproject,
     bench_traversal
 );
 criterion_main!(benches);
