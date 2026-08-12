@@ -13,6 +13,8 @@ fn episode_round_trip() {
     // create the space and capture its deterministic id, then insert under that id
     let (tx, rx) = std::sync::mpsc::channel();
     h.writer
+        .as_ref()
+        .unwrap()
         .submit(Box::new(move |conn| {
             let space_id = ledger::create_space(conn, "personal", t)?;
             let mut ep = Episode {
@@ -35,7 +37,7 @@ fn episode_round_trip() {
             Ok(())
         }))
         .unwrap();
-    h.writer.flush().unwrap();
+    h.writer.as_ref().unwrap().flush().unwrap();
     let id = rx.recv().unwrap();
 
     // read back via reader pool
@@ -56,18 +58,22 @@ fn reinsert_same_content_is_noop() {
     let t = SystemClock.now();
     let (tx, rx) = std::sync::mpsc::channel();
     h.writer
+        .as_ref()
+        .unwrap()
         .submit(Box::new(move |conn| {
             let space_id = ledger::create_space(conn, "personal", t)?;
             tx.send(space_id).unwrap();
             Ok(())
         }))
         .unwrap();
-    h.writer.flush().unwrap();
+    h.writer.as_ref().unwrap().flush().unwrap();
     let space = rx.recv().unwrap();
 
     for _ in 0..3 {
         let space = space.clone();
         h.writer
+            .as_ref()
+            .unwrap()
             .submit(Box::new(move |conn| {
                 let mut ep = Episode {
                     id: String::new(),
@@ -88,7 +94,7 @@ fn reinsert_same_content_is_noop() {
             }))
             .unwrap();
     }
-    h.writer.flush().unwrap();
+    h.writer.as_ref().unwrap().flush().unwrap();
     let count: i64 = h.readers.read(ledger::episode_count).unwrap();
     assert_eq!(count, 1, "idempotent insert must not duplicate");
 }

@@ -18,6 +18,8 @@ fn reopen_after_drop_recovers_no_duplicates() {
         let h = Arc::new(StoreHandle::open(dir.path()).unwrap());
         let (tx, rx) = std::sync::mpsc::channel();
         h.writer
+            .as_ref()
+            .unwrap()
             .submit(Box::new(move |conn| {
                 let space_id = ledger::create_space(conn, "personal", t)?;
                 let mut ep = Episode {
@@ -40,7 +42,7 @@ fn reopen_after_drop_recovers_no_duplicates() {
                 Ok(())
             }))
             .unwrap();
-        h.writer.flush().unwrap();
+        h.writer.as_ref().unwrap().flush().unwrap();
         let _first_id = rx.recv().unwrap();
         let count: i64 = h.readers.read(ledger::episode_count).unwrap();
         assert_eq!(count, 1, "first session must persist the episode");
@@ -53,6 +55,8 @@ fn reopen_after_drop_recovers_no_duplicates() {
         let h = Arc::new(StoreHandle::open(dir.path()).unwrap());
         let (tx, rx) = std::sync::mpsc::channel();
         h.writer
+            .as_ref()
+            .unwrap()
             .submit(Box::new(move |conn| {
                 let space_id = ledger::create_space(conn, "personal", t)?;
                 let mut ep = Episode {
@@ -75,7 +79,7 @@ fn reopen_after_drop_recovers_no_duplicates() {
                 Ok(())
             }))
             .unwrap();
-        h.writer.flush().unwrap();
+        h.writer.as_ref().unwrap().flush().unwrap();
         let _second_id = rx.recv().unwrap();
         let count: i64 = h.readers.read(ledger::episode_count).unwrap();
         assert_eq!(

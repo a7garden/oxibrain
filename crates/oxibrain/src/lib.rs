@@ -53,6 +53,20 @@ impl Brain {
         })
     }
 
+    /// Open for read-only access (DESIGN §4.3). No advisory lock, no writer actor.
+    /// Can coexist with a running daemon — WAL mode allows concurrent readers.
+    /// All write methods return `BrainError::Config("store is read-only")`.
+    pub async fn open_ro(config: BrainConfig) -> Result<Self, BrainError> {
+        let store = tokio::task::spawn_blocking(move || StoreHandle::open_ro(&config.dir))
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+        Ok(Self {
+            handle: Arc::new(store),
+            clock: Arc::new(SystemClock),
+            llm: None,
+        })
+    }
+
     /// Ensure a space exists. Returns its id.
     pub async fn ensure_space(&self, name: &str) -> Result<String, BrainError> {
         let h = self.handle.clone();
@@ -60,12 +74,12 @@ impl Brain {
         let name = name.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let id = ledger::create_space(conn, &name, now)?;
                 let _ = tx.send(id);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("ensure_space channel dropped".into()))
         })
@@ -87,7 +101,7 @@ impl Brain {
         let path = path.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let mut ep = Episode {
                     id: String::new(),
                     space: space.clone(),
@@ -105,7 +119,7 @@ impl Brain {
                 let _ = tx.send(ep.id);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("ingest_note channel dropped".into()))
         })
@@ -133,12 +147,12 @@ impl Brain {
         let h = self.handle.clone();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 reproject::reproject(conn)?;
                 let _ = tx.send(());
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("reproject channel dropped".into()))
         })
@@ -153,12 +167,12 @@ impl Brain {
         let now = self.clock.now();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let ep_id = oxibrain_store::project::project_declaration(conn, &space, &decl, now)?;
                 let _ = tx.send(ep_id);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("declare channel dropped".into()))
         })
@@ -233,12 +247,12 @@ impl Brain {
         let space = space.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 oxibrain_store::index_ops::rebuild_indexes(conn, &space)?;
                 let _ = tx.send(());
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("rebuild_indexes channel dropped".into()))
         })
@@ -382,12 +396,12 @@ impl Brain {
         let space = space.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 oxibrain_store::communities::rebuild_communities(conn, &space)?;
                 let _ = tx.send(());
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("rebuild_communities channel dropped".into()))
         })
@@ -418,12 +432,12 @@ impl Brain {
         let config = oxibrain_core::lifecycle::DecayConfig::default();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let count = oxibrain_store::lifecycle::apply_decay(conn, &space, now, &config)?;
                 let _ = tx.send(count);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("apply_decay channel dropped".into()))
         })
@@ -437,12 +451,12 @@ impl Brain {
         let now = self.clock.now();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let count = oxibrain_store::lifecycle::compact_episodes(conn, &space, now, 90)?;
                 let _ = tx.send(count);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("compact channel dropped".into()))
         })
@@ -506,7 +520,7 @@ impl Brain {
         let extractor_id = extractor_id.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let ep_id = oxibrain_store::extraction::ingest_and_enqueue(
                     conn,
                     &space,
@@ -519,7 +533,7 @@ impl Brain {
                 let _ = tx.send(ep_id);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("ingest channel dropped".into()))
         })
@@ -541,7 +555,7 @@ impl Brain {
         let label = label.map(String::from);
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let res = oxibrain_store::security::issue_token(
                     conn,
                     &scope,
@@ -552,7 +566,7 @@ impl Brain {
                 let _ = tx.send(res);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("issue_token channel dropped".into()))
         })
@@ -581,12 +595,12 @@ impl Brain {
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 oxibrain_store::security::revoke_token(conn, &id, now)?;
                 let _ = tx.send(());
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("revoke_token channel dropped".into()))
         })
@@ -644,14 +658,14 @@ impl Brain {
         let actor = actor.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let res = oxibrain_store::redaction::execute_redaction(
                     conn, &target, &reason, &actor, now,
                 )?;
                 let _ = tx.send(res);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("redact channel dropped".into()))
         })
@@ -672,12 +686,12 @@ impl Brain {
         let h = self.handle.clone();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 oxibrain_store::export::import_jsonl(conn, &jsonl)?;
                 let _ = tx.send(());
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("import_jsonl channel dropped".into()))
         })
@@ -785,7 +799,7 @@ impl Brain {
         let h = self.handle.clone();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 // Cache the raw response.
                 oxibrain_store::extraction::cache_response(
                     conn,
@@ -824,7 +838,7 @@ impl Brain {
                 let _ = tx.send(summary);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("extract_one channel dropped".into()))
         })
@@ -850,7 +864,7 @@ impl Brain {
         let batch_limit = budget.max_episodes_per_batch;
         let jobs = tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let _ = oxibrain_store::extraction::reclaim_expired(conn, now);
                 let jobs = oxibrain_store::extraction::claim_jobs(
                     conn,
@@ -862,7 +876,7 @@ impl Brain {
                 let _ = tx.send(jobs);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("claim_jobs channel dropped".into()))
         })
@@ -883,12 +897,15 @@ impl Brain {
                     let now = self.clock.now();
                     let _ = tokio::task::spawn_blocking(move || {
                         let (tx, rx) = std::sync::mpsc::channel();
-                        let _ = h.writer.submit(Box::new(move |conn| {
-                            let _ = tx
-                                .send(oxibrain_store::extraction::complete_job(conn, &job_id, now));
-                            Ok(())
-                        }));
-                        let _ = h.writer.flush();
+                        if let Some(w) = &h.writer {
+                            let _ = w.submit(Box::new(move |conn| {
+                                let _ = tx.send(oxibrain_store::extraction::complete_job(
+                                    conn, &job_id, now,
+                                ));
+                                Ok(())
+                            }));
+                            let _ = w.flush();
+                        }
                         rx.recv()
                     })
                     .await;
@@ -902,17 +919,19 @@ impl Brain {
                     let max_attempts = budget.max_repair_attempts + 1;
                     let _ = tokio::task::spawn_blocking(move || {
                         let (tx, rx) = std::sync::mpsc::channel();
-                        let _ = h.writer.submit(Box::new(move |conn| {
-                            let _ = tx.send(oxibrain_store::extraction::fail_job(
-                                conn,
-                                &job_id,
-                                &e.to_string(),
-                                max_attempts,
-                                now,
-                            ));
-                            Ok(())
-                        }));
-                        let _ = h.writer.flush();
+                        if let Some(w) = &h.writer {
+                            let _ = w.submit(Box::new(move |conn| {
+                                let _ = tx.send(oxibrain_store::extraction::fail_job(
+                                    conn,
+                                    &job_id,
+                                    &e.to_string(),
+                                    max_attempts,
+                                    now,
+                                ));
+                                Ok(())
+                            }));
+                            let _ = w.flush();
+                        }
                         rx.recv()
                     })
                     .await;
@@ -1068,7 +1087,7 @@ impl Brain {
         // 3. Write Derived episodes + cache [WriteOp].
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            h.writer.submit(Box::new(move |conn| {
+            h.writer()?.submit(Box::new(move |conn| {
                 let mut ids = Vec::new();
                 for (episode_ids, text) in &summaries {
                     let member_hash = oxibrain_store::consolidation::hash_member_set(episode_ids);
@@ -1092,7 +1111,7 @@ impl Brain {
                 let _ = tx.send(ids);
                 Ok(())
             }))?;
-            h.writer.flush()?;
+            h.writer()?.flush()?;
             rx.recv()
                 .map_err(|_| BrainError::Storage("consolidate channel dropped".into()))
         })
@@ -1185,7 +1204,7 @@ impl Brain {
         if count > 0 {
             tokio::task::spawn_blocking(move || {
                 let (tx, rx) = std::sync::mpsc::channel();
-                h.writer.submit(Box::new(move |conn| {
+                h.writer()?.submit(Box::new(move |conn| {
                     for (entity_ids, text) in &summaries {
                         let member_hash =
                             oxibrain_store::consolidation::hash_member_set(entity_ids);
@@ -1209,7 +1228,7 @@ impl Brain {
                     let _ = tx.send(());
                     Ok(())
                 }))?;
-                h.writer.flush()?;
+                h.writer()?.flush()?;
                 rx.recv().map_err(|_| {
                     BrainError::Storage("summarize_communities channel dropped".into())
                 })

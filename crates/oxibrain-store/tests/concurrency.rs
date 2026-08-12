@@ -11,6 +11,8 @@ fn readers_dont_block_writer_under_load() {
     // seed a space so reads have something (raw SQL — the ledger module lands in Task 6)
     let h = handle.clone();
     h.writer
+        .as_ref()
+        .unwrap()
         .submit(Box::new(|conn| {
             conn.execute(
                 "INSERT INTO spaces(id, name, created_at) VALUES(?1, ?2, ?3)",
@@ -20,7 +22,7 @@ fn readers_dont_block_writer_under_load() {
             Ok(())
         }))
         .unwrap();
-    h.writer.flush().unwrap();
+    h.writer.as_ref().unwrap().flush().unwrap();
 
     let start = Instant::now();
     let mut threads = Vec::new();

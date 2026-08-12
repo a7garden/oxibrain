@@ -42,23 +42,53 @@ use oxibrain_ports::BrainError;
 use std::path::{Path, PathBuf};
 
 /// Owns the writer actor and reader pool. The facade wraps this async.
+///
+/// In read-only mode (opened via `open_ro`), `writer` is `None` — the store
+/// acquires no advisory lock and can coexist with a running daemon. All write
+/// operations return `BrainError::Config("read-only store")`.
 pub struct StoreHandle {
-    pub writer: WriterActor,
+    pub writer: Option<WriterActor>,
     pub readers: ReaderPool,
     pub db_path: PathBuf,
 }
 
 impl StoreHandle {
+    /// Open for read-write. Acquires the advisory lock (P8), spawns the writer actor.
     pub fn open(dir: &Path) -> Result<Self, BrainError> {
         let store = Store::open(dir)?;
         let db_path = store.db_path().to_path_buf();
         let readers = ReaderPool::open(&db_path, 4)?;
         let writer = WriterActor::spawn(store);
         Ok(Self {
-            writer,
+            writer: Some(writer),
             readers,
             db_path,
         })
+    }
+
+    /// Open for read-only. No advisory lock, no writer actor. Can coexist with
+    /// a daemon that holds the exclusive lock — WAL mode allows concurrent readers.
+    pub fn open_ro(dir: &Path) -> Result<Self, BrainError> {
+        let db_path = dir.join("brain.db");
+        if !db_path.exists() {
+            return Err(BrainError::NotFound(format!(
+                "no brain.db at {} — initialize first with `oxibrain init`",
+                db_path.display()
+            )));
+        }
+        let readers = ReaderPool::open(&db_path, 4)?;
+        Ok(Self {
+            writer: None,
+            readers,
+            db_path,
+        })
+    }
+
+    /// Returns the writer actor, or an error if the store is read-only.
+    pub fn writer(&self) -> Result<&WriterActor, BrainError> {
+        self.writer
+            .as_ref()
+            .ok_or_else(|| BrainError::Config("store is read-only".into()))
     }
 }
 
