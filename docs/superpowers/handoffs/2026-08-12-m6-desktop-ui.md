@@ -1,11 +1,11 @@
-# Handoff — M6 Desktop Brain UI
+# Handoff — M6 Desktop Brain UI + Gap Closure
 
-> **Status:** Desktop UI scaffolded with all five core views, wired to the
-> daemon via same-origin HTTP. The daemon serves both static files (GET) and
-> JSON-RPC (POST) on a single port. Smoke test verified.
+> **Status:** Desktop UI shipped with 5 views, all gap-closure items done.
+> Read-only mode, degradation test, §13.2 budgets, and UI wiring all complete.
+> Long-running tasks + subscriptions remain deferred (ADR-001).
 > **Branch:** `main`
 > **Predecessor:** `2026-08-12-m5-oxios-migration.md`
-> **Tests:** 226 pass, 0 fail. Clippy clean. Fmt clean. Standalone verified.
+> **Tests:** 230 pass, 0 fail. Clippy clean. Fmt clean. Standalone verified.
 
 ---
 
@@ -95,6 +95,19 @@ matures enough to warrant real-time updates.
 - **Packaging** — Tauri or PWA wrapper for native desktop distribution
 - **Onboarding** — first-run experience, LLM provider setup wizard
 - **Docs site** — user-facing documentation
+
+### 3.2a Gap closure (this session, post-M6 scaffold)
+
+| Gap | Status | Evidence |
+|---|---|---|
+| Read-only library mode (§4.3) | ✅ | `Brain::open_ro`, `StoreHandle::open_ro`, 2 tests |
+| Degradation test (§14.3) | ✅ | `degradation.rs`: unreachable daemon → typed error < 1s |
+| §13.2 budgets: get_entity, assemble_context, reproject | ✅ | 0.16ms, 0.19ms, 42.7ms — all within budget |
+| UI wiring: contradiction retract | ✅ | `ContradictionInbox` calls `api.retract()`, shows feedback |
+| UI wiring: merge_entities client method | ✅ | `api.mergeEntities()` available, wired to tool |
+| Long-running tasks (§12.2) | ⏸ deferred | ADR-001: protocol feature for MCP consumers, polling works |
+| Subscriptions (§12.2) | ⏸ deferred | ADR-001: depends on tasks, polling works |
+| Cold-start benchmark | ⏸ deferred | Requires custom harness + larger fixture |
 
 ### 3.3 oxios migration (M5, oxios repo)
 
