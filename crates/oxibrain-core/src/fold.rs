@@ -4,6 +4,7 @@
 //! across different objects (different StatementIds) sharing the same
 //! subject+predicate (spec deviation D1).
 
+use crate::confidence::{CalibrationTable, ConfidenceComponents, calibrate};
 use crate::interval::{Interval, clip, merge_overlapping, overlaps};
 use crate::knowledge::{
     Assertion, Belief, BeliefStatus, Polarity, Statement, StatementId, Support,
@@ -32,7 +33,12 @@ struct VisibleStmt {
 /// `recorded_at <= at && (retracted_at.is_none() || retracted_at > at)` are visible.
 ///
 /// Pure function. Output is sorted by (statement_id, valid_from).
-pub fn fold(def: &PredicateDef, group: &[StatementEntry], at: Timestamp) -> Vec<Belief> {
+pub fn fold(
+    def: &PredicateDef,
+    group: &[StatementEntry],
+    at: Timestamp,
+    calibration: &CalibrationTable,
+) -> Vec<Belief> {
     // ── Step 1: Filter by transaction time, partition by polarity per statement. ──
 
     let mut visible: Vec<VisibleStmt> = Vec::new();
@@ -81,19 +87,27 @@ pub fn fold(def: &PredicateDef, group: &[StatementEntry], at: Timestamp) -> Vec<
     // ── Step 2: Apply cross-object rules. ──
     let beliefs = match (def.cardinality, def.invalidation, def.temporality) {
         // MultiValued: per-statement, no cross-object effect.
-        (Cardinality::MultiValued, _, _) => fold_independent(&visible),
+        (Cardinality::MultiValued, _, _) => fold_independent(&visible, calibration),
 
         // Functional + Static → contradiction on 2+ overlapping objects.
-        (Cardinality::Functional, _, Temporality::Static) => fold_contradiction(&visible),
+        (Cardinality::Functional, _, Temporality::Static) => {
+            fold_contradiction(&visible, calibration)
+        }
 
         // Functional + Supersede + Interval/Point → newer supersedes older.
-        (Cardinality::Functional, Invalidation::Supersede, _) => fold_supersede(&visible),
+        (Cardinality::Functional, Invalidation::Supersede, _) => {
+            fold_supersede(&visible, calibration)
+        }
 
         // Functional + ExplicitOnly → both stay Active (no auto-close).
-        (Cardinality::Functional, Invalidation::ExplicitOnly, _) => fold_independent(&visible),
+        (Cardinality::Functional, Invalidation::ExplicitOnly, _) => {
+            fold_independent(&visible, calibration)
+        }
 
         // Functional + Coexist → treat as MultiValued.
-        (Cardinality::Functional, Invalidation::Coexist, _) => fold_independent(&visible),
+        (Cardinality::Functional, Invalidation::Coexist, _) => {
+            fold_independent(&visible, calibration)
+        }
     };
 
     // ── Step 3: Sort output by (statement_id, valid_from). ──
@@ -102,18 +116,87 @@ pub fn fold(def: &PredicateDef, group: &[StatementEntry], at: Timestamp) -> Vec<
     beliefs
 }
 
+/// Compute belief confidence from supporting assertions (DESIGN §6.5).
+/// Pure function of the assertion set — deterministic.
+fn belief_confidence(
+    assertions: &[Assertion],
+    support: &Support,
+    calibration: &CalibrationTable,
+) -> f32 {
+    // Manual declarations (no extractor) bypass at 1.0.
+    let is_declaration = assertions.iter().all(|a| a.extractor.is_none());
+    if is_declaration {
+        return 1.0;
+    }
+
+    // Raw: max assertion confidence (strongest evidence in the interval).
+    let raw = assertions
+        .iter()
+        .map(|a| a.confidence)
+        .fold(0.0_f32, f32::max);
+
+    // Calibrated: per-extractor multiplier from eval harness (default 0.8).
+    let extractor_id = assertions
+        .iter()
+        .filter_map(|a| a.extractor.as_deref())
+        .next()
+        .unwrap_or("unknown");
+    let calibrated = calibrate(extractor_id, calibration);
+
+    // Corroboration: saturating in distinct supporting episodes.
+    let n = support.distinct_episodes.max(1) as f32;
+    let corroboration = (1.0 - (-0.3 * n).exp()).clamp(0.5, 1.0);
+
+    // Trust: weighted by episode trust tier.
+    let trust = if support.trust_weights.is_empty() {
+        1.0
+    } else {
+        let total: u32 = support.trust_weights.iter().map(|(_, c)| *c).sum();
+        if total == 0 {
+            1.0
+        } else {
+            let weighted: f32 = support
+                .trust_weights
+                .iter()
+                .map(|(tier, count)| {
+                    let w = match tier {
+                        TrustTier::Trusted => 1.0,
+                        TrustTier::SemiTrusted => 0.7,
+                        TrustTier::Untrusted => 0.3,
+                    };
+                    w * *count as f32
+                })
+                .sum();
+            (weighted / total as f32).clamp(0.3, 1.0)
+        }
+    };
+
+    // Recency: fixed at 1.0 for v1 — needs reference time parameter.
+    let recency = 1.0;
+
+    ConfidenceComponents {
+        raw,
+        calibrated,
+        corroboration,
+        trust,
+        recency,
+    }
+    .combine()
+}
+
 /// Per-statement fold: each object's affirming intervals become Active beliefs.
-fn fold_independent(visible: &[VisibleStmt]) -> Vec<Belief> {
+fn fold_independent(visible: &[VisibleStmt], calibration: &CalibrationTable) -> Vec<Belief> {
     let mut beliefs = Vec::new();
     for vs in visible {
         let support = compute_support(&vs.assertions);
+        let conf = belief_confidence(&vs.assertions, &support, calibration);
         for iv in &vs.affirm {
             beliefs.push(Belief {
                 statement: vs.stmt.id.clone(),
                 valid_from: iv.start,
                 valid_to: iv.end,
                 support: support.clone(),
-                confidence: 1.0, // M1: declarations are 1.0 (spec §6.4)
+                confidence: conf,
                 status: BeliefStatus::Active,
             });
         }
@@ -122,11 +205,11 @@ fn fold_independent(visible: &[VisibleStmt]) -> Vec<Belief> {
 }
 
 /// Contradiction fold: for Static+Functional, all overlapping objects are Contradicted.
-fn fold_contradiction(visible: &[VisibleStmt]) -> Vec<Belief> {
+fn fold_contradiction(visible: &[VisibleStmt], calibration: &CalibrationTable) -> Vec<Belief> {
     // If only one object has affirming intervals, it's Active (no contradiction).
     let affirming: Vec<&VisibleStmt> = visible.iter().filter(|vs| !vs.affirm.is_empty()).collect();
     if affirming.len() <= 1 {
-        return fold_independent(visible);
+        return fold_independent(visible, calibration);
     }
 
     // Check for pairwise overlaps across different statements.
@@ -154,6 +237,7 @@ fn fold_contradiction(visible: &[VisibleStmt]) -> Vec<Belief> {
     let mut beliefs = Vec::new();
     for vs in visible {
         let support = compute_support(&vs.assertions);
+        let conf = belief_confidence(&vs.assertions, &support, calibration);
         let is_contradicted = contradicted.contains(&vs.stmt.id.as_str());
         for iv in &vs.affirm {
             beliefs.push(Belief {
@@ -161,7 +245,7 @@ fn fold_contradiction(visible: &[VisibleStmt]) -> Vec<Belief> {
                 valid_from: iv.start,
                 valid_to: iv.end,
                 support: support.clone(),
-                confidence: 1.0,
+                confidence: conf,
                 status: if is_contradicted {
                     BeliefStatus::Contradicted
                 } else {
@@ -174,7 +258,7 @@ fn fold_contradiction(visible: &[VisibleStmt]) -> Vec<Belief> {
 }
 
 /// Supersession fold: for Functional/Supersede/Interval, newer objects close older ones.
-fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
+fn fold_supersede(visible: &[VisibleStmt], calibration: &CalibrationTable) -> Vec<Belief> {
     // Collect (statement_id, interval) pairs across all objects.
     let mut all: Vec<(StatementId, Interval)> = Vec::new();
     for vs in visible {
@@ -187,10 +271,6 @@ fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
     all.sort_by(|a, b| (&a.1.start, &a.0).cmp(&(&b.1.start, &b.0)));
 
     let mut beliefs: Vec<Belief> = Vec::new();
-    // Track the current (last-started) interval from a different object.
-    // When a new interval starts, if it belongs to a different statement and
-    // the previous interval is still open, clip the previous at the new start.
-
     struct Active {
         stmt: StatementId,
         start: Timestamp,
@@ -200,21 +280,21 @@ fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
     let mut current: Option<Active> = None;
 
     for (stmt_id, iv) in &all {
-        let support = visible
+        let vs = visible
             .iter()
             .find(|vs| &vs.stmt.id == stmt_id)
-            .map(|vs| compute_support(&vs.assertions))
             .expect("statement exists in group");
+        let support = compute_support(&vs.assertions);
+        let conf = belief_confidence(&vs.assertions, &support, calibration);
 
         match &current {
             None => {
-                // First interval.
                 beliefs.push(Belief {
                     statement: stmt_id.clone(),
                     valid_from: iv.start,
                     valid_to: iv.end,
                     support,
-                    confidence: 1.0,
+                    confidence: conf,
                     status: BeliefStatus::Active,
                 });
                 current = Some(Active {
@@ -224,16 +304,14 @@ fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
                 });
             }
             Some(cur) if cur.stmt == *stmt_id => {
-                // Same object: just add as Active (intervals are disjoint after merge).
                 beliefs.push(Belief {
                     statement: stmt_id.clone(),
                     valid_from: iv.start,
                     valid_to: iv.end,
                     support,
-                    confidence: 1.0,
+                    confidence: conf,
                     status: BeliefStatus::Active,
                 });
-                // Extend current if this interval ends later.
                 if iv.end > cur.end {
                     current = Some(Active {
                         stmt: stmt_id.clone(),
@@ -243,9 +321,7 @@ fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
                 }
             }
             Some(cur) => {
-                // Different object.
                 if iv.start == cur.start {
-                    // Same start time → both Contradicted.
                     if let Some(last) = beliefs.last_mut() {
                         if last.statement == cur.stmt && last.status == BeliefStatus::Active {
                             last.status = BeliefStatus::Contradicted;
@@ -256,11 +332,10 @@ fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
                         valid_from: iv.start,
                         valid_to: iv.end,
                         support,
-                        confidence: 1.0,
+                        confidence: conf,
                         status: BeliefStatus::Contradicted,
                     });
                 } else {
-                    // Newer object: clip the current's open interval at iv.start.
                     if let Some(last) = beliefs.last_mut() {
                         if last.statement == cur.stmt
                             && last.status == BeliefStatus::Active
@@ -275,7 +350,7 @@ fn fold_supersede(visible: &[VisibleStmt]) -> Vec<Belief> {
                         valid_from: iv.start,
                         valid_to: iv.end,
                         support,
-                        confidence: 1.0,
+                        confidence: conf,
                         status: BeliefStatus::Active,
                     });
                 }
@@ -325,6 +400,7 @@ fn compute_support(assertions: &[Assertion]) -> Support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::confidence::CalibrationTable;
     use crate::knowledge::{Object, Polarity, Statement};
     use crate::registry::{Cardinality, Invalidation, ObjectKind, PredicateDef, Temporality};
     use oxibrain_ports::{TIME_MAX, TIME_MIN, Timestamp};
@@ -426,7 +502,12 @@ mod tests {
                 TIME_MAX,
             )],
         }];
-        let beliefs = fold(&def_employed(), &group, TIME_MAX);
+        let beliefs = fold(
+            &def_employed(),
+            &group,
+            TIME_MAX,
+            &CalibrationTable::default(),
+        );
         assert_eq!(beliefs.len(), 1);
         assert_eq!(beliefs[0].status, BeliefStatus::Active);
         assert_eq!(beliefs[0].valid_from, ts(100));
@@ -459,7 +540,12 @@ mod tests {
                 )],
             },
         ];
-        let beliefs = fold(&def_employed(), &group, TIME_MAX);
+        let beliefs = fold(
+            &def_employed(),
+            &group,
+            TIME_MAX,
+            &CalibrationTable::default(),
+        );
         // Acme: [100, 199] Superseded. Globex: [200, MAX] Active.
         let acme = beliefs
             .iter()
@@ -502,7 +588,12 @@ mod tests {
                 )],
             },
         ];
-        let beliefs = fold(&def_born_in(), &group, TIME_MAX);
+        let beliefs = fold(
+            &def_born_in(),
+            &group,
+            TIME_MAX,
+            &CalibrationTable::default(),
+        );
         assert_eq!(beliefs.len(), 2);
         assert!(
             beliefs
@@ -538,7 +629,12 @@ mod tests {
                 )],
             },
         ];
-        let beliefs = fold(&def_works_on(), &group, TIME_MAX);
+        let beliefs = fold(
+            &def_works_on(),
+            &group,
+            TIME_MAX,
+            &CalibrationTable::default(),
+        );
         assert_eq!(beliefs.len(), 2);
         assert!(beliefs.iter().all(|b| b.status == BeliefStatus::Active));
     }
@@ -565,7 +661,12 @@ mod tests {
                 },
             ],
         }];
-        let beliefs = fold(&def_works_on(), &group, TIME_MAX);
+        let beliefs = fold(
+            &def_works_on(),
+            &group,
+            TIME_MAX,
+            &CalibrationTable::default(),
+        );
         // Affirming [100, 500] clipped by denial [200, 300] → [100, 199] and [301, 500].
         assert_eq!(beliefs.len(), 2);
         assert_eq!(beliefs[0].valid_from, ts(100));
@@ -593,7 +694,12 @@ mod tests {
                 retracted_at: Some(ts(5)), // retracted before `at`
             }],
         }];
-        let beliefs = fold(&def_employed(), &group, ts(10));
+        let beliefs = fold(
+            &def_employed(),
+            &group,
+            ts(10),
+            &CalibrationTable::default(),
+        );
         assert!(
             beliefs.is_empty(),
             "retracted assertion should produce no belief"
@@ -627,7 +733,12 @@ mod tests {
                 )],
             },
         ];
-        let beliefs = fold(&def_works_on(), &group, TIME_MAX);
+        let beliefs = fold(
+            &def_works_on(),
+            &group,
+            TIME_MAX,
+            &CalibrationTable::default(),
+        );
         assert_eq!(beliefs[0].statement, "st_a");
         assert_eq!(beliefs[1].statement, "st_b");
     }
@@ -635,7 +746,7 @@ mod tests {
     // ── Empty group → empty output. ──
     #[test]
     fn empty_group() {
-        let beliefs = fold(&def_employed(), &[], TIME_MAX);
+        let beliefs = fold(&def_employed(), &[], TIME_MAX, &CalibrationTable::default());
         assert!(beliefs.is_empty());
     }
 }

@@ -14,6 +14,7 @@
 use crate::knowledge as kcrud;
 use crate::registry;
 use crate::sql_err;
+use oxibrain_core::confidence::CalibrationTable;
 use oxibrain_core::fold::fold;
 use oxibrain_core::security::{RedactTarget, RedactionClosure, RedactionResult};
 use oxibrain_ports::{BrainError, Timestamp};
@@ -409,9 +410,10 @@ fn refold_affected(
                 )?;
             }
         } else {
+            let calibration = CalibrationTable::default();
             let pred_def = registry::load_predicate(conn, &pred)?
                 .ok_or_else(|| BrainError::Invalid(format!("unknown predicate: {pred}")))?;
-            let beliefs = fold(&pred_def, &group, now);
+            let beliefs = fold(&pred_def, &group, now, &calibration);
             kcrud::replace_beliefs(conn, &group_stmt_ids, &beliefs)?;
             count += 1;
         }
@@ -501,9 +503,10 @@ fn refold_episode_groups(
                 )?;
             }
         } else {
+            let calibration = CalibrationTable::default();
             let pred_def = registry::load_predicate(conn, &pred)?
                 .ok_or_else(|| BrainError::Invalid(format!("unknown predicate: {pred}")))?;
-            let beliefs = fold(&pred_def, &group, now);
+            let beliefs = fold(&pred_def, &group, now, &calibration);
             kcrud::replace_beliefs(conn, &group_stmt_ids, &beliefs)?;
             count += 1;
         }

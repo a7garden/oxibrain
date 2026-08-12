@@ -9,6 +9,7 @@ use crate::ledger;
 use crate::project::{EntityRef, resolve_or_create};
 use crate::registry;
 use crate::sql_err;
+use oxibrain_core::confidence::CalibrationTable;
 use oxibrain_core::extraction::{Claim, ClaimObject, ExtractionResponse};
 use oxibrain_core::fold::fold;
 use oxibrain_core::id::{assertion_id, mention_id, statement_id};
@@ -394,9 +395,10 @@ pub fn project_extraction(
         }
 
         // Re-fold the affected group.
+        let calibration = CalibrationTable::default();
         if let Some(pred_def) = registry::load_predicate(conn, &claim.predicate)? {
             let group = kcrud::get_statement_group(conn, space, &subj_id, &claim.predicate)?;
-            let beliefs = fold(&pred_def, &group, now);
+            let beliefs = fold(&pred_def, &group, now, &calibration);
             let group_stmt_ids: Vec<String> =
                 group.iter().map(|e| e.statement.id.clone()).collect();
             kcrud::replace_beliefs(conn, &group_stmt_ids, &beliefs)?;

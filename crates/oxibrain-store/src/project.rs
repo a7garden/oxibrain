@@ -8,6 +8,7 @@ use crate::ledger;
 use crate::registry;
 use crate::sql_err;
 use oxibrain_core::canonical::canonical_json_value;
+use oxibrain_core::confidence::CalibrationTable;
 use oxibrain_core::fold::fold;
 use oxibrain_core::id::{assertion_id, entity_id, entity_key_id, mention_id, statement_id};
 use oxibrain_core::knowledge::{
@@ -379,11 +380,12 @@ pub fn project_declaration(
             }
 
             // 3. Re-fold the affected group.
+            let calibration = CalibrationTable::default();
             let pred_def = registry::load_predicate(conn, predicate)?
                 .ok_or_else(|| BrainError::Invalid(format!("unknown predicate: {predicate}")))?;
 
             let group = kcrud::get_statement_group(conn, space, &subj_id, predicate)?;
-            let beliefs = fold(&pred_def, &group, now);
+            let beliefs = fold(&pred_def, &group, now, &calibration);
 
             // Collect all statement IDs in the group for belief replacement.
             let group_stmt_ids: Vec<String> =
@@ -430,9 +432,10 @@ pub fn project_declaration(
             .map_err(sql_err)?;
 
             // Re-fold the affected group.
+            let calibration = CalibrationTable::default();
             if let Some(pred_def) = registry::load_predicate(conn, predicate)? {
                 let group = kcrud::get_statement_group(conn, space, &subj_id, predicate)?;
-                let beliefs = fold(&pred_def, &group, now);
+                let beliefs = fold(&pred_def, &group, now, &calibration);
                 let group_stmt_ids: Vec<String> =
                     group.iter().map(|e| e.statement.id.clone()).collect();
                 kcrud::replace_beliefs(conn, &group_stmt_ids, &beliefs)?;

@@ -4,6 +4,7 @@
 //! over randomly generated assertion groups. Required by AGENTS.md:
 //! "Property tests for the temporal fold".
 
+use oxibrain_core::confidence::CalibrationTable;
 use oxibrain_core::{
     Assertion, BeliefStatus, Cardinality, Interval, Invalidation, Object, ObjectKind, Polarity,
     PredicateDef, Statement, StatementEntry, Temporality, fold, overlaps,
@@ -157,7 +158,7 @@ proptest! {
         def in arb_def(),
         group in arb_simple_group(),
     ) {
-        let beliefs = fold(&def, &group, TIME_MAX);
+        let beliefs = fold(&def, &group, TIME_MAX, &CalibrationTable::default());
         for w in beliefs.windows(2) {
             let a = (&w[0].statement, w[0].valid_from);
             let b = (&w[1].statement, w[1].valid_from);
@@ -171,7 +172,7 @@ proptest! {
         def in arb_def(),
         group in arb_simple_group(),
     ) {
-        let beliefs = fold(&def, &group, TIME_MAX);
+        let beliefs = fold(&def, &group, TIME_MAX, &CalibrationTable::default());
         for b in &beliefs {
             prop_assert!(
                 b.valid_from <= b.valid_to,
@@ -188,7 +189,7 @@ proptest! {
     fn denial_eliminated_from_output(
         (group, denies) in arb_denial_group(),
     ) {
-        let beliefs = fold(&def_multivalued(), &group, TIME_MAX);
+        let beliefs = fold(&def_multivalued(), &group, TIME_MAX, &CalibrationTable::default());
         for b in &beliefs {
             for &(d_from, d_to) in &denies {
                 let b_iv = Interval::new(b.valid_from, b.valid_to);
@@ -212,7 +213,7 @@ proptest! {
     fn supersede_no_overlapping_active(
         group in arb_simple_group(),
     ) {
-        let beliefs = fold(&def_supersede(), &group, TIME_MAX);
+        let beliefs = fold(&def_supersede(), &group, TIME_MAX, &CalibrationTable::default());
         let active: Vec<_> = beliefs.iter().filter(|b| b.status == BeliefStatus::Active).collect();
         for i in 0..active.len() {
             for j in (i + 1)..active.len() {
@@ -237,7 +238,7 @@ proptest! {
     fn contradiction_no_overlapping_active(
         group in arb_simple_group(),
     ) {
-        let beliefs = fold(&def_static(), &group, TIME_MAX);
+        let beliefs = fold(&def_static(), &group, TIME_MAX, &CalibrationTable::default());
         let active: Vec<_> = beliefs.iter().filter(|b| b.status == BeliefStatus::Active).collect();
         for i in 0..active.len() {
             for j in (i + 1)..active.len() {
@@ -261,7 +262,7 @@ proptest! {
     fn multivalued_all_active(
         group in arb_simple_group(),
     ) {
-        let beliefs = fold(&def_multivalued(), &group, TIME_MAX);
+        let beliefs = fold(&def_multivalued(), &group, TIME_MAX, &CalibrationTable::default());
         for b in &beliefs {
             prop_assert_eq!(
                 b.status,
@@ -276,9 +277,25 @@ proptest! {
 
 #[test]
 fn empty_group_empty_output() {
-    assert!(fold(&def_supersede(), &[], TIME_MAX).is_empty());
-    assert!(fold(&def_static(), &[], TIME_MAX).is_empty());
-    assert!(fold(&def_multivalued(), &[], TIME_MAX).is_empty());
+    assert!(
+        fold(
+            &def_supersede(),
+            &[],
+            TIME_MAX,
+            &CalibrationTable::default()
+        )
+        .is_empty()
+    );
+    assert!(fold(&def_static(), &[], TIME_MAX, &CalibrationTable::default()).is_empty());
+    assert!(
+        fold(
+            &def_multivalued(),
+            &[],
+            TIME_MAX,
+            &CalibrationTable::default()
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -288,7 +305,7 @@ fn single_affirm_produces_one_active() {
         assertions: vec![make_assertion("st_0", "ep1", Polarity::Affirm, 100, 500)],
     }];
     for def in [def_supersede(), def_static(), def_multivalued()] {
-        let beliefs = fold(&def, &group, TIME_MAX);
+        let beliefs = fold(&def, &group, TIME_MAX, &CalibrationTable::default());
         assert_eq!(beliefs.len(), 1, "single affirm → exactly one belief");
         assert_eq!(beliefs[0].status, BeliefStatus::Active);
         assert_eq!(beliefs[0].valid_from, ts(100));
@@ -311,7 +328,12 @@ fn supersede_boundary_no_overlap_at_shared_endpoint() {
             assertions: vec![make_assertion("st_b", "ep2", Polarity::Affirm, 200, 300)],
         },
     ];
-    let beliefs = fold(&def_supersede(), &group, TIME_MAX);
+    let beliefs = fold(
+        &def_supersede(),
+        &group,
+        TIME_MAX,
+        &CalibrationTable::default(),
+    );
     // st_a must be Superseded [100, 199], st_b must be Active [200, 300].
     let st_a = beliefs
         .iter()
