@@ -475,7 +475,37 @@ impl Brain {
         let query = query.to_string();
         tokio::task::spawn_blocking(move || {
             h.readers.read(|conn| {
-                oxibrain_store::context::assemble_context(conn, &space, &query, token_budget)
+                oxibrain_store::context::assemble_context(conn, &space, &query, token_budget, None)
+            })
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Proactive recall: assemble context with hint-driven layer composition
+    /// (DESIGN §9.5, sub-project L3). When `is_session_start` or `topic_changed`
+    /// is true, the context widens to include more recent episodes and
+    /// community summaries.
+    pub async fn assemble_context_with_hints(
+        &self,
+        space: &str,
+        query: &str,
+        token_budget: usize,
+        hints: &oxibrain_store::context::RecallHints,
+    ) -> Result<oxibrain_core::context::ContextResult, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let query = query.to_string();
+        let hints = hints.clone();
+        tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| {
+                oxibrain_store::context::assemble_context(
+                    conn,
+                    &space,
+                    &query,
+                    token_budget,
+                    Some(&hints),
+                )
             })
         })
         .await

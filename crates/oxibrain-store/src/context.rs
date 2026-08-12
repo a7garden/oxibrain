@@ -9,12 +9,25 @@ use oxibrain_core::retrieval::{Query, QueryMode, SearchTarget};
 use oxibrain_ports::BrainError;
 use rusqlite::{Connection, params};
 
-/// Pack context for a query to a token budget.
+/// Hints that broaden context assembly (DESIGN §9.5, sub-project L3).
+#[derive(Debug, Clone, Default)]
+pub struct RecallHints {
+    /// First query in this session — include community summaries + recent episodes.
+    pub is_session_start: bool,
+    /// Topic changed from prior query — widen neighborhood.
+    pub topic_changed: bool,
+    /// Recent query texts (for salience boost of entities mentioned repeatedly).
+    pub recent_queries: Vec<String>,
+}
+
+/// Pack context for a query to a token budget. When `hints` is provided,
+/// the layer composition adapts (DESIGN §9.5 proactive recall).
 pub fn assemble_context(
     conn: &Connection,
     space: &str,
     query_text: &str,
     budget: usize,
+    hints: Option<&RecallHints>,
 ) -> Result<ContextResult, BrainError> {
     let mut layers: Vec<ContextLayer> = Vec::new();
     let mut total_tokens = 0;
@@ -57,16 +70,27 @@ pub fn assemble_context(
     // For M2, skip if no entities found.
     // (Would call query::load_adjacency + neighbors, but keeping M2 simple.)
 
+    // When hints request a wider context, fetch more recent episodes.
+    let recent_limit: i64 = if let Some(h) = hints {
+        if h.is_session_start || h.topic_changed {
+            20
+        } else {
+            5
+        }
+    } else {
+        5
+    };
+
     // Layer 4: Recent episodes.
     let mut stmt = conn
         .prepare(
             "SELECT id, content FROM episodes
              WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
-             ORDER BY ingested_at DESC LIMIT 5",
+             ORDER BY ingested_at DESC LIMIT ?2",
         )
         .map_err(sql_err)?;
     let recent: Vec<(String, String)> = stmt
-        .query_map(params![space], |r| {
+        .query_map(params![space, recent_limit], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })
         .map_err(sql_err)?
