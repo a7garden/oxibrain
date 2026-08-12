@@ -14,7 +14,7 @@ pub mod protocol;
 pub mod sampling;
 pub mod server;
 
-pub use daemon::{PidFile, shutdown_signal};
+pub use daemon::{PidFile, run_extraction_worker, shutdown_signal};
 #[cfg(unix)]
 pub use server::serve_socket;
 #[cfg(unix)]
