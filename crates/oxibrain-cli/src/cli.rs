@@ -109,8 +109,11 @@ pub enum Command {
     TokenRevoke {
         id: String,
     },
-    /// Start the MCP server on stdio (for Claude Desktop and other MCP clients).
-    Serve,
+    Serve {
+        /// Listen on a Unix-domain socket path instead of stdio.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     /// List predicates in the core/v1 registry.
     PredicateList,
     /// Extract a single episode (calls the LLM, validates, projects).

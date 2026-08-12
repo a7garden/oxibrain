@@ -14,7 +14,7 @@ use oxibrain_core::retrieval::{Query, QueryMode};
 use oxibrain_ports::{ClockPort, SystemClock};
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 
 /// MCP protocol version advertised to clients that do not request 2026-07-28.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -406,36 +406,35 @@ fn tool(name: &str, description: &str, input_schema: Value) -> Value {
     json!({ "name": name, "description": description, "inputSchema": input_schema })
 }
 
-// ── stdio transport ────────────────────────────────────────────────────────
+// ── transports ─────────────────────────────────────────────────────────────
 
-/// Run the MCP server on stdio, for Claude Desktop and other MCP clients.
+/// Run one MCP session over a read/write pair: newline-delimited JSON-RPC.
 ///
-/// Reads newline-delimited JSON-RPC from stdin; writes one response per line to
-/// stdout. All diagnostics go to stderr — stdout is the protocol channel.
-pub async fn serve_stdio(brain: Brain) -> anyhow::Result<()> {
-    let server = Arc::new(BrainServer::from_brain(brain));
-    let mut reader = BufReader::new(tokio::io::stdin());
-    let mut out = BufWriter::new(tokio::io::stdout());
+/// Shared by the stdio and socket transports. Reads until EOF, writing one
+/// response per line. Returns on EOF or a fatal IO error.
+pub async fn run_session<R, W>(server: Arc<BrainServer>, reader: R, writer: W) -> anyhow::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut reader = BufReader::new(reader);
+    let mut out = BufWriter::new(writer);
     let mut line = String::new();
-
     loop {
         line.clear();
         let n = reader
             .read_line(&mut line)
             .await
-            .map_err(|e| anyhow::anyhow!("stdin read: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("read: {e}"))?;
         if n == 0 {
-            break; // EOF — client closed stdin.
+            break; // EOF — peer closed the stream.
         }
         if line.trim().is_empty() {
             continue;
         }
         let response = match Message::parse(&line) {
             Ok(msg) => server.handle(msg).await,
-            Err((id, code, msg)) => {
-                // Unparseable/invalid request: best-effort error response.
-                Some(error(id.unwrap_or(Value::Null), code, msg))
-            }
+            Err((id, code, msg)) => Some(error(id.unwrap_or(Value::Null), code, msg)),
         };
         if let Some(resp) = response {
             let serialized = serde_json::to_string(&resp)
@@ -448,10 +447,43 @@ pub async fn serve_stdio(brain: Brain) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run the MCP server on stdio (Claude Desktop and other MCP clients).
+///
+/// All diagnostics go to stderr — stdout is the protocol channel.
+pub async fn serve_stdio(brain: Brain) -> anyhow::Result<()> {
+    let server = Arc::new(BrainServer::from_brain(brain));
+    run_session(server, tokio::io::stdin(), tokio::io::stdout()).await
+}
+
 /// Open a Brain at `dir` and serve it over stdio.
 pub async fn serve_stdio_at(dir: &std::path::Path) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
     serve_stdio(brain).await
+}
+
+/// Run the MCP server on a Unix-domain socket (the daemon transport, §4.3).
+///
+/// Connections are served concurrently; each runs its own JSON-RPC session over
+/// the shared `Brain`. The store actor serializes writes (P8 single writer), so
+/// many readers + one writer is safe. A stale socket file is cleared before bind.
+#[cfg(unix)]
+pub async fn serve_socket(brain: Brain, path: &std::path::Path) -> anyhow::Result<()> {
+    use tokio::net::UnixListener;
+    let _ = std::fs::remove_file(path); // clear a stale socket file.
+    let listener =
+        UnixListener::bind(path).map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))?;
+    let server = Arc::new(BrainServer::from_brain(brain));
+    tracing::info!("oxibrain MCP listening on {}", path.display());
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let server = server.clone();
+        tokio::spawn(async move {
+            let (read, write) = stream.into_split();
+            if let Err(e) = run_session(server, read, write).await {
+                tracing::warn!("session ended: {e}");
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -805,5 +837,76 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp["error"]["code"], UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn run_session_round_trips_over_a_byte_stream() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+        // client=a, server=b: a writes → b reads, b writes → a reads.
+        let (mut client, server_side) = duplex(8 * 1024);
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let server = Arc::new(BrainServer::from_brain(brain));
+        let (read_half, write_half) = tokio::io::split(server_side);
+        let _task = tokio::spawn(run_session(server, read_half, write_half));
+
+        // initialize
+        client
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\"}}\n")
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = client.read(&mut buf).await.unwrap();
+        let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
+        assert_eq!(resp["result"]["serverInfo"]["name"], "oxibrain");
+
+        // a second round-trip — tools/list — proves the loop keeps serving.
+        client
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n")
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        let n = client.read(&mut buf).await.unwrap();
+        let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
+        assert!(resp["result"]["tools"].as_array().unwrap().len() >= 7);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn socket_transport_serves_a_real_connection() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixStream;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let sock = dir.path().join("mcp.sock");
+        let sock_for_task = sock.clone();
+        let _task = tokio::spawn(async move {
+            let _ = serve_socket(brain, &sock_for_task).await;
+        });
+
+        // Retry-connect until the listener is bound (up to ~1s).
+        let mut stream = None;
+        for _ in 0..100 {
+            if let Ok(s) = UnixStream::connect(&sock).await {
+                stream = Some(s);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let mut stream = stream.expect("could not connect to MCP socket");
+
+        stream
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        let mut buf = vec![0u8; 1024];
+        let n = stream.read(&mut buf).await.unwrap();
+        let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
+        assert_eq!(resp["id"], 1);
+        assert!(resp.get("result").is_some());
     }
 }

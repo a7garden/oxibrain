@@ -12,4 +12,6 @@
 pub mod protocol;
 pub mod server;
 
-pub use server::{BrainServer, serve_stdio, serve_stdio_at};
+#[cfg(unix)]
+pub use server::serve_socket;
+pub use server::{BrainServer, run_session, serve_stdio, serve_stdio_at};
