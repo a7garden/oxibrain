@@ -5,8 +5,14 @@
 //! share one brain through the single-writer store actor (P8).
 //! `--socket <path> --require-token` gates each connection behind a token
 //! handshake (§11.2). `--http <addr>` serves loopback HTTP.
+//!
+//! `--daemon` writes a PID file to `<dir>/.oxibrain.pid` so external supervisors
+//! (launchd) can manage the process. The binary never forks — backgrounding is
+//! the supervisor's job (§15). All socket/HTTP listeners shut down gracefully on
+//! SIGINT/SIGTERM.
 
 use oxibrain::{Brain, BrainConfig};
+use oxibrain_ports::BrainError;
 use std::path::Path;
 
 pub async fn run(
@@ -14,8 +20,38 @@ pub async fn run(
     socket: Option<std::path::PathBuf>,
     http: Option<String>,
     require_token: bool,
+    daemon: bool,
 ) -> anyhow::Result<()> {
-    let brain = Brain::open(BrainConfig::at(dir)).await?;
+    let brain = match Brain::open(BrainConfig::at(dir)).await {
+        Ok(b) => b,
+        Err(BrainError::Locked { holder }) => {
+            // §4.3: "fails fast with a clear error if a daemon holds the lock,
+            // and prints the command to attach instead."
+            anyhow::bail!(
+                "store is locked — another oxibrain process owns it ({holder}).\n\
+                 If a daemon is already running, connect to it (e.g. via its socket) \
+                 instead of starting a second one.\n\
+                 To start a new daemon, ensure no other oxibrain process is running."
+            );
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // Write the PID file in daemon mode. RAII: removed on drop when `run`
+    // returns (after graceful shutdown or error). The advisory lock inside the
+    // Brain is the real single-writer guard (P8); the PID file is informational.
+    let _pid = if daemon {
+        let pid = oxibrain_mcp::PidFile::acquire(dir)
+            .map_err(|e| anyhow::anyhow!("write PID file: {e}"))?;
+        tracing::info!(
+            "daemon PID {} → {}",
+            std::process::id(),
+            pid.path().display()
+        );
+        Some(pid)
+    } else {
+        None
+    };
 
     if let Some(addr_str) = http {
         let addr: std::net::SocketAddr = addr_str
@@ -42,6 +78,12 @@ pub async fn run(
         None => {
             if require_token {
                 anyhow::bail!("--require-token requires --socket");
+            }
+            if daemon {
+                tracing::warn!(
+                    "--daemon has no effect over stdio (no PID file needed; the \
+                     MCP client manages the process lifecycle)"
+                );
             }
             oxibrain_mcp::serve_stdio(brain).await
         }

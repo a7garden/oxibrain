@@ -651,8 +651,9 @@ impl Brain {
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
-    /// Extract a single episode synchronously (realtime mode). Does NOT use the
-    /// job queue — directly reads, calls LLM, validates, projects. Returns summary.
+    /// Extract a single episode synchronously (realtime mode). Uses the
+    /// configured LLM provider. See [`extract_one_with`](Self::extract_one_with)
+    /// for the variant that takes an explicit provider (e.g. MCP sampling).
     pub async fn extract_one(
         &self,
         space: &str,
@@ -660,6 +661,22 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
         let llm = self.require_llm()?.clone();
+        self.extract_one_with(space, episode_id, config, llm).await
+    }
+
+    /// Extract a single episode synchronously with an explicit LLM provider.
+    ///
+    /// Does NOT use the job queue — directly reads, calls the provided LLM,
+    /// validates, projects. Used by the realtime MCP sampling path (§12.3):
+    /// the `llm` is a [`SamplingLlmPort`](../../oxibrain_mcp/sampling/struct.SamplingLlmPort.html)
+    /// backed by the client's model.
+    pub async fn extract_one_with(
+        &self,
+        space: &str,
+        episode_id: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+        llm: std::sync::Arc<dyn LlmPort>,
+    ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
         let now = self.clock.now();
 
         // 1. Read episode content [reader].

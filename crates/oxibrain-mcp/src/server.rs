@@ -126,9 +126,23 @@ impl BrainServer {
         Ok(())
     }
 
-    /// Handle one JSON-RPC message. Returns a response value for requests,
-    /// `None` for notifications (which expect no response).
+    /// Handle one JSON-RPC message without a sampling session (for HTTP and
+    /// direct unit tests). Equivalent to `handle_with(msg, None)`.
     pub async fn handle(&self, msg: Message) -> Option<Value> {
+        self.handle_with(msg, None).await
+    }
+
+    /// Handle one JSON-RPC message with an optional sampling session.
+    ///
+    /// When `session` is `Some`, tools that need the LLM (e.g. `ingest` with
+    /// `extract: true`) can delegate `complete()` to the client via
+    /// `sampling/createMessage` (§12.3). Returns a response value for requests,
+    /// `None` for notifications.
+    async fn handle_with(
+        &self,
+        msg: Message,
+        session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
+    ) -> Option<Value> {
         match msg.method.as_str() {
             "initialize" => msg
                 .id
@@ -137,7 +151,7 @@ impl BrainServer {
             "ping" => msg.id.map(|id| success(id, json!({}))),
             "tools/list" => msg.id.map(|id| success(id, tool_list())),
             "tools/call" => match msg.id {
-                Some(id) => match self.call_tool(msg.params.as_ref()).await {
+                Some(id) => match self.call_tool(msg.params.as_ref(), session).await {
                     Ok(v) => Some(success(id, v)),
                     Err((code, m)) => Some(error(id, code, m)),
                 },
@@ -168,9 +182,11 @@ impl BrainServer {
         })
     }
 
-    /// Dispatch a `tools/call`. Argument/lookup errors map to JSON-RPC errors;
-    /// tool execution failures map to an MCP `isError` text result.
-    async fn call_tool(&self, params: Option<&Value>) -> Result<Value, (i64, String)> {
+    async fn call_tool(
+        &self,
+        params: Option<&Value>,
+        session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
+    ) -> Result<Value, (i64, String)> {
         let p = params.ok_or((INVALID_PARAMS, "missing 'params'".into()))?;
         let name = p
             .get("name")
@@ -182,7 +198,7 @@ impl BrainServer {
             "search" => self.tool_search(&args).await,
             "recall" => self.tool_recall(&args).await,
             "get_entity" => self.tool_get_entity(&args).await,
-            "ingest" => self.tool_ingest(&args).await,
+            "ingest" => self.tool_ingest(&args, session).await,
             "declare" => self.tool_declare(&args).await,
             "why" => self.tool_why(&args).await,
             "contradictions" => self.tool_contradictions(&args).await,
@@ -237,17 +253,83 @@ impl BrainServer {
         to_json(&beliefs)
     }
 
-    async fn tool_ingest(&self, args: &Value) -> Result<String, ToolErr> {
+    async fn tool_ingest(
+        &self,
+        args: &Value,
+        session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
+    ) -> Result<String, ToolErr> {
         let content = str_arg(args, "content")?;
         let space_id = self.ensure_space(&space_arg(args)).await?;
         let path = str_arg_or(args, "source_path", "mcp");
+        let extract = args
+            .get("extract")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let now = SystemClock.now();
         let id = self
             .brain
             .ingest_note(&space_id, &path, content.to_string(), now)
             .await
             .map_err(ToolErr::run)?;
+
+        if extract {
+            return self.try_sample_extract(&space_id, &id, session).await;
+        }
         Ok(format!("Ingested as episode: {id}"))
+    }
+
+    /// Whether sampling is available for this session. A trusted local channel
+    /// (scope == None, e.g. stdio with Claude Desktop) gets sampling by default;
+    /// an authenticated session requires the `Sample` capability (§12.3).
+    fn sampling_available(&self) -> bool {
+        match &self.scope {
+            None => true,
+            Some(s) => s.caps.contains(&Capability::Sample),
+        }
+    }
+
+    /// Attempt realtime extraction via client sampling (§12.3). If sampling is
+    /// not available (no session, no `Sample` cap), returns a skip message —
+    /// the episode is still ingested, just not extracted yet.
+    async fn try_sample_extract(
+        &self,
+        space_id: &str,
+        episode_id: &str,
+        session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
+    ) -> Result<String, ToolErr> {
+        let Some(handle) = session else {
+            return Ok(format!(
+                "Ingested as episode: {episode_id} (extraction skipped: no sampling session)"
+            ));
+        };
+        if !self.sampling_available() {
+            return Ok(format!(
+                "Ingested as episode: {episode_id} \
+                 (extraction skipped: token lacks Sample capability)"
+            ));
+        }
+
+        let llm = std::sync::Arc::new(crate::sampling::SamplingLlmPort::new(handle.clone()));
+        let config = oxibrain_core::extraction::ExtractorConfig {
+            model_id: "mcp-sampling".into(),
+            prompt_version: 1,
+            registry_major: oxibrain_core::registry::CORE_V1_MAJOR,
+            mechanism: oxibrain_core::extraction::ExtractMechanism::ToolCall,
+            max_tokens: 8192,
+        };
+        match self
+            .brain
+            .extract_one_with(space_id, episode_id, &config, llm)
+            .await
+        {
+            Ok(summary) => Ok(format!(
+                "Ingested + extracted: {episode_id} ({} extracted, {} quarantined)",
+                summary.extracted, summary.quarantined
+            )),
+            Err(e) => Ok(format!(
+                "Ingested as episode: {episode_id} (extraction failed: {e})"
+            )),
+        }
     }
 
     async fn tool_declare(&self, args: &Value) -> Result<String, ToolErr> {
@@ -378,13 +460,14 @@ fn tool_list() -> Value {
                     "required": ["entity_id"]
                 })),
             tool("ingest",
-                "Ingest text content as a new Primary episode. Returns the episode ID. Extraction is not triggered by this call.",
+                "Ingest text content as a new Primary episode. Set extract:true to trigger realtime extraction via client sampling (§12.3) — the server asks the client's model to extract claims. Requires the Sample capability on authenticated sessions.",
                 json!({
                     "type": "object",
                     "properties": {
                         "content": { "type": "string", "description": "The text to ingest." },
                         "space": { "type": "string", "description": "Space name (default: personal)." },
-                        "source_path": { "type": "string", "description": "Optional source label, e.g. a file path (default: mcp)." }
+                        "source_path": { "type": "string", "description": "Optional source label, e.g. a file path (default: mcp)." },
+                        "extract": { "type": "boolean", "description": "If true, extract claims via client sampling immediately (default: false)." }
                     },
                     "required": ["content"]
                 })),
@@ -432,23 +515,54 @@ fn tool(name: &str, description: &str, input_schema: Value) -> Value {
 /// one response per line. Returns on EOF or a fatal IO error.
 pub async fn run_session<R, W>(server: Arc<BrainServer>, reader: R, writer: W) -> anyhow::Result<()>
 where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
 {
     session_loop(server, BufReader::new(reader), BufWriter::new(writer)).await
 }
 
-/// The framing loop, taking pre-wrapped reader/writer. Shared by `run_session`
-/// and `auth_session` (which consumes the first line for the handshake).
+/// The bidirectional framing loop. Shared by `run_session` and `auth_session`.
+///
+/// Unlike a simple read→respond loop, this can send **server-initiated**
+/// requests (e.g. `sampling/createMessage`, §12.3) and await the client's
+/// response on the same stream. Architecture:
+///
+/// - A **write task** owns the writer and drains an outbound channel
+///   (`UnboundedReceiver<Value>`). Every message the server sends — responses
+///   to client requests AND server-initiated requests — goes through it.
+/// - The **read loop** owns the reader. For each line:
+///   - If it's a JSON-RPC *response* (no `method`, has matching `id`): resolve
+///     the pending `oneshot` so the waiting handler completes.
+///   - Otherwise it's a client request: dispatch in a spawned task (so the read
+///     loop stays free to read sampling responses), sending the response (if
+///     any) through the outbound channel.
 async fn session_loop<R, W>(
     server: Arc<BrainServer>,
     mut reader: BufReader<R>,
-    mut out: BufWriter<W>,
+    out: BufWriter<W>,
 ) -> anyhow::Result<()>
 where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
 {
+    use tokio::sync::mpsc;
+
+    let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Value>();
+    let session = Arc::new(crate::sampling::SessionHandle::new(outbound_tx.clone()));
+
+    // Write task: drain outbound → write to stream.
+    let write_task = tokio::spawn(async move {
+        let mut out = out;
+        while let Some(msg) = outbound_rx.recv().await {
+            let serialized =
+                serde_json::to_string(&msg).map_err(|e| anyhow::anyhow!("serialize: {e}"))?;
+            out.write_all(serialized.as_bytes()).await?;
+            out.write_all(b"\n").await?;
+            out.flush().await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+
     let mut line = String::new();
     loop {
         line.clear();
@@ -462,17 +576,54 @@ where
         if line.trim().is_empty() {
             continue;
         }
-        let response = match Message::parse(&line) {
-            Ok(msg) => server.handle(msg).await,
-            Err((id, code, msg)) => Some(error(id.unwrap_or(Value::Null), code, msg)),
-        };
-        if let Some(resp) = response {
-            let serialized = serde_json::to_string(&resp)
-                .map_err(|e| anyhow::anyhow!("serialize response: {e}"))?;
-            out.write_all(serialized.as_bytes()).await?;
-            out.write_all(b"\n").await?;
-            out.flush().await?;
+
+        // Is this a response to a server-initiated request?
+        if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            if value.get("method").is_none() && value.get("id").is_some() {
+                let id = value["id"].as_i64().unwrap_or(-1);
+                if let Ok(mut guard) = session.pending.lock() {
+                    if let Some(sender) = guard.remove(&id) {
+                        let _ = sender.send(value);
+                        continue;
+                    }
+                }
+                // Unsolicited response — ignore, fall through to request parsing.
+                continue;
+            }
         }
+
+        // Client request or notification: dispatch in a task.
+        match Message::parse(&line) {
+            Ok(msg) => {
+                let server = server.clone();
+                let session = session.clone();
+                let outbound = outbound_tx.clone();
+                tokio::spawn(async move {
+                    if let Some(resp) = server.handle_with(msg, Some(&session)).await {
+                        let _ = outbound.send(resp);
+                    }
+                });
+            }
+            Err((id, code, msg)) => {
+                let _ = outbound_tx.send(error(id.unwrap_or(Value::Null), code, msg));
+            }
+        }
+    }
+
+    // Drop our senders so the write task's recv() can return None — but
+    // spawned dispatch tasks may still hold clones. `session` (which owns an
+    // outbound clone via SessionHandle) MUST be dropped here or the channel
+    // never closes and the write task hangs forever on disconnect.
+    drop(outbound_tx);
+    drop(session);
+    // Give in-flight dispatch tasks a brief grace period to finish and drop
+    // their own outbound clones. If one is stuck on a sampling round-trip
+    // (max 120s timeout), don't block the session from closing.
+    match tokio::time::timeout(std::time::Duration::from_secs(5), write_task).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(e))) => tracing::debug!("write task ended: {e}"),
+        Ok(Err(e)) => tracing::debug!("write task join error: {e}"),
+        Err(_) => tracing::debug!("write task did not exit within 5s, detaching"),
     }
     Ok(())
 }
@@ -504,16 +655,27 @@ pub async fn serve_socket(brain: Brain, path: &std::path::Path) -> anyhow::Resul
         UnixListener::bind(path).map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))?;
     let server = Arc::new(BrainServer::from_brain(brain));
     tracing::info!("oxibrain MCP listening on {}", path.display());
+    let shutdown = crate::daemon::shutdown_signal();
+    tokio::pin!(shutdown);
     loop {
-        let (stream, _) = listener.accept().await?;
-        let server = server.clone();
-        tokio::spawn(async move {
-            let (read, write) = stream.into_split();
-            if let Err(e) = run_session(server, read, write).await {
-                tracing::warn!("session ended: {e}");
+        tokio::select! {
+            accept = listener.accept() => {
+                let (stream, _) = accept?;
+                let server = server.clone();
+                tokio::spawn(async move {
+                    let (read, write) = stream.into_split();
+                    if let Err(e) = run_session(server, read, write).await {
+                        tracing::warn!("session ended: {e}");
+                    }
+                });
             }
-        });
+            _ = &mut shutdown => {
+                tracing::info!("shutdown signal received, stopping socket listener");
+                break;
+            }
+        }
     }
+    Ok(())
 }
 
 /// Run the MCP server on a Unix-domain socket with token authentication.
@@ -534,16 +696,27 @@ pub async fn serve_socket_auth(brain: Brain, path: &std::path::Path) -> anyhow::
         UnixListener::bind(path).map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))?;
     let brain = Arc::new(brain);
     tracing::info!("oxibrain MCP (auth) listening on {}", path.display());
+    let shutdown = crate::daemon::shutdown_signal();
+    tokio::pin!(shutdown);
     loop {
-        let (stream, _) = listener.accept().await?;
-        let brain = brain.clone();
-        tokio::spawn(async move {
-            let (read, write) = stream.into_split();
-            if let Err(e) = auth_session(brain, read, write).await {
-                tracing::warn!("auth session ended: {e}");
+        tokio::select! {
+            accept = listener.accept() => {
+                let (stream, _) = accept?;
+                let brain = brain.clone();
+                tokio::spawn(async move {
+                    let (read, write) = stream.into_split();
+                    if let Err(e) = auth_session(brain, read, write).await {
+                        tracing::warn!("auth session ended: {e}");
+                    }
+                });
             }
-        });
+            _ = &mut shutdown => {
+                tracing::info!("shutdown signal received, stopping auth socket listener");
+                break;
+            }
+        }
     }
+    Ok(())
 }
 
 /// Authenticate one connection, then run a scoped session.
@@ -554,8 +727,8 @@ pub async fn serve_socket_auth(brain: Brain, path: &std::path::Path) -> anyhow::
 #[cfg(unix)]
 async fn auth_session<R, W>(brain: Arc<Brain>, reader: R, writer: W) -> anyhow::Result<()>
 where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
 {
     let mut reader = BufReader::new(reader);
     let mut out = BufWriter::new(writer);
@@ -647,15 +820,26 @@ pub async fn serve_http(brain: Brain, addr: std::net::SocketAddr) -> anyhow::Res
         .map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
     let server = Arc::new(BrainServer::from_brain(brain));
     tracing::info!("oxibrain MCP (HTTP) listening on http://{addr}");
+    let shutdown = crate::daemon::shutdown_signal();
+    tokio::pin!(shutdown);
     loop {
-        let (stream, _) = listener.accept().await?;
-        let server = server.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_http(server, stream).await {
-                tracing::debug!("HTTP session: {e}");
+        tokio::select! {
+            accept = listener.accept() => {
+                let (stream, _) = accept?;
+                let server = server.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_http(server, stream).await {
+                        tracing::debug!("HTTP session: {e}");
+                    }
+                });
             }
-        });
+            _ = &mut shutdown => {
+                tracing::info!("shutdown signal received, stopping HTTP listener");
+                break;
+            }
+        }
     }
+    Ok(())
 }
 
 /// Handle one HTTP connection: parse a POST body as JSON-RPC, dispatch, respond.
@@ -1138,6 +1322,119 @@ mod tests {
         let n = client.read(&mut buf).await.unwrap();
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert!(resp["result"]["tools"].as_array().unwrap().len() >= 7);
+    }
+
+    #[tokio::test]
+    async fn sampling_round_trip_through_bidirectional_session() {
+        // End-to-end test of the bidirectional session loop: client sends
+        // ingest+extract, server sends sampling/createMessage back, client
+        // responds with a model completion, extraction runs.
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
+
+        let (client, server_side) = duplex(64 * 1024);
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let server = Arc::new(BrainServer::from_brain(brain));
+        let (read_half, write_half) = tokio::io::split(server_side);
+        let _task = tokio::spawn(run_session(server, read_half, write_half));
+
+        let (client_read, mut client_write) = tokio::io::split(client);
+        let mut client_read = BufReader::new(client_read);
+
+        // 1. Client sends ingest with extract:true.
+        let ingest_req = serde_json::to_string(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "ingest", "arguments": {
+                "content": "Alice works at Acme Corp.",
+                "extract": true, "space": "t"
+            }}
+        }))
+        .unwrap();
+        client_write.write_all(ingest_req.as_bytes()).await.unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        client_write.flush().await.unwrap();
+
+        // 2. Server sends sampling/createMessage (a server-initiated request).
+        let mut line = String::new();
+        client_read.read_line(&mut line).await.unwrap();
+        assert!(!line.is_empty(), "should receive sampling request");
+        let sampling_req: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(sampling_req["method"], "sampling/createMessage");
+        let sampling_id = sampling_req["id"].as_i64().unwrap();
+        assert!(
+            sampling_req["params"]["messages"][0]["content"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Alice works at Acme Corp."),
+            "episode content should reach the client's model"
+        );
+
+        // 3. Client responds with a model completion (empty claims).
+        let claims_text = serde_json::to_string(&json!({"claims":[]})).unwrap();
+        let sampling_resp = serde_json::to_string(&json!({
+            "jsonrpc": "2.0", "id": sampling_id,
+            "result": {
+                "role": "assistant",
+                "content": {"type": "text", "text": claims_text},
+                "model": "test-model"
+            }
+        }))
+        .unwrap();
+        client_write
+            .write_all(sampling_resp.as_bytes())
+            .await
+            .unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        client_write.flush().await.unwrap();
+
+        // 4. Read the final ingest tool response.
+        line.clear();
+        client_read.read_line(&mut line).await.unwrap();
+        let ingest_resp: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(ingest_resp["id"], 1, "matches original tools/call id");
+        let text = ingest_resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("expected result, got: {ingest_resp}"));
+        assert!(
+            text.contains("Ingested + extracted"),
+            "sampling round-trip should complete extraction, got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_loop_returns_on_client_disconnect() {
+        // Regression: the bidirectional session loop must return Ok(()) when the
+        // client disconnects — not hang forever. Before the `drop(session)` fix,
+        // the SessionHandle held an outbound_tx clone that kept the write task's
+        // recv() alive permanently. This test awaits the JoinHandle (not _task)
+        // so a hang fails the test instead of being masked by runtime teardown.
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+
+        let (mut client, server_side) = duplex(8 * 1024);
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let server = Arc::new(BrainServer::from_brain(brain));
+        let (read_half, write_half) = tokio::io::split(server_side);
+        let task = tokio::spawn(run_session(server, read_half, write_half));
+
+        // Exchange one request so the dispatch path runs.
+        client
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        let mut buf = vec![0u8; 256];
+        let _ = client.read(&mut buf).await.unwrap();
+
+        // Close the client → server reads EOF → session_loop must return.
+        drop(client);
+        let result = tokio::time::timeout(Duration::from_secs(3), task).await;
+        assert!(
+            result.is_ok(),
+            "session_loop should exit on client disconnect, not hang"
+        );
+        assert!(result.unwrap().unwrap().is_ok());
     }
 
     #[cfg(unix)]

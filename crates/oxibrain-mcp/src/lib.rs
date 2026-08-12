@@ -9,9 +9,12 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod daemon;
 pub mod protocol;
+pub mod sampling;
 pub mod server;
 
+pub use daemon::{PidFile, shutdown_signal};
 #[cfg(unix)]
 pub use server::serve_socket;
 #[cfg(unix)]

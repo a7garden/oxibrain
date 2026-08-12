@@ -37,7 +37,9 @@ async fn main() -> anyhow::Result<()> {
         } => cmd::backup::run_backup(&dir, no_projection, no_cache, out).await,
         Command::Restore { backup } => cmd::backup::run_restore(&dir, backup).await,
         Command::Ask { question, space } => cmd::ask::run(&dir, &question, &space).await,
-        Command::EntityShow { id, space } => cmd::entity_show::run(&dir, &id, &space).await,
+        Command::Entity { command } => match command {
+            cli::EntityCmd::Show { id, space } => cmd::entity_show::run(&dir, &id, &space).await,
+        },
         Command::Timeline { entity_id, space } => {
             cmd::timeline::run(&dir, &entity_id, &space).await
         }
@@ -55,17 +57,22 @@ async fn main() -> anyhow::Result<()> {
         } => cmd::redact::run(&dir, &target, &space, dry_run, &reason).await,
         Command::Export { out } => cmd::export_cmd::run(&dir, out).await,
         Command::Import { file } => cmd::import_cmd::run(&dir, &file).await,
-        Command::TokenIssue { space, caps, label } => {
-            cmd::token::run_issue(&dir, &space, &caps, label.as_deref()).await
-        }
-        Command::TokenList => cmd::token::run_list(&dir).await,
-        Command::TokenRevoke { id } => cmd::token::run_revoke(&dir, &id).await,
+        Command::Token { command } => match command {
+            cli::TokenCmd::Issue { space, caps, label } => {
+                cmd::token::run_issue(&dir, &space, &caps, label.as_deref()).await
+            }
+            cli::TokenCmd::List => cmd::token::run_list(&dir).await,
+            cli::TokenCmd::Revoke { id } => cmd::token::run_revoke(&dir, &id).await,
+        },
         Command::Serve {
             socket,
             http,
             require_token,
-        } => cmd::serve::run(&dir, socket, http, require_token).await,
-        Command::PredicateList => cmd::predicate::run(),
+            daemon,
+        } => cmd::serve::run(&dir, socket, http, require_token, daemon).await,
+        Command::Predicate { command } => match command {
+            cli::PredicateCmd::List => cmd::predicate::run(),
+        },
         Command::Extract { episode_id, space } => {
             cmd::extract::run(&dir, &episode_id, &space).await
         }
