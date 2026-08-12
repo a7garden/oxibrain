@@ -14,7 +14,9 @@ use oxibrain_core::retrieval::{Query, QueryMode};
 use oxibrain_ports::{ClockPort, SystemClock};
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{
+    AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
+};
 
 /// MCP protocol version advertised to clients that do not request 2026-07-28.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -51,6 +53,22 @@ impl BrainServer {
     pub fn from_brain_scoped(brain: Brain, scope: Scope) -> Self {
         Self {
             brain: Arc::new(brain),
+            scope: Some(scope),
+        }
+    }
+
+    /// Wrap a shared `Arc<Brain>` as a trusted local server (no scope).
+    ///
+    /// Used by authenticated transports that share one brain across many
+    /// connections, each resolved to its own scope.
+    pub fn from_arc(brain: Arc<Brain>) -> Self {
+        Self { brain, scope: None }
+    }
+
+    /// Wrap a shared `Arc<Brain>` with an authorization scope.
+    pub fn from_arc_scoped(brain: Arc<Brain>, scope: Scope) -> Self {
+        Self {
+            brain,
             scope: Some(scope),
         }
     }
@@ -410,15 +428,27 @@ fn tool(name: &str, description: &str, input_schema: Value) -> Value {
 
 /// Run one MCP session over a read/write pair: newline-delimited JSON-RPC.
 ///
-/// Shared by the stdio and socket transports. Reads until EOF, writing one
-/// response per line. Returns on EOF or a fatal IO error.
+/// Shared by the stdio, socket, and HTTP transports. Reads until EOF, writing
+/// one response per line. Returns on EOF or a fatal IO error.
 pub async fn run_session<R, W>(server: Arc<BrainServer>, reader: R, writer: W) -> anyhow::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut reader = BufReader::new(reader);
-    let mut out = BufWriter::new(writer);
+    session_loop(server, BufReader::new(reader), BufWriter::new(writer)).await
+}
+
+/// The framing loop, taking pre-wrapped reader/writer. Shared by `run_session`
+/// and `auth_session` (which consumes the first line for the handshake).
+async fn session_loop<R, W>(
+    server: Arc<BrainServer>,
+    mut reader: BufReader<R>,
+    mut out: BufWriter<W>,
+) -> anyhow::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let mut line = String::new();
     loop {
         line.clear();
@@ -484,6 +514,244 @@ pub async fn serve_socket(brain: Brain, path: &std::path::Path) -> anyhow::Resul
             }
         });
     }
+}
+
+/// Run the MCP server on a Unix-domain socket with token authentication.
+///
+/// Each connection must send a JSON-RPC `auth` request as its first message:
+/// `{"jsonrpc":"2.0","id":1,"method":"auth","params":{"token":"<secret>"}}`.
+/// The server verifies the token against the store and resolves a `Scope`.
+/// On success, a scoped `BrainServer` serves the rest of the session. On
+/// failure (invalid/expired/revoked token), the connection is refused.
+///
+/// This is the authenticated daemon transport (DESIGN §11.2): the scope gate
+/// in `BrainServer::enforce_scope` now has a real scope to enforce.
+#[cfg(unix)]
+pub async fn serve_socket_auth(brain: Brain, path: &std::path::Path) -> anyhow::Result<()> {
+    use tokio::net::UnixListener;
+    let _ = std::fs::remove_file(path);
+    let listener =
+        UnixListener::bind(path).map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))?;
+    let brain = Arc::new(brain);
+    tracing::info!("oxibrain MCP (auth) listening on {}", path.display());
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let brain = brain.clone();
+        tokio::spawn(async move {
+            let (read, write) = stream.into_split();
+            if let Err(e) = auth_session(brain, read, write).await {
+                tracing::warn!("auth session ended: {e}");
+            }
+        });
+    }
+}
+
+/// Authenticate one connection, then run a scoped session.
+///
+/// Reads the first line as an `auth` request. On success, proceeds to the
+/// normal session loop with the resolved scope. On failure, responds with an
+/// `UNAUTHORIZED` error and closes.
+#[cfg(unix)]
+async fn auth_session<R, W>(brain: Arc<Brain>, reader: R, writer: W) -> anyhow::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut reader = BufReader::new(reader);
+    let mut out = BufWriter::new(writer);
+
+    let mut line = String::new();
+    let n = reader
+        .read_line(&mut line)
+        .await
+        .map_err(|e| anyhow::anyhow!("auth read: {e}"))?;
+    if n == 0 {
+        return Ok(()); // client disconnected before sending auth.
+    }
+
+    let id_for_response = Message::parse(&line)
+        .ok()
+        .and_then(|m| m.id)
+        .unwrap_or(Value::Null);
+
+    // Extract the token from `auth` params.
+    let token = serde_json::from_str::<Value>(&line).ok().and_then(|v| {
+        v.get("method")
+            .and_then(|m| m.as_str())
+            .filter(|m| m == &"auth")
+            .and_then(|_| v.get("params")?.get("token")?.as_str().map(String::from))
+    });
+
+    let server = match token {
+        Some(token) => match brain.verify_token(&token).await {
+            Ok(Some(scope)) => {
+                write_line(
+                    &mut out,
+                    &success(id_for_response, json!({"authenticated": true})),
+                )
+                .await?;
+                Arc::new(BrainServer::from_arc_scoped(brain, scope))
+            }
+            Ok(None) => {
+                write_line(
+                    &mut out,
+                    &error(id_for_response, UNAUTHORIZED, "invalid or revoked token"),
+                )
+                .await?;
+                return Ok(());
+            }
+            Err(e) => {
+                write_line(
+                    &mut out,
+                    &error(id_for_response, INTERNAL_ERROR, format!("verify: {e}")),
+                )
+                .await?;
+                return Ok(());
+            }
+        },
+        None => {
+            write_line(
+                &mut out,
+                &error(
+                    id_for_response,
+                    INVALID_PARAMS,
+                    "first message must be an auth request with a token",
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    session_loop(server, reader, out).await
+}
+
+/// Run the MCP server over loopback HTTP (DESIGN §11.6).
+///
+/// Each HTTP POST body is a JSON-RPC message; the response body is the
+/// JSON-RPC response. This is the simplest HTTP mapping of newline-delimited
+/// JSON-RPC — one request per connection, no streaming.
+///
+/// Loopback-only by default. A non-loopback bind is refused (§11.6: requires
+/// TLS, which is out of scope for the in-house server; use a reverse proxy).
+pub async fn serve_http(brain: Brain, addr: std::net::SocketAddr) -> anyhow::Result<()> {
+    if !addr.ip().is_loopback() {
+        anyhow::bail!(
+            "HTTP transport is loopback-only (DESIGN §11.6). \
+             Use a TLS-terminating reverse proxy for remote access."
+        );
+    }
+    use tokio::net::TcpListener;
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
+    let server = Arc::new(BrainServer::from_brain(brain));
+    tracing::info!("oxibrain MCP (HTTP) listening on http://{addr}");
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let server = server.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_http(server, stream).await {
+                tracing::debug!("HTTP session: {e}");
+            }
+        });
+    }
+}
+
+/// Handle one HTTP connection: parse a POST body as JSON-RPC, dispatch, respond.
+async fn handle_http(
+    server: Arc<BrainServer>,
+    stream: tokio::net::TcpStream,
+) -> anyhow::Result<()> {
+    let mut reader = BufReader::new(stream);
+
+    // Read the request line + headers.
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).await?;
+    let method = request_line.split_whitespace().next().unwrap_or("");
+    if method != "POST" {
+        // Minimal 405 for non-POST.
+        let body =
+            br#"{"jsonrpc":"2.0","error":{"code":-32600,"message":"only POST is supported"}}"#;
+        write_http_response(&mut reader, 405, "Method Not Allowed", body).await?;
+        return Ok(());
+    }
+
+    let mut content_length = 0usize;
+    let mut path = String::new();
+    loop {
+        let mut header = String::new();
+        let n = reader.read_line(&mut header).await?;
+        if n == 0 || header.trim().is_empty() {
+            break;
+        }
+        if path.is_empty() {
+            if let Some(p) = request_line.split_whitespace().nth(1) {
+                path = p.to_string();
+            }
+        }
+        if let Some(rest) = header.strip_prefix("content-length:") {
+            content_length = rest.trim().parse().unwrap_or(0);
+        } else if let Some(rest) = header.strip_prefix("Content-Length:") {
+            content_length = rest.trim().parse().unwrap_or(0);
+        }
+    }
+
+    let _ = path; // path ignored — single endpoint.
+
+    // Read the body.
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 {
+        reader.read_exact(&mut body).await?;
+    }
+    let body_str = String::from_utf8_lossy(&body);
+
+    // Parse and dispatch.
+    let response = match Message::parse(&body_str) {
+        Ok(msg) => server.handle(msg).await,
+        Err((id, code, msg)) => Some(error(id.unwrap_or(Value::Null), code, msg)),
+    };
+
+    let response_json = match response {
+        Some(v) => serde_json::to_string(&v)?,
+        None => serde_json::to_string(&json!({"jsonrpc":"2.0","result":{}}))?,
+    };
+
+    write_http_response(&mut reader, 200, "OK", response_json.as_bytes()).await
+}
+
+/// Write a minimal HTTP response. `reader` is the TcpStream (we write back
+/// through the underlying buffer).
+async fn write_http_response(
+    stream: &mut tokio::io::BufReader<tokio::net::TcpStream>,
+    status: u16,
+    reason: &str,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let header = format!(
+        "HTTP/1.1 {status} {reason}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n",
+        body.len()
+    );
+    stream.get_mut().write_all(header.as_bytes()).await?;
+    stream.get_mut().write_all(body).await?;
+    stream.get_mut().flush().await?;
+    Ok(())
+}
+
+/// Serialize a JSON value + newline to a BufWriter.
+async fn write_line<W: AsyncWrite + Unpin>(
+    out: &mut BufWriter<W>,
+    value: &Value,
+) -> anyhow::Result<()> {
+    let s = serde_json::to_string(value)?;
+    out.write_all(s.as_bytes()).await?;
+    out.write_all(b"\n").await?;
+    out.flush().await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -908,5 +1176,155 @@ mod tests {
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert_eq!(resp["id"], 1);
         assert!(resp.get("result").is_some());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn socket_auth_valid_token_then_tool_call() {
+        use oxibrain::{Capability, Scope};
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixStream;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let space_id = brain.ensure_space("t").await.unwrap();
+
+        // Issue a token with Read + Ingest.
+        let scope = Scope {
+            spaces: vec![space_id],
+            caps: [Capability::Read, Capability::Ingest].into_iter().collect(),
+            ..Default::default()
+        };
+        let (_info, secret) = brain.issue_token(&scope, "test", None).await.unwrap();
+
+        let sock = dir.path().join("auth.sock");
+        let sock_task = dir.path().join("auth.sock");
+        let _task = tokio::spawn(async move {
+            let _ = serve_socket_auth(brain, &sock_task).await;
+        });
+
+        // Wait for listener.
+        let mut stream = None;
+        for _ in 0..100 {
+            if let Ok(s) = UnixStream::connect(&sock).await {
+                stream = Some(s);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let mut stream = stream.expect("connect to auth socket");
+
+        // Send auth.
+        let auth = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"auth\",\"params\":{{\"token\":\"{secret}\"}}}}\n"
+        );
+        stream.write_all(auth.as_bytes()).await.unwrap();
+        stream.flush().await.unwrap();
+
+        let mut buf = vec![0u8; 4096];
+        let n = stream.read(&mut buf).await.unwrap();
+        let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
+        assert_eq!(resp["result"]["authenticated"], true);
+
+        // Now call contradictions (Read cap).
+        stream
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"contradictions\",\"arguments\":{\"space\":\"t\"}}}\n")
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        let n = stream.read(&mut buf).await.unwrap();
+        let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
+        assert!(resp.get("result").is_some(), "read tool should succeed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn socket_auth_invalid_token_refused() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixStream;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let sock = dir.path().join("bad.sock");
+        let sock_task = dir.path().join("bad.sock");
+        let _task = tokio::spawn(async move {
+            let _ = serve_socket_auth(brain, &sock_task).await;
+        });
+
+        let mut stream = None;
+        for _ in 0..100 {
+            if let Ok(s) = UnixStream::connect(&sock).await {
+                stream = Some(s);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let mut stream = stream.expect("connect to auth socket");
+
+        // Send bad token.
+        stream
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"auth\",\"params\":{\"token\":\"bogus\"}}\n")
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let mut buf = vec![0u8; 4096];
+        let n = stream.read(&mut buf).await.unwrap();
+        let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
+        assert_eq!(resp["error"]["code"], UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn http_transport_serves_a_jsonrpc_request() {
+        use std::time::Duration;
+        use tokio::net::TcpStream;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let addr: std::net::SocketAddr = "127.0.0.1:18099".parse().unwrap();
+        let _task = tokio::spawn(async move {
+            let _ = serve_http(brain, addr).await;
+        });
+
+        // Wait for listener.
+        let mut stream = None;
+        for _ in 0..100 {
+            if let Ok(s) = TcpStream::connect("127.0.0.1:18099").await {
+                stream = Some(s);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let mut stream = stream.expect("connect to HTTP server");
+
+        // Send an HTTP POST with a JSON-RPC ping.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let request = format!(
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        stream.flush().await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(response_str.contains("200 OK"), "got: {response_str}");
+        assert!(response_str.contains("\"id\":1"), "got: {response_str}");
+        assert!(response_str.contains("\"result\""), "got: {response_str}");
+    }
+
+    #[tokio::test]
+    async fn http_transport_rejects_non_loopback() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let addr: std::net::SocketAddr = "0.0.0.0:8080".parse().unwrap();
+        let result = serve_http(brain, addr).await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("loopback"), "got: {msg}");
     }
 }

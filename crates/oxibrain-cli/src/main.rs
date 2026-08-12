@@ -60,11 +60,16 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::TokenList => cmd::token::run_list(&dir).await,
         Command::TokenRevoke { id } => cmd::token::run_revoke(&dir, &id).await,
-        Command::Serve { socket } => cmd::serve::run(&dir, socket).await,
+        Command::Serve {
+            socket,
+            http,
+            require_token,
+        } => cmd::serve::run(&dir, socket, http, require_token).await,
         Command::PredicateList => cmd::predicate::run(),
         Command::Extract { episode_id, space } => {
             cmd::extract::run(&dir, &episode_id, &space).await
         }
         Command::Reextract { space } => cmd::reextract::run(&dir, &space).await,
+        Command::Eval { suite } => cmd::eval::run(&suite).await,
     }
 }

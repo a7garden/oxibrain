@@ -1168,4 +1168,30 @@ impl Brain {
         }
         Ok(count)
     }
+
+    /// Extract all (predicate, subject_surface, object_surface) triples from a
+    /// space's current projection. Used by the eval suite and CLI `eval` command.
+    pub async fn debug_triples(
+        &self,
+        space: &str,
+    ) -> Result<Vec<oxibrain_core::eval::ExtractedTriple>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::query::debug_triples(conn, &space))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        .map(|triples| {
+            triples
+                .into_iter()
+                .map(|(p, s, o)| oxibrain_core::eval::ExtractedTriple {
+                    predicate: p,
+                    subject_surface: s,
+                    object_surface: o,
+                })
+                .collect()
+        })
+    }
 }

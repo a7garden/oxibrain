@@ -3,6 +3,7 @@ pub mod backup;
 pub mod contradictions;
 pub mod doctor;
 pub mod entity_show;
+pub mod eval;
 pub mod export_cmd;
 pub mod extract;
 pub mod import_cmd;

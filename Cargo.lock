@@ -908,18 +908,25 @@ dependencies = [
  "oxibrain-llm-http",
  "oxibrain-mcp",
  "oxibrain-ports",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
 ]
 
 [[package]]
-name = "oxibrain-connectors"
+name = "oxibrain-client"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "oxibrain",
+ "oxibrain-mcp",
+ "oxibrain-ports",
+ "serde",
+ "serde_json",
  "tempfile",
- "tracing",
- "walkdir",
+ "tokio",
 ]
 
 [[package]]

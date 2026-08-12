@@ -470,3 +470,42 @@ pub fn resolve_entity_id(
         Err(e) => Err(sql_err(e)),
     }
 }
+
+/// Extract all (predicate, subject_surface, object_surface) triples from a
+/// space's current projection. Used by the eval suite and CLI `eval` command.
+///
+/// For entity objects, the surface comes from the object mention. For literal
+/// objects, it is parsed from the statement's `object_literal` JSON `value`.
+pub fn debug_triples(
+    conn: &Connection,
+    space: &str,
+) -> Result<Vec<(String, String, String)>, BrainError> {
+    let mut stmt_q = conn
+        .prepare(
+            "SELECT s.predicate, subj.surface, obj.surface, s.object_literal
+             FROM assertions a
+             JOIN statements s ON a.statement_id = s.id
+             JOIN mentions subj ON subj.assertion_id = a.id AND subj.role = 'subject'
+             LEFT JOIN mentions obj ON obj.assertion_id = a.id AND obj.role = 'object'
+             WHERE s.space_id = ?1",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt_q
+        .query_map(params![space], |r| {
+            let predicate: String = r.get(0)?;
+            let subject: String = r.get(1).unwrap_or_default();
+            let object_mention: Option<String> = r.get(2).ok();
+            let object_literal: Option<String> = r.get(3).ok();
+
+            let object_surface = object_mention.unwrap_or_else(|| {
+                object_literal
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                    .and_then(|v| v.get("value").and_then(|v| v.as_str()).map(String::from))
+                    .unwrap_or_default()
+            });
+            Ok((predicate, subject, object_surface))
+        })
+        .map_err(sql_err)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
+}

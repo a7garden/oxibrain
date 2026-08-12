@@ -113,6 +113,12 @@ pub enum Command {
         /// Listen on a Unix-domain socket path instead of stdio.
         #[arg(long)]
         socket: Option<PathBuf>,
+        /// Listen on loopback HTTP (e.g. `127.0.0.1:8080`) instead of stdio.
+        #[arg(long)]
+        http: Option<String>,
+        /// Require token authentication on socket connections (DESIGN §11.2).
+        #[arg(long)]
+        require_token: bool,
     },
     /// List predicates in the core/v1 registry.
     PredicateList,
@@ -127,5 +133,12 @@ pub enum Command {
     Reextract {
         #[arg(long, default_value = "personal")]
         space: String,
+    },
+
+    /// Run the extraction evaluation suite (DESIGN §14.2).
+    Eval {
+        /// Suite: `fast` (fixture-replayed, no network) or `full` (live provider).
+        #[arg(long, default_value = "fast")]
+        suite: String,
     },
 }
