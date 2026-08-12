@@ -12,37 +12,12 @@ use sha2::{Digest, Sha256};
 
 // ── Token generation ────────────────────────────────────────────────────
 
-/// Generate a random 32-byte token secret, hex-encoded with `obt_` prefix.
+/// Generate a cryptographically secure 32-byte token secret, hex-encoded
+/// with `obt_` prefix. Uses `getrandom` (OS CSPRNG) — never a non-cryptographic
+/// hash.
 fn generate_secret() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-
-    // Use the OS-provided entropy in RandomState (two u64s per hasher) plus
-    // the current nanosecond timestamp to produce 32 bytes of high-quality
-    // randomness without a `rand` dependency.
     let mut bytes = [0u8; 32];
-    let s1 = RandomState::new();
-    let mut h1 = s1.build_hasher();
-    h1.write_u64(0xDEAD_BEEF_CAFE_BABE);
-    let h1v = h1.finish();
-
-    let s2 = RandomState::new();
-    let mut h2 = s2.build_hasher();
-    h2.write_u64(0x0BAD_F00D_F00D_F00D);
-    let h2v = h2.finish();
-
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-
-    // Mix entropy sources through SHA-256 to produce the raw bytes.
-    let mut hasher = Sha256::new();
-    hasher.update(h1v.to_le_bytes());
-    hasher.update(h2v.to_le_bytes());
-    hasher.update(nanos.to_le_bytes());
-    hasher.update(std::process::id().to_le_bytes());
-    bytes.copy_from_slice(&hasher.finalize());
+    getrandom::fill(&mut bytes).expect("OS entropy source unavailable");
     format!("obt_{}", hex::encode(bytes))
 }
 
@@ -272,6 +247,17 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open");
         migration::run(&conn).expect("migrate");
         conn
+    }
+
+    #[test]
+    fn test_generate_secret_is_cryptographically_unique() {
+        let s1 = generate_secret();
+        let s2 = generate_secret();
+        assert!(s1.starts_with("obt_"));
+        assert!(s2.starts_with("obt_"));
+        assert_ne!(s1, s2, "two consecutive secrets must differ");
+        // obt_ prefix (4) + 32 bytes hex (64) = 68 chars
+        assert_eq!(s1.len(), 68);
     }
 
     fn sample_scope() -> Scope {

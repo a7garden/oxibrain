@@ -1015,6 +1015,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "fs2",
+ "getrandom 0.3.4",
  "hex",
  "oxibrain-core",
  "oxibrain-index",
