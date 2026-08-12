@@ -7,5 +7,5 @@ pub const PRAGMAS: &[&str] = &[
     "PRAGMA synchronous=NORMAL;",
 ];
 
-pub const LEDGER_SCHEMA_VERSION: i64 = 4;
+pub const LEDGER_SCHEMA_VERSION: i64 = 5;
 pub const PROJECTION_VERSION: i64 = 1;

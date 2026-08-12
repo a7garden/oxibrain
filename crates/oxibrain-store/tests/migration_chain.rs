@@ -49,6 +49,7 @@ fn has_table(conn: &Connection, name: &str) -> bool {
 
 #[test]
 fn migrates_from_empty_to_current() {
+    migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
     // simulate a pre-migration db
     conn.execute_batch("CREATE TABLE spaces(id TEXT);").unwrap();
@@ -63,6 +64,7 @@ fn migrates_from_empty_to_current() {
 
 #[test]
 fn migrates_from_v1_with_data() {
+    migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
     // Apply v1 schema only.
     conn.execute_batch(V1_SQL).unwrap();
@@ -132,6 +134,7 @@ fn migrates_from_v1_with_data() {
 
 #[test]
 fn migrates_from_v2_with_data() {
+    migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
     // Apply v1 + v2 schema + predicate seed.
     conn.execute_batch(V1_SQL).unwrap();
@@ -177,6 +180,7 @@ fn migrates_from_v2_with_data() {
 
 #[test]
 fn migration_idempotent() {
+    migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
     migration::run(&conn).unwrap();
     let v1: i64 = conn
@@ -196,6 +200,7 @@ fn migration_idempotent() {
 
 #[test]
 fn newer_db_is_hard_error() {
+    migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
     conn.pragma_update(None, "user_version", 999i64).unwrap();
     let err = migration::run(&conn).unwrap_err();

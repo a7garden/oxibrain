@@ -12,6 +12,7 @@ pub struct ReaderPool {
 
 impl ReaderPool {
     pub fn open(db_path: &Path, size: usize) -> Result<Self, BrainError> {
+        crate::migration::ensure_vec_extension();
         let mut conns = Vec::with_capacity(size);
         for _ in 0..size {
             // open a *new* connection that shares the db file; read-only via query discipline

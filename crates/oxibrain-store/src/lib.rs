@@ -113,6 +113,7 @@ impl Store {
     /// Open (or create) a store at `dir`. Acquires the advisory lock, applies migrations,
     /// sets PRAGMAs, and seeds meta versions.
     pub fn open(dir: &Path) -> Result<Self, BrainError> {
+        crate::migration::ensure_vec_extension();
         let lock = lock::AdvisoryLock::acquire(dir)?;
         let db_path = dir.join("brain.db");
         if let Some(parent) = db_path.parent() {
