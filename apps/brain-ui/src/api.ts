@@ -87,9 +87,9 @@ export const api = {
   getEntity: (entityId: string, space = "personal") =>
     callTool<EntityBeliefs>("get_entity", { entity_id: entityId, space }),
 
-  traverse: (startEntities: string[], space = "personal", depth = 2) =>
+  traverse: (start: string[], space = "personal", depth = 2) =>
     callTool<TraversalResult>("traverse", {
-      start_entities: startEntities,
+      start,
       space,
       depth,
     }),
@@ -108,17 +108,34 @@ export const api = {
 
   listMerges: (space = "personal") =>
     callTool<MergeRecord[]>("review_merges", { space }),
-  mergeEntities: (canonicalId: string, mergedId: string, space = "personal") =>
+
+  mergeEntities: (
+    loserSurface: string,
+    loserType: string,
+    winnerSurface: string,
+    winnerType: string,
+    space = "personal",
+  ) =>
     callTool<{ episode_id: string }>("merge_entities", {
-      canonical_entity_id: canonicalId,
-      merged_entity_id: mergedId,
+      loser: { surface: loserSurface, type: loserType },
+      winner: { surface: winnerSurface, type: winnerType },
       space,
     }),
 
-  retract: (entityId: string, predicate: string, space = "personal") =>
+  retract: (
+    subjectSurface: string,
+    subjectType: string,
+    predicate: string,
+    objectKind: string,
+    objectValue: string,
+    episodeId: string,
+    space = "personal",
+  ) =>
     callTool<{ episode_id: string }>("retract", {
-      entity_id: entityId,
+      subject: { surface: subjectSurface, type: subjectType },
       predicate,
+      object: { kind: objectKind, value: objectValue },
+      episode: episodeId,
       space,
     }),
 

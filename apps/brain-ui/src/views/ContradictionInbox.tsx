@@ -23,14 +23,9 @@ export function ContradictionInbox() {
   const handleRetract = useCallback(
     async (item: Contradiction) => {
       setActioning(item.statement_id);
-      setFeedback(null);
-      try {
-        await api.retract(item.entity_surface, item.predicate, "personal");
-        setItems((prev) => prev.filter((c) => c.statement_id !== item.statement_id));
-        setFeedback(`Retracted: ${item.entity_surface} ${item.predicate}`);
-      } catch (e) {
-        setFeedback(`Error: ${e instanceof Error ? e.message : "Failed"}`);
-      }
+      setFeedback(
+        `Retract needs episode context. Run: oxibrain entity show ${item.entity_surface} --space personal`,
+      );
       setActioning(null);
     },
     [],
