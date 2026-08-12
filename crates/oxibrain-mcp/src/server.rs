@@ -1249,7 +1249,11 @@ where
 ///
 /// Loopback-only by default. A non-loopback bind is refused (§11.6: requires
 /// TLS, which is out of scope for the in-house server; use a reverse proxy).
-pub async fn serve_http(brain: Brain, addr: std::net::SocketAddr) -> anyhow::Result<()> {
+pub async fn serve_http(
+    brain: Brain,
+    addr: std::net::SocketAddr,
+    ui_dir: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
     if !addr.ip().is_loopback() {
         anyhow::bail!(
             "HTTP transport is loopback-only (DESIGN §11.6). \
@@ -1261,7 +1265,12 @@ pub async fn serve_http(brain: Brain, addr: std::net::SocketAddr) -> anyhow::Res
         .await
         .map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
     let server = Arc::new(BrainServer::from_brain(brain));
-    tracing::info!("oxibrain MCP (HTTP) listening on http://{addr}");
+    let ui_dir = ui_dir.map(std::sync::Arc::new);
+    if ui_dir.is_some() {
+        tracing::info!("oxibrain HTTP (UI + API) listening on http://{addr}");
+    } else {
+        tracing::info!("oxibrain HTTP (API only) listening on http://{addr}");
+    }
     let shutdown = crate::daemon::shutdown_signal();
     tokio::pin!(shutdown);
     loop {
@@ -1269,8 +1278,9 @@ pub async fn serve_http(brain: Brain, addr: std::net::SocketAddr) -> anyhow::Res
             accept = listener.accept() => {
                 let (stream, _) = accept?;
                 let server = server.clone();
+                let ui = ui_dir.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_http(server, stream).await {
+                    if let Err(e) = handle_http(server, stream, ui).await {
                         tracing::debug!("HTTP session: {e}");
                     }
                 });
@@ -1284,37 +1294,31 @@ pub async fn serve_http(brain: Brain, addr: std::net::SocketAddr) -> anyhow::Res
     Ok(())
 }
 
-/// Handle one HTTP connection: parse a POST body as JSON-RPC, dispatch, respond.
+/// Handle one HTTP connection.
+///
+/// GET requests serve static files from `ui_dir` (if set).
+/// POST requests are JSON-RPC messages dispatched to the brain.
 async fn handle_http(
     server: Arc<BrainServer>,
     stream: tokio::net::TcpStream,
+    ui_dir: Option<std::sync::Arc<std::path::PathBuf>>,
 ) -> anyhow::Result<()> {
     let mut reader = BufReader::new(stream);
 
     // Read the request line + headers.
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await?;
-    let method = request_line.split_whitespace().next().unwrap_or("");
-    if method != "POST" {
-        // Minimal 405 for non-POST.
-        let body =
-            br#"{"jsonrpc":"2.0","error":{"code":-32600,"message":"only POST is supported"}}"#;
-        write_http_response(&mut reader, 405, "Method Not Allowed", body).await?;
-        return Ok(());
-    }
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    let method = parts.first().copied().unwrap_or("");
+    let path = parts.get(1).copied().unwrap_or("/").to_string();
 
+    // Consume headers.
     let mut content_length = 0usize;
-    let mut path = String::new();
     loop {
         let mut header = String::new();
         let n = reader.read_line(&mut header).await?;
         if n == 0 || header.trim().is_empty() {
             break;
-        }
-        if path.is_empty() {
-            if let Some(p) = request_line.split_whitespace().nth(1) {
-                path = p.to_string();
-            }
         }
         if let Some(rest) = header.strip_prefix("content-length:") {
             content_length = rest.trim().parse().unwrap_or(0);
@@ -1323,16 +1327,25 @@ async fn handle_http(
         }
     }
 
-    let _ = path; // path ignored — single endpoint.
+    match method {
+        "POST" => handle_http_post(&server, &mut reader, content_length).await,
+        "GET" => handle_http_get(&mut reader, &path, ui_dir).await,
+        _ => write_http_response(&mut reader, 405, "Method Not Allowed", b"{}").await,
+    }
+}
 
-    // Read the body.
+/// Handle a POST (JSON-RPC) request.
+async fn handle_http_post(
+    server: &BrainServer,
+    reader: &mut tokio::io::BufReader<tokio::net::TcpStream>,
+    content_length: usize,
+) -> anyhow::Result<()> {
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body).await?;
     }
     let body_str = String::from_utf8_lossy(&body);
 
-    // Parse and dispatch.
     let response = match Message::parse(&body_str) {
         Ok(msg) => server.handle(msg).await,
         Err((id, code, msg)) => Some(error(id.unwrap_or(Value::Null), code, msg)),
@@ -1343,7 +1356,85 @@ async fn handle_http(
         None => serde_json::to_string(&json!({"jsonrpc":"2.0","result":{}}))?,
     };
 
-    write_http_response(&mut reader, 200, "OK", response_json.as_bytes()).await
+    write_http_response(reader, 200, "OK", response_json.as_bytes()).await
+}
+
+/// Handle a GET (static file) request.
+async fn handle_http_get(
+    reader: &mut tokio::io::BufReader<tokio::net::TcpStream>,
+    path: &str,
+    ui_dir: Option<std::sync::Arc<std::path::PathBuf>>,
+) -> anyhow::Result<()> {
+    let Some(ui_dir) = ui_dir else {
+        return write_http_response(
+            reader,
+            404,
+            "Not Found",
+            br#"{"error":"no UI directory configured"}"#,
+        )
+        .await;
+    };
+
+    // Strip query string, map to file path.
+    let rel = path.split('?').next().unwrap_or("/");
+    let rel = rel.strip_prefix('/').unwrap_or(rel);
+    let file_path = if rel.is_empty() || rel == "/" {
+        ui_dir.join("index.html")
+    } else {
+        // Prevent directory traversal.
+        let safe: std::path::PathBuf = rel
+            .split('/')
+            .filter(|s| !s.contains("..") && !s.is_empty())
+            .collect();
+        ui_dir.join(safe)
+    };
+
+    match tokio::fs::read(&file_path).await {
+        Ok(data) => {
+            let ct = content_type(&file_path);
+            write_http_response_with_ct(reader, 200, "OK", ct, &data).await
+        }
+        Err(_) => {
+            // SPA fallback: serve index.html for client-side routing.
+            match tokio::fs::read(ui_dir.join("index.html")).await {
+                Ok(data) => {
+                    write_http_response_with_ct(
+                        reader,
+                        200,
+                        "OK",
+                        "text/html; charset=utf-8",
+                        &data,
+                    )
+                    .await
+                }
+                Err(_) => write_http_response(reader, 404, "Not Found", b"not found").await,
+            }
+        }
+    }
+}
+
+/// Determine content type from file extension.
+fn content_type(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .as_deref()
+    {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") | Some("mjs") => "application/javascript",
+        Some("css") => "text/css",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("ico") => "image/x-icon",
+        Some("woff") | Some("woff2") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("wasm") => "application/wasm",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Write a minimal HTTP response. `reader` is the TcpStream (we write back
@@ -1357,6 +1448,28 @@ async fn write_http_response(
     let header = format!(
         "HTTP/1.1 {status} {reason}\r\n\
          Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n",
+        body.len()
+    );
+    stream.get_mut().write_all(header.as_bytes()).await?;
+    stream.get_mut().write_all(body).await?;
+    stream.get_mut().flush().await?;
+    Ok(())
+}
+
+/// Write an HTTP response with a custom Content-Type.
+async fn write_http_response_with_ct(
+    stream: &mut tokio::io::BufReader<tokio::net::TcpStream>,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let header = format!(
+        "HTTP/1.1 {status} {reason}\r\n\
+         Content-Type: {content_type}\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\
          \r\n",
@@ -2031,7 +2144,7 @@ mod tests {
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let addr: std::net::SocketAddr = "127.0.0.1:18099".parse().unwrap();
         let _task = tokio::spawn(async move {
-            let _ = serve_http(brain, addr).await;
+            let _ = serve_http(brain, addr, None).await;
         });
 
         // Wait for listener.
@@ -2401,7 +2514,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let addr: std::net::SocketAddr = "0.0.0.0:8080".parse().unwrap();
-        let result = serve_http(brain, addr).await;
+        let result = serve_http(brain, addr, None).await;
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("loopback"), "got: {msg}");

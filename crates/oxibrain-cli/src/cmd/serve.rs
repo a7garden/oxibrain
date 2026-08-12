@@ -21,6 +21,7 @@ pub async fn run(
     http: Option<String>,
     require_token: bool,
     daemon: bool,
+    ui_dir: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     let brain = match Brain::open(BrainConfig::at(dir)).await {
         Ok(b) => b,
@@ -57,7 +58,7 @@ pub async fn run(
         let addr: std::net::SocketAddr = addr_str
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid --http address '{addr_str}': {e}"))?;
-        return oxibrain_mcp::serve_http(brain, addr).await;
+        return oxibrain_mcp::serve_http(brain, addr, ui_dir).await;
     }
 
     match socket {

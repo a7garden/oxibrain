@@ -70,7 +70,8 @@ async fn main() -> anyhow::Result<()> {
             http,
             require_token,
             daemon,
-        } => cmd::serve::run(&dir, socket, http, require_token, daemon).await,
+            ui_dir,
+        } => cmd::serve::run(&dir, socket, http, require_token, daemon, ui_dir).await,
         Command::Predicate { command } => match command {
             cli::PredicateCmd::List => cmd::predicate::run(),
         },

@@ -118,6 +118,10 @@ pub enum Command {
         /// supervision (launchd) handles backgrounding; this flag does not fork.
         #[arg(long)]
         daemon: bool,
+        /// Serve the desktop brain UI from this directory (GET requests).
+        /// Point at the built `apps/brain-ui/dist/`.
+        #[arg(long)]
+        ui_dir: Option<PathBuf>,
     },
     /// Predicate registry (DESIGN §12.4: `predicate add|list`).
     Predicate {
