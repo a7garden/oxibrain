@@ -108,6 +108,19 @@ export const api = {
 
   listMerges: (space = "personal") =>
     callTool<MergeRecord[]>("review_merges", { space }),
+  mergeEntities: (canonicalId: string, mergedId: string, space = "personal") =>
+    callTool<{ episode_id: string }>("merge_entities", {
+      canonical_entity_id: canonicalId,
+      merged_entity_id: mergedId,
+      space,
+    }),
+
+  retract: (entityId: string, predicate: string, space = "personal") =>
+    callTool<{ episode_id: string }>("retract", {
+      entity_id: entityId,
+      predicate,
+      space,
+    }),
 
   spaceOverview: (space = "personal") =>
     readResource<SpaceOverview>(`space://${space}`),
