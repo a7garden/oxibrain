@@ -15,7 +15,6 @@ hex.workspace = true
 sha2 = "0.10"
 getrandom = "0.3"
 sqlite-vec = "0.1"
-zerocopy = "0.8"
 fs2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

@@ -26,6 +26,7 @@ pub mod reproject;
 pub mod schema;
 pub mod security;
 pub mod timeline;
+pub mod vectors;
 pub mod writer;
 pub use security::{AuditRow, list_audit, write_audit};
 
