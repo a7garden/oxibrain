@@ -1,5 +1,5 @@
 //! One writer actor per store. All writes serialize through an owned thread
-//! holding the write connection (DESIGN.md §13.1, P8).
+//! holding the write connection (ARCHITECTURE.md §16.3, P8).
 
 use crate::Store;
 use crate::sql_err;

@@ -1,5 +1,9 @@
 # ADR-001: Defer Long-Running Tasks and Subscriptions to M6
 
+> **Note (2026-08-13):** `DESIGN §n` references below use `DESIGN.md` v1.0 numbering.
+> That file is now `doc/ARCHITECTURE.md` v2.0 and its sections were renumbered. This ADR is a
+> historical record and is left as written.
+
 - **Status:** Deferred
 - **Date:** 2026-08-12
 - **Supersedes:** none

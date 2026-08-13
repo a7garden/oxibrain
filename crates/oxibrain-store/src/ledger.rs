@@ -73,7 +73,7 @@ pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainEr
     if exists > 0 {
         ep.id = id;
         ep.content_hash = ch;
-        return Ok(()); // no-op (DESIGN.md §7.3 idempotency layer 1)
+        return Ok(()); // no-op (ARCHITECTURE.md §9.7 idempotency layer 1)
     }
     let seq = next_seq(conn, &ep.space)?;
     let (source_kind, source_ref) = ep.source.db_columns();

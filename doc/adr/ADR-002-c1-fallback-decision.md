@@ -1,5 +1,9 @@
 # ADR-002: C1 Fallback — No Local Recall Cache for v1
 
+> **Note (2026-08-13):** `DESIGN §n` references below use `DESIGN.md` v1.0 numbering.
+> That file is now `doc/ARCHITECTURE.md` v2.0 and its sections were renumbered. This ADR is a
+> historical record and is left as written.
+
 - **Status:** Decided
 - **Date:** 2026-08-12
 - **Supersedes:** none

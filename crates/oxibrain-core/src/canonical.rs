@@ -1,4 +1,4 @@
-//! Canonical serialization. A bug here is a determinism bug (DESIGN.md §5.6):
+//! Canonical serialization. A bug here is a determinism bug (ARCHITECTURE.md §5.6):
 //! sorted keys, normalized numbers, RFC-3339 UTC timestamps. Property-tested.
 
 use serde_json::{Map, Value};

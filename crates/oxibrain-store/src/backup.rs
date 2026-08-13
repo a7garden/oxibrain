@@ -1,4 +1,4 @@
-//! Online backup (WAL-safe) via SQLite's backup API. DESIGN.md §13.4.
+//! Online backup (WAL-safe) via SQLite's backup API. ARCHITECTURE.md §16.5.
 
 use crate::io_err;
 use crate::sql_err;

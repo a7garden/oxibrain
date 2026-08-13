@@ -1,6 +1,6 @@
 # Consumption Contract 1.0
 
-> DESIGN §16.4. This document pins the public surface consumers depend on and
+> `ARCHITECTURE.md` §19.2. This document pins the public surface consumers depend on and
 > the stability guarantees each tier carries. It is the contract between
 > oxibrain and its ecosystem consumers (oxios-kernel, oxiline, oximemo, Claude
 > Desktop, third-party MCP clients).

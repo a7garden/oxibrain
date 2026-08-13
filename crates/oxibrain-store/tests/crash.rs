@@ -1,4 +1,4 @@
-//! DESIGN.md §14.3: kill mid-ingest at each stage boundary; assert resumption
+//! ARCHITECTURE.md §17.4: kill mid-ingest at each stage boundary; assert resumption
 //! with no duplicate assertions. M0 stage boundary: episode insert. A duplicate
 //! insert is a content-hash no-op, so recovery yields exactly one episode.
 

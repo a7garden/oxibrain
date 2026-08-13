@@ -1,4 +1,4 @@
-//! oxibrain-core: the engine. Knows nothing of MCP/HTTP/CLI (DESIGN.md P6).
+//! oxibrain-core: the engine. Knows nothing of MCP/HTTP/CLI (ARCHITECTURE.md P6).
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 

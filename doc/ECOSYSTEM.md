@@ -1,10 +1,10 @@
 # The oxi Ecosystem — Architecture and Cross-Project Roadmap
 
-> **Version:** v0.2 · **Date:** 2026-08-11 · aligned to `DESIGN.md` v1.0 milestones
+> **Version:** v0.2 · **Date:** 2026-08-11 · aligned to `ARCHITECTURE.md` v2.0
 > **Status:** Design. Sequencing is a commitment; per-app internals are not.
 > **Authority:** Canonical for *how the oxi apps compose around oxibrain* and for the order in
 > which that happens. Each app's own docs remain canonical for its internals.
-> **Companion:** `doc/DESIGN.md` — oxibrain itself.
+> **Companion:** `doc/ARCHITECTURE.md` — oxibrain itself.
 
 ---
 
@@ -77,7 +77,7 @@ context, beliefs, timelines, neighborhoods. Nothing else crosses.
 ### 1.3 What the research says about this shape
 
 The design was checked against the 2026 state of the art rather than assumed (sources in
-`DESIGN.md` §21):
+`ARCHITECTURE.md` §25):
 
 - **Temporal knowledge graphs beat flat vector memory on the questions that matter.** Zep
   reports 63.8% vs. mem0's 49.0% on LongMemEval/GPT-4o, attributed to storing validity
@@ -128,7 +128,7 @@ rendered by the owning app — they are not written into the user's files.
 When a note changes, the connector writes a **new episode** (new content hash) rather than
 mutating the old one. The ledger therefore records how a note evolved, which is what makes
 "when did I change my mind about this?" answerable. Debounce and a minimum-diff threshold keep
-this from becoming version spam; consolidation compacts old revisions (`DESIGN.md` §10).
+this from becoming version spam; consolidation compacts old revisions (`ARCHITECTURE.md` §13).
 
 ### C5 — One installation root
 
@@ -225,7 +225,7 @@ product (`oxios-markdown`).
 **Becomes:** an agent runtime. Nothing else.
 
 It sheds in two independent movements:
-- **Memory → oxibrain.** `oxios-memory` is triaged (`DESIGN.md` §16.2) and deleted; agents call
+- **Memory → oxibrain.** `oxios-memory` is triaged during M5 and deleted; agents call
   `assemble_context` per turn instead of implementing recall.
 - **PKM → oximemo + oxiline.** `oxios-markdown` is dissolved along the lines in §1.1.
 
@@ -242,12 +242,15 @@ note), not discovered afterward.
 
 ### 3.4 oxibrain — remember and understand
 
-Covered by `DESIGN.md`. Its ecosystem-facing obligations:
+Covered by `ARCHITECTURE.md`. Its ecosystem-facing obligations:
 
 - Ship `oxibrain-client` before asking any app to integrate.
 - Never require an app to change its storage.
-- Never require an API key to be useful — MCP client sampling (`DESIGN.md` §12.3) means a user
-  with Claude Desktop is already configured.
+- **Never require an API key, an account, or a second install to be useful.** oxibrain ships its
+  own model (`ARCHITECTURE.md` §8, C2); MCP client sampling and HTTP providers are optional
+  quality tiers, never the path to a working product.
+- **Never make quality depend on the user's language** (`ARCHITECTURE.md` §7, C3). An ecosystem
+  app must be able to ship internationally without asking what the brain supports.
 - Stay independently valuable: someone who uses none of the other three must still get a
   complete second brain from `cargo install oxibrain`. If that ever stops being true, the brain
   has degenerated into oxios's memory library.

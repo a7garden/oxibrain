@@ -1,5 +1,5 @@
 //! Content-derived ids. Every projection id is derived from content, not random,
-//! so reprojection is byte-identical (DESIGN.md §5.6, P1).
+//! so reprojection is byte-identical (ARCHITECTURE.md §5.6, P1).
 
 use crate::canonical;
 use crate::types::{ContentHash, SourceRef};

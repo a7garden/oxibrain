@@ -1,5 +1,5 @@
 //! Explicit time. Signatures use `Timestamp`, never a bare `i64`.
-//! Open intervals use sentinels, never NULL (DESIGN.md §6.2).
+//! Open intervals use sentinels, never NULL (ARCHITECTURE.md §6.2).
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
