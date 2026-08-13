@@ -454,6 +454,31 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
+
+    /// Render an entity page (`brief`) as Markdown with followable links
+    /// (§14.1, M9 §9.2). Pure fetch + pure render — deterministic.
+    pub async fn brief(&self, space: &str, entity_id: &str) -> Result<String, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let entity_id = entity_id.to_string();
+        let data = tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::brief::entity_brief(conn, &space, &entity_id))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+        Ok(render_entity_brief(&data))
+    }
+
+    /// Follow a followable link from a page (§14.1, M9 §9.3). `link` is either
+    /// a raw entity id or an `entity://<id>` link; returns that entity's brief.
+    pub async fn navigate(&self, space: &str, _from: &str, link: &str) -> Result<String, BrainError> {
+        let target = oxibrain_views::parse_entity_link(link).unwrap_or(link);
+        if target.is_empty() {
+            return Err(BrainError::Config(format!("invalid link: {link}")));
+        }
+        self.brief(space, target).await
+    }
     /// Byte-identical snapshot of the truth half (P1, §5.1).
     pub async fn snapshot_truth(&self, space: &str) -> Result<String, BrainError> {
         let h = self.handle.clone();
@@ -1403,5 +1428,107 @@ impl Brain {
                 })
                 .collect()
         })
+    }
+}
+
+/// Map a store brief data struct to the view model and render Markdown.
+fn render_entity_brief(data: &oxibrain_store::brief::EntityBriefData) -> String {
+    use oxibrain_views as views;
+    let brief = views::EntityBrief {
+        surface: data.canonical_surface.clone(),
+        ty: data.entity.ty.clone(),
+        aliases: data.aliases.clone(),
+        beliefs: data
+            .beliefs
+            .iter()
+            .map(|b| views::BeliefView {
+                predicate: b.predicate.clone(),
+                object: b.object.clone(),
+                object_entity: b.object_entity.clone(),
+                valid_from: fmt_ts(b.valid_from),
+                valid_to: fmt_ts(b.valid_to),
+                confidence: b.confidence,
+                affirm: b.affirm,
+                deny: b.deny,
+                episodes: b.episodes,
+                status: b.status.clone(),
+            })
+            .collect(),
+        contradictions: data
+            .contradictions
+            .iter()
+            .map(|c| views::ContradictionView {
+                predicate: c.predicate.clone(),
+                object: c.object.clone(),
+                affirm_episodes: c.affirm_episodes.clone(),
+                deny_episodes: c.deny_episodes.clone(),
+            })
+            .collect(),
+        neighbours: data
+            .neighbours
+            .iter()
+            .map(|n| views::NeighbourView {
+                surface: n.surface.clone(),
+                entity: n.entity.clone(),
+                predicate: n.predicate.clone(),
+                direction: n.direction.clone(),
+            })
+            .collect(),
+        timeline: data
+            .timeline
+            .iter()
+            .map(|t| views::TimelineView {
+                at: fmt_ts(t.valid_from),
+                predicate: t.predicate.clone(),
+                object: t.object_repr.clone(),
+                status: t.status.clone(),
+            })
+            .collect(),
+        sources: data
+            .sources
+            .iter()
+            .map(|s| views::SourceView {
+                episode: s.episode.clone(),
+                kind: s.kind.clone(),
+                at: fmt_ts(s.occurred_at),
+            })
+            .collect(),
+        uncertainty: uncertainty_for(data),
+    };
+    views::render_entity(&brief)
+}
+
+fn uncertainty_for(data: &oxibrain_store::brief::EntityBriefData) -> oxibrain_views::UncertaintyView {
+    let contradicted = data
+        .beliefs
+        .iter()
+        .filter(|b| b.status == "contradicted")
+        .count();
+    let single_source = data
+        .beliefs
+        .iter()
+        .filter(|b| b.episodes <= 1 && b.affirm <= 1)
+        .count();
+    let note = if contradicted > 0 {
+        format!("{contradicted} belief(s) contradicted — treat as unresolved")
+    } else if single_source > 0 {
+        format!("{single_source} belief(s) from a single source")
+    } else {
+        String::new()
+    };
+    oxibrain_views::UncertaintyView {
+        contradicted,
+        single_source,
+        note,
+    }
+}
+
+/// Format a timestamp as `YYYY-MM-DD`; open intervals (TIME_MIN/TIME_MAX)
+/// render as empty.
+fn fmt_ts(t: oxibrain_ports::Timestamp) -> String {
+    if t.is_min() || t.is_max() {
+        String::new()
+    } else {
+        oxibrain_core::short_ts(t)
     }
 }

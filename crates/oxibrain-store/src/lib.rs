@@ -3,6 +3,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod backup;
+pub mod brief;
 pub mod communities;
 pub mod consolidation;
 pub mod context;

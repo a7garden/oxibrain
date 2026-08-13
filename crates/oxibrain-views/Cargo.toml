@@ -1,0 +1,11 @@
+[package]
+name = "oxibrain-views"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Views are pure renderers over already-fetched projection data. No rusqlite,
+# no tokio, no ports — the §18 rule-4 boundary is satisfied by having no
+# dependencies that could reach the database.

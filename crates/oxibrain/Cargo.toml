@@ -13,6 +13,7 @@ http-llm = ["dep:oxibrain-llm-http"]
 oxibrain-core.workspace = true
 oxibrain-store.workspace = true
 oxibrain-ports.workspace = true
+oxibrain-views.workspace = true
 oxibrain-llm-http = { workspace = true, optional = true }
 tokio.workspace = true
 tokio-stream = "0.1"

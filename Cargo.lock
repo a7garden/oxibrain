@@ -1099,6 +1099,7 @@ dependencies = [
  "oxibrain-llm-http",
  "oxibrain-ports",
  "oxibrain-store",
+ "oxibrain-views",
  "proptest",
  "reqwest",
  "rusqlite",
@@ -1270,6 +1271,10 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
 ]
+
+[[package]]
+name = "oxibrain-views"
+version = "0.1.0"
 
 [[package]]
 name = "percent-encoding"

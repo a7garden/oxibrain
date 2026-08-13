@@ -22,7 +22,7 @@ pub fn render_statement(conn: &Connection, stmt: &Statement) -> Result<String, B
     Ok(format!("{subject_name} {} {object_str}", stmt.predicate))
 }
 
-fn entity_surface(conn: &Connection, entity_id: &str) -> Result<String, BrainError> {
+pub fn entity_surface(conn: &Connection, entity_id: &str) -> Result<String, BrainError> {
     // Get the canonical key surface form, or fall back to the entity id.
     let row: Option<(Option<String>,)> = conn
         .query_row(
