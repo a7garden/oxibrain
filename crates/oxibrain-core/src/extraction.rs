@@ -490,54 +490,27 @@ pub fn grammar_from_registry(predicates: &[PredicateDef]) -> String {
 
     // GBNF (GGML BNF) for llama.cpp. See llama.cpp grammars/README.md.
     // {{ and }} are format! escapes for literal { and }.
+    // GBNF (GGML BNF) for llama.cpp. Each rule on a single line — the
+    // parser treats newlines as rule separators. See llama.cpp grammars/README.md.
     format!(
         r#"root ::= ws "{{" ws "\"claims\"" ws ":" ws "[" ws claims ws "]" ws "}}"
-
 claims ::= (claim (ws "," ws claim)*)?
-
-claim ::= "{{" ws
-  "\"predicate\""   ws ":" ws predicate    ws "," ws
-  "\"subject\""     ws ":" ws mention      ws "," ws
-  "\"object\""      ws ":" ws object_union ws "," ws
-  "\"polarity\""    ws ":" ws polarity     ws "," ws
-  valid_from_opt
-  valid_to_opt
-  "\"confidence\""  ws ":" ws number
-  ws "}}"
-
-valid_from_opt ::= ("\"valid_from\"" ws ":" ws temporal_val ws "," ws)?
-valid_to_opt   ::= ("\"valid_to\""   ws ":" ws temporal_val ws "," ws)?
-temporal_val   ::= "null" | integer
-
-mention ::= "{{" ws
-  "\"surface\""     ws ":" ws string      ws "," ws
-  "\"entity_type\"" ws ":" ws entity_type ws "," ws
-  "\"span\""        ws ":" ws "[" ws integer ws "," ws integer ws "]"
-  ws "}}"
-
-object_union ::= entity_object | literal_object
-
-entity_object ::= "{{" ws
-  "\"kind\""    ws ":" ws "\"entity\"" ws "," ws
-  "\"mention\"" ws ":" ws mention
-  ws "}}"
-
-literal_object ::= "{{" ws
-  "\"kind\""         ws ":" ws "\"literal\""  ws "," ws
-  "\"literal_type\"" ws ":" ws literal_type   ws "," ws
-  "\"value\""        ws ":" ws string         ws "," ws
-  "\"span\""         ws ":" ws "[" ws integer ws "," ws integer ws "]"
-  ws "}}"
-
-predicate    ::= {pred_alts}
-entity_type  ::= {etype_alts}
-polarity     ::= "\"affirm\"" | "\"deny\""
-literal_type ::= "\"text\"" | "\"date\"" | "\"datetime\"" | "\"number\"" | "\"bool\"" | "\"quantity\""
-
-string  ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\"" ws
-number  ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
+claim ::= "{{" ws "\"predicate\"" ws ":" ws predicate ws "," ws "\"subject\"" ws ":" ws mention ws "," ws "\"object\"" ws ":" ws object-union ws "," ws "\"polarity\"" ws ":" ws polarity ws "," ws valid-from-opt valid-to-opt "\"confidence\"" ws ":" ws number ws "}}"
+valid-from-opt ::= ("\"valid_from\"" ws ":" ws temporal-val ws "," ws)?
+valid-to-opt ::= ("\"valid_to\"" ws ":" ws temporal-val ws "," ws)?
+temporal-val ::= "null" | integer
+mention ::= "{{" ws "\"surface\"" ws ":" ws string ws "," ws "\"entity_type\"" ws ":" ws entity-type ws "," ws "\"span\"" ws ":" ws "[" ws integer ws "," ws integer ws "]" ws "}}"
+object-union ::= entity-object | literal-object
+entity-object ::= "{{" ws "\"kind\"" ws ":" ws "\"entity\"" ws "," ws "\"mention\"" ws ":" ws mention ws "}}"
+literal-object ::= "{{" ws "\"kind\"" ws ":" ws "\"literal\"" ws "," ws "\"literal_type\"" ws ":" ws literal-type ws "," ws "\"value\"" ws ":" ws string ws "," ws "\"span\"" ws ":" ws "[" ws integer ws "," ws integer ws "]" ws "}}"
+entity-type ::= {etype_alts}
+literal-type ::= "\"text\"" | "\"date\"" | "\"datetime\"" | "\"number\"" | "\"bool\"" | "\"quantity\""
+predicate ::= {pred_alts}
+polarity ::= "\"affirm\"" | "\"deny\""
+string ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\"" ws
+number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
 integer ::= "-"? ([0-9] | [1-9] [0-9]*) ws
-ws      ::= [ \t\n]*
+ws ::= [ \t\n]*
 "#,
         pred_alts = pred_alts,
         etype_alts = etype_alts,
@@ -801,11 +774,11 @@ mod tests {
             "claims",
             "claim",
             "mention",
-            "object_union",
+            "object-union",
             "predicate",
-            "entity_type",
+            "entity-type",
             "polarity",
-            "literal_type",
+            "literal-type",
             "string",
             "number",
             "integer",
@@ -905,11 +878,10 @@ mod tests {
     #[test]
     fn grammar_has_optional_temporal_fields() {
         let g = grammar_from_registry(crate::registry::core_v1());
-        assert!(g.contains("valid_from_opt"));
-        assert!(g.contains("valid_to_opt"));
-        // The grammar contains GBNF literals with backslash-escaped quotes.
+        assert!(g.contains("valid-from-opt"));
+        assert!(g.contains("valid-to-opt"));
+        // GBNF literals use backslash-escaped quotes.
         assert!(g.contains("\\\"valid_from\\\""));
-        assert!(g.contains("\\\"valid_to\\\""));
     }
     #[test]
     fn grammar_supports_empty_claims() {

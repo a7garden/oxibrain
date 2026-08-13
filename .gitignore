@@ -18,3 +18,5 @@ dist/
 
 # proptest failure artifacts
 proptest-regressions/
+spike/gbnf/target/
+spike/gbnf/Cargo.lock
