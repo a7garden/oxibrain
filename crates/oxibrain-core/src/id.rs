@@ -136,6 +136,14 @@ pub fn mention_id(assertion_id: &str, role: &str, span_start: u32) -> Id {
         ("span_start", &span_start.to_string()),
     ]))
 }
+/// `ChunkId = blake3(episode_id, ordinal)` (§5.7, M8 §8.11).
+pub fn chunk_id(episode_id: &str, ordinal: u32) -> Id {
+    hex(derive(&[
+        ("episode_id", episode_id),
+        ("ordinal", &ordinal.to_string()),
+    ]))
+}
+
 
 /// EntityMerge id = blake3(loser, winner, provenance)
 pub fn entity_merge_id(loser: &str, winner: &str, provenance: &str) -> Id {

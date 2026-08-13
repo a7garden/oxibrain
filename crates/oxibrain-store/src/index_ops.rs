@@ -2,11 +2,13 @@
 //! All operations are deterministic functions of the projection data.
 
 use crate::sql_err;
+use oxibrain_core::chunking::{ChunkPolicy, render_context_prefix, split_into_chunks};
+use oxibrain_core::chunk_id;
 use oxibrain_core::knowledge::{Object, Statement};
 use oxibrain_core::object_repr;
 #[allow(unused_imports)]
 use oxibrain_index::{TfIdfModel, TfIdfVector, features};
-use oxibrain_ports::{BrainError, EmbeddingPort};
+use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
 use rusqlite::{Connection, params};
 
 /// Render a statement as a searchable string: "subject predicate object".
@@ -336,17 +338,117 @@ pub fn snapshot_ranking(conn: &Connection, space: &str) -> Result<String, BrainE
             "salience",
             "SELECT id, salience, last_activity FROM entities WHERE space_id = ?1 ORDER BY id",
         ),
+        (
+            "chunks",
+            "SELECT episode_id, ordinal, span_start, span_end, context FROM chunks WHERE space_id = ?1 ORDER BY episode_id, ordinal",
+        ),
     ] {
         out.push_str(&snapshot_query(conn, label, sql, space)?);
     }
     Ok(out)
 }
 
-/// Full index rebuild for a space: FTS + TF-IDF + salience.
+/// Rebuild the `chunks` table for a space (§5.7, §9.3, M8 §8.11).
+///
+/// Splits each non-redacted episode's content with the recursive splitter and
+/// writes a deterministic context prefix (occurred_at · source · mentions).
+/// Chunks are ranking-half derived state (§5.1): pure functions of projection
+/// data, rebuilt on every [`rebuild_indexes`]/`reproject`. Chunk text is not
+/// stored — it is recovered from `episodes.content` via the byte offsets.
+pub fn rebuild_chunks(conn: &Connection, space: &str) -> Result<(), BrainError> {
+    conn.execute("DELETE FROM chunks WHERE space_id = ?1", params![space])
+        .map_err(sql_err)?;
+
+    // Entity surfaces mentioned in each episode's statements (verbatim mention
+    // surfaces, deduplicated and ordered for determinism).
+    let mut mention_stmt = conn
+        .prepare(
+            "SELECT DISTINCT a.episode_id, m.surface
+               FROM mentions m
+               JOIN assertions a ON m.assertion_id = a.id
+               JOIN statements s ON a.statement_id = s.id
+              WHERE s.space_id = ?1
+              ORDER BY a.episode_id, m.surface",
+        )
+        .map_err(sql_err)?;
+    let mention_rows = mention_stmt
+        .query_map(params![space], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(sql_err)?
+        .collect::<Result<Vec<(String, String)>, _>>()
+        .map_err(sql_err)?;
+    drop(mention_stmt);
+
+    let mut mentions: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (ep, surface) in mention_rows {
+        mentions.entry(ep).or_default().push(surface);
+    }
+
+    // Read all non-redacted episodes in canonical (seq) order.
+    let mut ep_stmt = conn
+        .prepare(
+            "SELECT id, content, occurred_at, source_kind
+               FROM episodes
+              WHERE space_id = ?1 AND redacted_at IS NULL
+              ORDER BY seq ASC",
+        )
+        .map_err(sql_err)?;
+    let episodes = ep_stmt
+        .query_map(params![space], |r| {
+            Ok((
+                r.get::<_, String>(0)?, // id
+                r.get::<_, String>(1)?, // content
+                r.get::<_, i64>(2)?,    // occurred_at
+                r.get::<_, String>(3)?, // source_kind
+            ))
+        })
+        .map_err(sql_err)?
+        .collect::<Result<Vec<(String, String, i64, String)>, _>>()
+        .map_err(sql_err)?;
+    drop(ep_stmt);
+
+    let policy = ChunkPolicy::default();
+    let empty: Vec<String> = Vec::new();
+    for (id, content, occurred_at, source_kind) in episodes {
+        let episode_mentions = mentions.get(&id).unwrap_or(&empty);
+        let chunks = split_into_chunks(&content, &policy);
+        for chunk in chunks {
+            let cid = chunk_id(&id, chunk.ordinal);
+            let context = render_context_prefix(
+                Timestamp(occurred_at),
+                &source_kind,
+                episode_mentions,
+                None,
+            );
+            conn.execute(
+                "INSERT OR REPLACE INTO chunks
+                   (id, space_id, episode_id, ordinal, span_start, span_end, context)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    cid,
+                    space,
+                    id,
+                    chunk.ordinal as i64,
+                    chunk.span_start as i64,
+                    chunk.span_end as i64,
+                    context,
+                ],
+            )
+            .map_err(sql_err)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Full index rebuild for a space: FTS + TF-IDF + salience + chunks.
 pub fn rebuild_indexes(conn: &Connection, space: &str) -> Result<(), BrainError> {
     rebuild_fts(conn, space)?;
     rebuild_tfidf(conn, space, 1024)?;
     rebuild_salience(conn, space)?;
+    rebuild_chunks(conn, space)?;
     Ok(())
 }
 

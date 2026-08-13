@@ -14,8 +14,8 @@ pub mod registry;
 
 pub use canonical::{canonical_bytes, canonical_json_value, canonicalize_value};
 pub use id::{
-    Id, assertion_id, content_hash, entity_id, entity_key_id, entity_merge_id, episode_id,
-    mention_id, normalize_content, statement_id,
+    Id, assertion_id, chunk_id, content_hash, entity_id, entity_key_id, entity_merge_id,
+    episode_id, mention_id, normalize_content, statement_id,
 };
 pub use knowledge::{
     Assertion, Belief, BeliefStatus, Entity, EntityKey, EntityMerge, KeyOrigin, Mention,
