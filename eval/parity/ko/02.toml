@@ -1,0 +1,46 @@
+lang = "ko"
+properties = ["agglutinative_morphology", "no_letter_case", "surname_first"]
+episode = "박영희와 이민준은 서로를 알고 있다. 박영희는 카이스트의 인공지능 연구실에 소속되어 있다."
+
+[[entities]]
+surface = "박영희"
+type = "Person"
+span = [0, 9]
+
+[[entities]]
+surface = "이민준"
+type = "Person"
+span = [13, 22]
+
+[[entities]]
+surface = "카이스트"
+type = "Organization"
+span = [64, 76]
+
+[[entities]]
+surface = "인공지능 연구실"
+type = "Organization"
+span = [80, 102]
+
+[[expected_statements]]
+predicate = "knows"
+subject_surface = "박영희"
+object_surface = "이민준"
+
+[[expected_statements]]
+predicate = "member_of"
+subject_surface = "박영희"
+object_surface = "인공지능 연구실"
+
+[[expected_statements]]
+predicate = "part_of"
+subject_surface = "인공지능 연구실"
+object_surface = "카이스트"
+
+[[questions]]
+question = "박영희는 누구를 알고 있나요?"
+answer = "이민준"
+
+[[questions]]
+question = "박영희는 어디에 소속되어 있나요?"
+answer = "인공지능 연구실"

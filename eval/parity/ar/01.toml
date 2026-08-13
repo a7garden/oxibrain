@@ -1,0 +1,36 @@
+lang = "ar"
+properties = ["right_to_left", "no_letter_case"]
+episode = "تعمل سارة أحمد في شركة أرامكو كمهندسة برمجيات. ولدت في الرياض."
+
+[[entities]]
+surface = "سارة أحمد"
+type = "Person"
+span = [9, 26]
+
+[[entities]]
+surface = "أرامكو"
+type = "Organization"
+span = [41, 53]
+
+[[entities]]
+surface = "الرياض"
+type = "Place"
+span = [99, 111]
+
+[[expected_statements]]
+predicate = "employed_by"
+subject_surface = "سارة أحمد"
+object_surface = "أرامكو"
+
+[[expected_statements]]
+predicate = "born_in"
+subject_surface = "سارة أحمد"
+object_surface = "الرياض"
+
+[[questions]]
+question = "أين تعمل سارة أحمد؟"
+answer = "أرامكو"
+
+[[questions]]
+question = "أين ولدت سارة أحمد؟"
+answer = "الرياض"

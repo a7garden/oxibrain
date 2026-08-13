@@ -1,0 +1,36 @@
+lang = "ko"
+properties = ["agglutinative_morphology", "no_letter_case", "surname_first"]
+episode = "김철수는 삼성전자에서 소프트웨어 엔지니어로 일하고 있다. 그는 서울에서 태어났다."
+
+[[entities]]
+surface = "김철수"
+type = "Person"
+span = [0, 9]
+
+[[entities]]
+surface = "삼성전자"
+type = "Organization"
+span = [13, 25]
+
+[[entities]]
+surface = "서울"
+type = "Place"
+span = [89, 95]
+
+[[expected_statements]]
+predicate = "employed_by"
+subject_surface = "김철수"
+object_surface = "삼성전자"
+
+[[expected_statements]]
+predicate = "born_in"
+subject_surface = "김철수"
+object_surface = "서울"
+
+[[questions]]
+question = "김철수는 어디에서 일하나요?"
+answer = "삼성전자"
+
+[[questions]]
+question = "김철수는 어디에서 태어났나요?"
+answer = "서울"

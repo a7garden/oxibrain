@@ -1,0 +1,46 @@
+lang = "ar"
+properties = ["right_to_left", "no_letter_case"]
+episode = "محمد وعلي يعرفان بعضهما. محمد عضو في نادي الروبوتات في جامعة الملك سعود."
+
+[[entities]]
+surface = "محمد"
+type = "Person"
+span = [0, 8]
+
+[[entities]]
+surface = "علي"
+type = "Person"
+span = [11, 17]
+
+[[entities]]
+surface = "نادي الروبوتات"
+type = "Organization"
+span = [66, 93]
+
+[[entities]]
+surface = "جامعة الملك سعود"
+type = "Organization"
+span = [99, 129]
+
+[[expected_statements]]
+predicate = "knows"
+subject_surface = "محمد"
+object_surface = "علي"
+
+[[expected_statements]]
+predicate = "member_of"
+subject_surface = "محمد"
+object_surface = "نادي الروبوتات"
+
+[[expected_statements]]
+predicate = "part_of"
+subject_surface = "نادي الروبوتات"
+object_surface = "جامعة الملك سعود"
+
+[[questions]]
+question = "من يعرف محمد؟"
+answer = "علي"
+
+[[questions]]
+question = "ما هي عضوية محمد؟"
+answer = "نادي الروبوتات"

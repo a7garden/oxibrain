@@ -1,0 +1,36 @@
+lang = "th"
+properties = ["no_word_delimiters", "combining_marks"]
+episode = "สมชายทำงานที่บริษัทกูเกิลในตำแหน่งวิศวกรซอฟต์แวร์ เขาเกิดที่กรุงเทพฯ"
+
+[[entities]]
+surface = "สมชาย"
+type = "Person"
+span = [0, 15]
+
+[[entities]]
+surface = "บริษัทกูเกิล"
+type = "Organization"
+span = [39, 75]
+
+[[entities]]
+surface = "กรุงเทพฯ"
+type = "Place"
+span = [178, 202]
+
+[[expected_statements]]
+predicate = "employed_by"
+subject_surface = "สมชาย"
+object_surface = "บริษัทกูเกิล"
+
+[[expected_statements]]
+predicate = "born_in"
+subject_surface = "สมชาย"
+object_surface = "กรุงเทพฯ"
+
+[[questions]]
+question = "สมชายทำงานที่ไหน?"
+answer = "บริษัทกูเกิล"
+
+[[questions]]
+question = "สมชายเกิดที่ไหน?"
+answer = "กรุงเทพฯ"

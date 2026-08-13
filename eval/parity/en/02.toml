@@ -1,0 +1,46 @@
+lang = "en"
+properties = ["latin_baseline"]
+episode = "Bob and Carol know each other. Bob is a member of the Robotics Club at MIT."
+
+[[entities]]
+surface = "Bob"
+type = "Person"
+span = [0, 3]
+
+[[entities]]
+surface = "Carol"
+type = "Person"
+span = [8, 13]
+
+[[entities]]
+surface = "Robotics Club"
+type = "Organization"
+span = [54, 67]
+
+[[entities]]
+surface = "MIT"
+type = "Organization"
+span = [71, 74]
+
+[[expected_statements]]
+predicate = "knows"
+subject_surface = "Bob"
+object_surface = "Carol"
+
+[[expected_statements]]
+predicate = "member_of"
+subject_surface = "Bob"
+object_surface = "Robotics Club"
+
+[[expected_statements]]
+predicate = "part_of"
+subject_surface = "Robotics Club"
+object_surface = "MIT"
+
+[[questions]]
+question = "Who does Bob know?"
+answer = "Carol"
+
+[[questions]]
+question = "What is Bob a member of?"
+answer = "Robotics Club"

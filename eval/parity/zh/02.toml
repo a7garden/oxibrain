@@ -1,0 +1,46 @@
+lang = "zh"
+properties = ["no_word_delimiters", "no_letter_case", "surname_first"]
+episode = "王强和刘芳互相认识。王强是清华机器人俱乐部的成员。"
+
+[[entities]]
+surface = "王强"
+type = "Person"
+span = [0, 6]
+
+[[entities]]
+surface = "刘芳"
+type = "Person"
+span = [9, 15]
+
+[[entities]]
+surface = "清华机器人俱乐部"
+type = "Organization"
+span = [39, 63]
+
+[[entities]]
+surface = "清华"
+type = "Organization"
+span = [39, 45]
+
+[[expected_statements]]
+predicate = "knows"
+subject_surface = "王强"
+object_surface = "刘芳"
+
+[[expected_statements]]
+predicate = "member_of"
+subject_surface = "王强"
+object_surface = "清华机器人俱乐部"
+
+[[expected_statements]]
+predicate = "part_of"
+subject_surface = "清华机器人俱乐部"
+object_surface = "清华"
+
+[[questions]]
+question = "王强认识谁？"
+answer = "刘芳"
+
+[[questions]]
+question = "王强是哪个俱乐部的成员？"
+answer = "清华机器人俱乐部"

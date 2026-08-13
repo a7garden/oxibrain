@@ -1,0 +1,46 @@
+lang = "es"
+properties = ["latin_baseline"]
+episode = "Carlos y Ana se conocen. Carlos es miembro del Club de Robótica de la UNAM."
+
+[[entities]]
+surface = "Carlos"
+type = "Person"
+span = [0, 6]
+
+[[entities]]
+surface = "Ana"
+type = "Person"
+span = [9, 12]
+
+[[entities]]
+surface = "Club de Robótica"
+type = "Organization"
+span = [47, 64]
+
+[[entities]]
+surface = "UNAM"
+type = "Organization"
+span = [71, 75]
+
+[[expected_statements]]
+predicate = "knows"
+subject_surface = "Carlos"
+object_surface = "Ana"
+
+[[expected_statements]]
+predicate = "member_of"
+subject_surface = "Carlos"
+object_surface = "Club de Robótica"
+
+[[expected_statements]]
+predicate = "part_of"
+subject_surface = "Club de Robótica"
+object_surface = "UNAM"
+
+[[questions]]
+question = "¿A quién conoce Carlos?"
+answer = "Ana"
+
+[[questions]]
+question = "¿De qué es miembro Carlos?"
+answer = "Club de Robótica"

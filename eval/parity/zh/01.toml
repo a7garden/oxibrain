@@ -1,0 +1,36 @@
+lang = "zh"
+properties = ["no_word_delimiters", "no_letter_case", "surname_first"]
+episode = "李娜在腾讯担任软件工程师。她出生于北京。"
+
+[[entities]]
+surface = "李娜"
+type = "Person"
+span = [0, 6]
+
+[[entities]]
+surface = "腾讯"
+type = "Organization"
+span = [9, 15]
+
+[[entities]]
+surface = "北京"
+type = "Place"
+span = [51, 57]
+
+[[expected_statements]]
+predicate = "employed_by"
+subject_surface = "李娜"
+object_surface = "腾讯"
+
+[[expected_statements]]
+predicate = "born_in"
+subject_surface = "李娜"
+object_surface = "北京"
+
+[[questions]]
+question = "李娜在哪里工作？"
+answer = "腾讯"
+
+[[questions]]
+question = "李娜出生在哪里？"
+answer = "北京"

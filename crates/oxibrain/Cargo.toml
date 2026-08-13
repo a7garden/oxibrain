@@ -30,6 +30,8 @@ tempfile.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 criterion.workspace = true
+toml = "0.8"
+serde.workspace = true
 
 [[bench]]
 name = "budget"

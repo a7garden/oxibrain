@@ -1,0 +1,46 @@
+lang = "ja"
+properties = ["no_word_delimiters", "no_letter_case", "surname_first"]
+episode = "山田花子と鈴木一郎はお互いを知っている。山田花子は東大のロボット研究会に所属している。"
+
+[[entities]]
+surface = "山田花子"
+type = "Person"
+span = [0, 12]
+
+[[entities]]
+surface = "鈴木一郎"
+type = "Person"
+span = [15, 27]
+
+[[entities]]
+surface = "ロボット研究会"
+type = "Organization"
+span = [84, 105]
+
+[[entities]]
+surface = "東大"
+type = "Organization"
+span = [75, 81]
+
+[[expected_statements]]
+predicate = "knows"
+subject_surface = "山田花子"
+object_surface = "鈴木一郎"
+
+[[expected_statements]]
+predicate = "member_of"
+subject_surface = "山田花子"
+object_surface = "ロボット研究会"
+
+[[expected_statements]]
+predicate = "part_of"
+subject_surface = "ロボット研究会"
+object_surface = "東大"
+
+[[questions]]
+question = "山田花子は誰を知っていますか？"
+answer = "鈴木一郎"
+
+[[questions]]
+question = "山田花子はどこに所属していますか？"
+answer = "ロボット研究会"

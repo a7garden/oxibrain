@@ -1,0 +1,36 @@
+lang = "en"
+properties = ["latin_baseline"]
+episode = "Alice Chen works at Google as a software engineer. She was born in Taipei."
+
+[[entities]]
+surface = "Alice Chen"
+type = "Person"
+span = [0, 10]
+
+[[entities]]
+surface = "Google"
+type = "Organization"
+span = [20, 26]
+
+[[entities]]
+surface = "Taipei"
+type = "Place"
+span = [67, 73]
+
+[[expected_statements]]
+predicate = "employed_by"
+subject_surface = "Alice Chen"
+object_surface = "Google"
+
+[[expected_statements]]
+predicate = "born_in"
+subject_surface = "Alice Chen"
+object_surface = "Taipei"
+
+[[questions]]
+question = "Where does Alice Chen work?"
+answer = "Google"
+
+[[questions]]
+question = "Where was Alice Chen born?"
+answer = "Taipei"

@@ -1,0 +1,36 @@
+lang = "ja"
+properties = ["no_word_delimiters", "no_letter_case", "surname_first"]
+episode = "田中太郎はグーグルでソフトウェアエンジニアとして働いている。彼は東京で生まれた。"
+
+[[entities]]
+surface = "田中太郎"
+type = "Person"
+span = [0, 12]
+
+[[entities]]
+surface = "グーグル"
+type = "Organization"
+span = [15, 27]
+
+[[entities]]
+surface = "東京"
+type = "Place"
+span = [96, 102]
+
+[[expected_statements]]
+predicate = "employed_by"
+subject_surface = "田中太郎"
+object_surface = "グーグル"
+
+[[expected_statements]]
+predicate = "born_in"
+subject_surface = "田中太郎"
+object_surface = "東京"
+
+[[questions]]
+question = "田中太郎はどこで働いていますか？"
+answer = "グーグル"
+
+[[questions]]
+question = "田中太郎はどこで生まれましたか？"
+answer = "東京"

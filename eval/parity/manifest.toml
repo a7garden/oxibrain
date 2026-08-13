@@ -1,0 +1,51 @@
+# Parity corpus manifest (ARCHITECTURE.md §7.8, D31).
+#
+# The corpus is organized by PROPERTY, not by language: the language directory
+# is a convenience, this manifest maps each language to the writing-system
+# properties it exercises. The CI gate is a 10pp variance bound across
+# property classes — not across languages (a language list is always
+# incomplete; a property list fails loudly).
+#
+# Seven properties (D31):
+#   no_word_delimiters      zh, ja, th      — breaks word tokenizers
+#   agglutinative_morphology ko              — breaks stem matching
+#   right_to_left           ar              — breaks span offsets/rendering
+#   combining_marks         th              — breaks NFKC assumptions
+#   no_letter_case          zh, ja, ar, ko  — breaks casefold-dependent logic
+#   surname_first           ko, zh, ja      — breaks prefix-bonus similarity
+#   latin_baseline          en, es          — the control
+
+[[languages]]
+lang = "en"
+properties = ["latin_baseline"]
+episodes = ["01.toml", "02.toml"]
+
+[[languages]]
+lang = "es"
+properties = ["latin_baseline"]
+episodes = ["01.toml", "02.toml"]
+
+[[languages]]
+lang = "ko"
+properties = ["agglutinative_morphology", "no_letter_case", "surname_first"]
+episodes = ["01.toml", "02.toml"]
+
+[[languages]]
+lang = "ja"
+properties = ["no_word_delimiters", "no_letter_case", "surname_first"]
+episodes = ["01.toml", "02.toml"]
+
+[[languages]]
+lang = "zh"
+properties = ["no_word_delimiters", "no_letter_case", "surname_first"]
+episodes = ["01.toml", "02.toml"]
+
+[[languages]]
+lang = "ar"
+properties = ["right_to_left", "no_letter_case"]
+episodes = ["01.toml", "02.toml"]
+
+[[languages]]
+lang = "th"
+properties = ["no_word_delimiters", "combining_marks"]
+episodes = ["01.toml", "02.toml"]

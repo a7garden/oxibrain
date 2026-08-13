@@ -1,0 +1,36 @@
+lang = "es"
+properties = ["latin_baseline"]
+episode = "María López trabaja en Mercado Libre como ingeniera de software. Nació en Buenos Aires."
+
+[[entities]]
+surface = "María López"
+type = "Person"
+span = [0, 13]
+
+[[entities]]
+surface = "Mercado Libre"
+type = "Organization"
+span = [25, 38]
+
+[[entities]]
+surface = "Buenos Aires"
+type = "Place"
+span = [77, 89]
+
+[[expected_statements]]
+predicate = "employed_by"
+subject_surface = "María López"
+object_surface = "Mercado Libre"
+
+[[expected_statements]]
+predicate = "born_in"
+subject_surface = "María López"
+object_surface = "Buenos Aires"
+
+[[questions]]
+question = "¿Dónde trabaja María López?"
+answer = "Mercado Libre"
+
+[[questions]]
+question = "¿Dónde nació María López?"
+answer = "Buenos Aires"

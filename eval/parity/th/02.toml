@@ -1,0 +1,46 @@
+lang = "th"
+properties = ["no_word_delimiters", "combining_marks"]
+episode = "มานะและนิดารู้จักกัน มานะเป็นสมาชิกชมรมหุ่นยนต์ที่มหาวิทยาลัยจุฬาฯ"
+
+[[entities]]
+surface = "มานะ"
+type = "Person"
+span = [0, 12]
+
+[[entities]]
+surface = "นิดา"
+type = "Person"
+span = [21, 33]
+
+[[entities]]
+surface = "ชมรมหุ่นยนต์"
+type = "Organization"
+span = [103, 139]
+
+[[entities]]
+surface = "มหาวิทยาลัยจุฬาฯ"
+type = "Organization"
+span = [148, 196]
+
+[[expected_statements]]
+predicate = "knows"
+subject_surface = "มานะ"
+object_surface = "นิดา"
+
+[[expected_statements]]
+predicate = "member_of"
+subject_surface = "มานะ"
+object_surface = "ชมรมหุ่นยนต์"
+
+[[expected_statements]]
+predicate = "part_of"
+subject_surface = "ชมรมหุ่นยนต์"
+object_surface = "มหาวิทยาลัยจุฬาฯ"
+
+[[questions]]
+question = "มานะรู้จักใคร?"
+answer = "นิดา"
+
+[[questions]]
+question = "มานะเป็นสมาชิกอะไร?"
+answer = "ชมรมหุ่นยนต์"
