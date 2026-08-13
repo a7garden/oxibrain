@@ -79,11 +79,20 @@ pub enum Command {
         #[arg(long, default_value = "personal")]
         space: String,
     },
-    /// Render an entity page (brief) with followable links.
+    /// Render a page (brief) with followable links. `--kind entity` is the
+    /// default; `--kind space` shows counts + top entities; `--kind topic`
+    /// keyword-searches entity surfaces (`--topic` is the keyword).
     Page {
-        entity: String,
+        /// Entity id (when --kind entity, default), or ignored for space/topic.
+        entity: Option<String>,
         #[arg(long, default_value = "personal")]
         space: String,
+        /// Target kind: entity (default), space, or topic.
+        #[arg(long, default_value = "entity")]
+        kind: String,
+        /// Keyword for --kind topic.
+        #[arg(long)]
+        topic: Option<String>,
     },
     /// Reproject the store.
     Reproject,

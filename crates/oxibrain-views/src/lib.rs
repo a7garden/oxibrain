@@ -117,6 +117,45 @@ pub struct UncertaintyView {
     pub note: String,
 }
 
+/// One followable link in a list view (space brief, topic brief). Same wire
+/// format as `link()`.
+#[derive(Debug, Clone)]
+pub struct EntityLink {
+    pub surface: String,
+    pub entity_id: String,
+    /// Number of distinct predicates this entity participates in (used as a
+    /// cheap salience proxy in the space brief's top-entities list).
+    pub predicate_count: usize,
+}
+
+/// A rendered space page (§14.1, `brief(space)`): counts plus a list of
+/// top entities as followable links.
+#[derive(Debug, Clone)]
+pub struct SpaceBrief {
+    pub space_name: String,
+    pub stats: SpaceStatsView,
+    pub top_entities: Vec<EntityLink>,
+}
+
+/// Counts surfaced on a space brief — mirrors `oxibrain_core::SpaceStats`
+/// but pure-Rust (no BrainError or DB types) so the views crate stays
+/// dependency-free.
+#[derive(Debug, Clone, Default)]
+pub struct SpaceStatsView {
+    pub episodes: i64,
+    pub entities: i64,
+    pub statements: i64,
+    pub contradictions: usize,
+}
+
+/// A rendered topic page (§14.1, `brief(topic)`): keyword query + matched
+/// entities as followable links.
+#[derive(Debug, Clone)]
+pub struct TopicBrief {
+    pub topic: String,
+    pub matched_entities: Vec<EntityLink>,
+}
+
 // ── Renderer ──────────────────────────────────────────────────────────────
 
 /// Render an entity brief to Markdown. Pure and deterministic: every list is
@@ -247,6 +286,69 @@ pub fn render_entity(brief: &EntityBrief) -> String {
         }
     }
 
+    out
+}
+
+/// Render a space brief. Pure and deterministic (sorted by predicate_count
+/// desc, then surface).
+pub fn render_space(brief: &SpaceBrief) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# space: {}", brief.space_name);
+    out.push('\n');
+    let s = &brief.stats;
+    let _ = writeln!(out, "**Episodes:** {}", s.episodes);
+    let _ = writeln!(out, "**Entities:** {}", s.entities);
+    let _ = writeln!(out, "**Statements:** {}", s.statements);
+    let _ = writeln!(out, "**Contradictions:** {}", s.contradictions);
+    out.push('\n');
+    if !brief.top_entities.is_empty() {
+        out.push_str("## Top entities\n\n");
+        let mut ents = brief.top_entities.clone();
+        // Stable sort: predicate_count desc, then surface asc.
+        ents.sort_by(|a, b| {
+            b.predicate_count
+                .cmp(&a.predicate_count)
+                .then_with(|| a.surface.cmp(&b.surface))
+        });
+        for e in &ents {
+            let _ = writeln!(
+                out,
+                "- {} ({} predicates)",
+                link(&e.surface, &e.entity_id),
+                e.predicate_count
+            );
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Render a topic brief. Pure and deterministic (sorted by predicate_count
+/// desc, then surface).
+pub fn render_topic(brief: &TopicBrief) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# topic: {}", brief.topic);
+    out.push('\n');
+    if brief.matched_entities.is_empty() {
+        out.push_str("_no entities matched_\n");
+        return out;
+    }
+    out.push_str("## Matches\n\n");
+    let mut ents = brief.matched_entities.clone();
+    ents.sort_by(|a, b| {
+        b.predicate_count
+            .cmp(&a.predicate_count)
+            .then_with(|| a.surface.cmp(&b.surface))
+    });
+    for e in &ents {
+        let _ = writeln!(
+            out,
+            "- {} ({} predicates)",
+            link(&e.surface, &e.entity_id),
+            e.predicate_count
+        );
+    }
+    out.push('\n');
     out
 }
 

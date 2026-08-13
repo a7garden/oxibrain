@@ -22,6 +22,18 @@ pub use oxibrain_store::security::AuditRow;
 use oxibrain_store::{StoreHandle, ledger, query, reproject};
 use std::sync::Arc;
 
+/// Discriminator for the three `brief` target kinds (M9 §14.1, `brief(entity |
+/// space | topic)`). Entity targets go through `Brain::brief(space, entity_id)`
+/// — the entity case is split out so the two-arg call stays a stable surface
+/// for the existing UI clients. `Space` and `Topic` are reached via
+/// `Brain::brief_target`.
+#[derive(Debug, Clone, Copy)]
+pub enum BriefTarget<'a> {
+    Entity(&'a str),
+    Space,
+    Topic(&'a str),
+}
+
 /// The brain. Embedded mode only in M0 (daemon/transport land in M4).
 pub struct Brain {
     handle: Arc<StoreHandle>,
@@ -494,6 +506,46 @@ impl Brain {
         }
         self.brief(space, target).await
     }
+
+    /// Render a brief for a non-entity target (M9 §14.1, `brief(space)`,
+    /// `brief(topic)`). For entity targets, prefer `brief(space, entity_id)`
+    /// — this method does not cover the entity case to keep the dispatch
+    /// explicit at the call site.
+    pub async fn brief_target(
+        &self,
+        space: &str,
+        target: BriefTarget<'_>,
+    ) -> Result<String, BrainError> {
+        use oxibrain_store::brief as b;
+        // Materialize the borrowed `target` as owned strings before the
+        // `move` closure — the closure must satisfy `'static`.
+        let kind: String = match target {
+            BriefTarget::Entity(_) => {
+                return Err(BrainError::Config(
+                    "use Brain::brief(space, entity_id) for entity targets".into(),
+                ));
+            }
+            BriefTarget::Space => "space".to_string(),
+            BriefTarget::Topic(t) => format!("topic:{t}"),
+        };
+        let h = self.handle.clone();
+        let space = space.to_string();
+        tokio::task::spawn_blocking(move || -> Result<String, BrainError> {
+            if let Some(topic) = kind.strip_prefix("topic:") {
+                let data = h
+                    .readers
+                    .read(|conn| b::topic_brief(conn, &space, topic, 50))?;
+                Ok(render_topic_brief(&data))
+            } else {
+                // kind == "space"
+                let data = h.readers.read(|conn| b::space_brief(conn, &space, 50))?;
+                Ok(render_space_brief(&data))
+            }
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
     /// Byte-identical snapshot of the truth half (P1, §5.1).
     pub async fn snapshot_truth(&self, space: &str) -> Result<String, BrainError> {
         let h = self.handle.clone();
@@ -1516,6 +1568,48 @@ fn render_entity_brief(data: &oxibrain_store::brief::EntityBriefData) -> String 
         uncertainty: uncertainty_for(data),
     };
     views::render_entity(&brief)
+}
+
+/// Map store data to the view model and render Markdown for a space brief.
+fn render_space_brief(data: &oxibrain_store::brief::SpaceBriefData) -> String {
+    use oxibrain_views as views;
+    let brief = views::SpaceBrief {
+        space_name: data.space_name.clone(),
+        stats: views::SpaceStatsView {
+            episodes: data.stats.episodes,
+            entities: data.stats.entities,
+            statements: data.stats.statements,
+            contradictions: data.stats.contradictions,
+        },
+        top_entities: data
+            .top_entities
+            .iter()
+            .map(|e| views::EntityLink {
+                surface: e.surface.clone(),
+                entity_id: e.entity_id.clone(),
+                predicate_count: e.predicate_count,
+            })
+            .collect(),
+    };
+    views::render_space(&brief)
+}
+
+/// Map store data to the view model and render Markdown for a topic brief.
+fn render_topic_brief(data: &oxibrain_store::brief::TopicBriefData) -> String {
+    use oxibrain_views as views;
+    let brief = views::TopicBrief {
+        topic: data.topic.clone(),
+        matched_entities: data
+            .matched_entities
+            .iter()
+            .map(|e| views::EntityLink {
+                surface: e.surface.clone(),
+                entity_id: e.entity_id.clone(),
+                predicate_count: e.predicate_count,
+            })
+            .collect(),
+    };
+    views::render_topic(&brief)
 }
 
 fn uncertainty_for(

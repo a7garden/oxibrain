@@ -352,3 +352,159 @@ fn literal_repr(tv: &TypedValue) -> String {
         TypedValue::Bool(b) => b.to_string(),
     }
 }
+
+// ── Space + Topic brief data ────────────────────────────────────────────────
+
+/// Everything needed to render `brief(space)`. Pure fetch — no decisions.
+pub struct SpaceBriefData {
+    pub space_name: String,
+    pub stats: SpaceCounts,
+    pub top_entities: Vec<EntityLinkRow>,
+}
+
+/// Counts surfaced on a space brief (mirrors `oxibrain_core::SpaceStats`).
+pub struct SpaceCounts {
+    pub episodes: i64,
+    pub entities: i64,
+    pub statements: i64,
+    pub contradictions: usize,
+}
+
+/// One entity rendered as a followable link in the space/topic brief list.
+pub struct EntityLinkRow {
+    pub surface: String,
+    pub entity_id: String,
+    pub predicate_count: usize,
+}
+
+/// Everything needed to render `brief(topic)`. Pure fetch.
+pub struct TopicBriefData {
+    pub topic: String,
+    pub matched_entities: Vec<EntityLinkRow>,
+}
+
+/// Fetch the data for a space brief. `limit` caps the top-entities list.
+pub fn space_brief(
+    conn: &Connection,
+    space: &str,
+    limit: usize,
+) -> Result<SpaceBriefData, BrainError> {
+    // 1. Stats.
+    let stats_row = conn
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL),
+                (SELECT COUNT(*) FROM entities WHERE space_id = ?1 AND merged_into IS NULL),
+                (SELECT COUNT(*) FROM statements WHERE space_id = ?1),
+                (SELECT COUNT(DISTINCT s.id) FROM statements s
+                  WHERE s.space_id = ?1
+                    AND EXISTS (SELECT 1 FROM statements s2
+                                 WHERE s2.space_id = s.space_id
+                                   AND s2.subject_id = s.subject_id
+                                   AND s2.predicate = s.predicate
+                                   AND s2.id != s.id))",
+            params![space],
+            |r| {
+                Ok(SpaceCounts {
+                    episodes: r.get(0)?,
+                    entities: r.get(1)?,
+                    statements: r.get(2)?,
+                    contradictions: r.get::<_, i64>(3)? as usize,
+                })
+            },
+        )
+        .map_err(sql_err)?;
+
+    // 2. Top entities by predicate_count (cheap salience proxy). Surfaces
+    // are read from any key on the entity (canonical_key is not always set
+    // by the projection path — `entity_brief` handles this by falling
+    // back to the first key; we do the same here for consistency).
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.id,
+                    COALESCE(
+                        (SELECT surface FROM entity_keys
+                          WHERE entity_id = e.id ORDER BY surface LIMIT 1),
+                        e.id) AS surface,
+                    (SELECT COUNT(DISTINCT predicate) FROM statements
+                      WHERE space_id = ?1 AND (subject_id = e.id OR object_entity = e.id))
+               AS pred_count
+             FROM entities e
+            WHERE e.space_id = ?2 AND e.merged_into IS NULL
+            ORDER BY pred_count DESC, surface ASC
+            LIMIT ?3",
+        )
+        .map_err(sql_err)?;
+    let top_entities: Vec<EntityLinkRow> = stmt
+        .query_map(params![space, space, limit as i64], |r| {
+            Ok(EntityLinkRow {
+                entity_id: r.get(0)?,
+                surface: r.get(1)?,
+                predicate_count: r.get::<_, i64>(2)? as usize,
+            })
+        })
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+
+    Ok(SpaceBriefData {
+        space_name: space.to_string(),
+        stats: stats_row,
+        top_entities,
+    })
+}
+
+/// Fetch the data for a topic brief. Matches entity keys whose surface
+/// contains the topic (case-insensitive substring) — a lexical proxy that
+/// does not require an embedder. The corpus is gated by `space`.
+///
+/// `limit` caps the match list. Duplicate entities (multiple keys with the
+/// same surface match) are deduplicated by entity_id.
+pub fn topic_brief(
+    conn: &Connection,
+    space: &str,
+    topic: &str,
+    limit: usize,
+) -> Result<TopicBriefData, BrainError> {
+    let pattern = format!("%{}%", topic.to_lowercase());
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.id, ek.surface,
+                    (SELECT COUNT(DISTINCT predicate) FROM statements
+                      WHERE space_id = ?1 AND (subject_id = e.id OR object_entity = e.id))
+               AS pred_count
+             FROM entity_keys ek
+             JOIN entities e ON e.id = ek.entity_id
+            WHERE ek.space_id = ?1 AND e.merged_into IS NULL
+              AND LOWER(ek.surface) LIKE ?2
+            ORDER BY pred_count DESC, ek.surface ASC
+            LIMIT ?3",
+        )
+        .map_err(sql_err)?;
+    let mut matched: Vec<EntityLinkRow> = stmt
+        .query_map(params![space, pattern, (limit * 2) as i64], |r| {
+            Ok(EntityLinkRow {
+                entity_id: r.get(0)?,
+                surface: r.get(1)?,
+                predicate_count: r.get::<_, i64>(2)? as usize,
+            })
+        })
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    // Deduplicate by entity_id (same entity may match via multiple keys),
+    // keep the highest predicate_count row.
+    matched.sort_by(|a, b| {
+        b.predicate_count
+            .cmp(&a.predicate_count)
+            .then_with(|| a.surface.cmp(&b.surface))
+    });
+    let mut seen = std::collections::HashSet::new();
+    matched.retain(|e| seen.insert(e.entity_id.clone()));
+    matched.truncate(limit);
+
+    Ok(TopicBriefData {
+        topic: topic.to_string(),
+        matched_entities: matched,
+    })
+}

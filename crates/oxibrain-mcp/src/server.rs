@@ -10,7 +10,8 @@ use crate::protocol::{
     text_result, tool_error,
 };
 use oxibrain::{
-    Brain, BrainConfig, Capability, DeclObject, Declaration, EntityRef, RedactTarget, Scope,
+    Brain, BrainConfig, BrainError, BriefTarget, Capability, DeclObject, Declaration, EntityRef,
+    RedactTarget, Scope,
 };
 use oxibrain_core::retrieval::{
     Direction, PredicateFilter, Query, QueryMode, Strategy, TraversalSpec,
@@ -270,12 +271,37 @@ impl BrainServer {
     }
 
     async fn tool_brief(&self, args: &Value) -> Result<String, ToolErr> {
-        let entity_id = str_arg(args, "entity_id")?;
         let space_id = self.ensure_space(&space_arg(args)).await?;
-        self.brain
-            .brief(&space_id, entity_id)
-            .await
-            .map_err(ToolErr::run)
+        // Discriminator: `target_kind` is `entity` (default for back-compat),
+        // `space`, or `topic`. Entity uses `entity_id`; topic uses `topic`.
+        let kind = args
+            .get("target_kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("entity");
+        match kind {
+            "entity" => {
+                let entity_id = str_arg(args, "entity_id")?;
+                self.brain
+                    .brief(&space_id, entity_id)
+                    .await
+                    .map_err(ToolErr::run)
+            }
+            "space" => self
+                .brain
+                .brief_target(&space_id, BriefTarget::Space)
+                .await
+                .map_err(ToolErr::run),
+            "topic" => {
+                let topic = str_arg(args, "topic")?;
+                self.brain
+                    .brief_target(&space_id, BriefTarget::Topic(topic))
+                    .await
+                    .map_err(ToolErr::run)
+            }
+            other => Err(ToolErr::run(BrainError::Config(format!(
+                "brief.target_kind: '{other}' (expected entity|space|topic)"
+            )))),
+        }
     }
 
     async fn tool_navigate(&self, args: &Value) -> Result<String, ToolErr> {
@@ -832,14 +858,16 @@ fn tool_list() -> Value {
                     "required": ["query"]
                 })),
             tool("brief",
-                "Render an entity page as Markdown with followable links: identity, aliases, current beliefs (validity, confidence, support), contradictions with both provenances, neighbours as links, timeline change points, and sources.",
+                "Render a page as Markdown with followable links. Three target kinds: `entity` (an entity page: identity, aliases, current beliefs, contradictions, neighbours, timeline, sources — the M9 §9.2 brief); `space` (counts + top entities); `topic` (keyword search over entity surfaces). The target_kind discriminator is purely additive; existing callers using only `entity_id` keep working.",
                 json!({
                     "type": "object",
                     "properties": {
-                        "entity_id": { "type": "string", "description": "The entity's content-derived ID." },
+                        "target_kind": { "type": "string", "enum": ["entity", "space", "topic"], "description": "Which brief to render. Default: entity." },
+                        "entity_id": { "type": "string", "description": "Required when target_kind=entity. The entity's content-derived ID." },
+                        "topic": { "type": "string", "description": "Required when target_kind=topic. A keyword to match against entity surface forms (case-insensitive substring)." },
                         "space": { "type": "string", "description": "Space name (default: personal)." }
                     },
-                    "required": ["entity_id"]
+                    "required": []
                 })),
             tool("navigate",
                 "Follow a followable link from a rendered page to another entity page. Returns the target's brief.",
