@@ -18,6 +18,8 @@ pub enum BrainError {
     Invalid(String),
     #[error("corruption: {0}")]
     Corruption(String),
+    #[error("model error: {0}")]
+    Model(String),
     #[error("provider error (retryable: {retryable}): {message}")]
     Provider { retryable: bool, message: String },
     #[error("extraction error: {0}")]
@@ -43,6 +45,6 @@ impl BrainError {
                     retryable: true,
                     ..
                 }
-        )
+        ) && !matches!(self, Self::Model(_))
     }
 }

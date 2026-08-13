@@ -8,6 +8,7 @@ members = [
     "crates/oxibrain",
     "crates/oxibrain-cli",
     "crates/oxibrain-llm-http",
+    "crates/oxibrain-llm-local",
     "crates/oxibrain-mcp",
     "crates/oxibrain-client",
     "crates/oxibrain-connectors",
@@ -25,6 +26,7 @@ oxibrain-core = { path = "crates/oxibrain-core", version = "0.1.0" }
 oxibrain-index = { path = "crates/oxibrain-index", version = "0.1.0" }
 oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.1.0" }
 oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.1.0" }
+oxibrain-llm-local = { path = "crates/oxibrain-llm-local", version = "0.1.0" }
 oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.1.0" }
 oxibrain-client = { path = "crates/oxibrain-client", version = "0.1.0" }
 oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.1.0" }
@@ -47,6 +49,8 @@ tracing-subscriber = "0.3"
 thiserror = "1"
 anyhow = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
+llama-cpp-2 = { version = "0.1", features = ["sampler"] }
+encoding_rs = "0.8"
 
 [profile.release]
 lto = "thin"

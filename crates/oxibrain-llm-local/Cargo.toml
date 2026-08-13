@@ -1,0 +1,20 @@
+[package]
+name = "oxibrain-llm-local"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxibrain-ports.workspace = true
+llama-cpp-2.workspace = true
+encoding_rs.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+oxibrain-core.workspace = true
+tokio.workspace = true
