@@ -1,6 +1,6 @@
 # oxibrain — Architecture
 
-> **Version:** v2.0 · **Date:** 2026-08-13 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.1 · **Date:** 2026-08-13 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
@@ -1781,7 +1781,7 @@ that were never populated (F30); the description must match what is returned.
 | reproject from cache (whole store) | < 5 min | **42.7 ms** ✅ |
 | cold start (index load) | < 2 s | not yet benchmarked |
 | `brief` (entity, depth 1) | < 100 ms | new in M9 |
-| local extraction (one episode) | reported, not budgeted | new in M7 |
+| local extraction (one episode) | reported, not budgeted | **~13 s** (Qwen2.5-1.5B-Instruct Q4_K_M, Apple M4 Metal, 512 out tokens, 2026-08-13 spike) |
 
   Measured 2026-08-11/12 on a functional smoke fixture, not at target scale. Each budget may be
   revised **once**, with the measurement and reason recorded here; after that it is a regression
@@ -2046,9 +2046,9 @@ verified by file and line; F22–F26 by compiling and running the code, the rest
 | F12 | no blocking; full type scan per mention | `store/knowledge.rs:165` | M9 |
 | F13 | `graph_context` hardcoded `0.0` | `store/project.rs:105` | M9 |
 | ~~F14~~ | ~~`w_alias` dead field~~ — removed, replaced by `w_ngram` | `core/resolution.rs` | ✅ M7 |
-| F15 | **no `EmbeddingPort` implementation exists** | workspace-wide | M7 |
-| F16 | dense search branch is a comment | `store/query.rs:278` | M7 |
-| F17 | `upsert_vector` has no production caller | `store/vectors.rs` | M7 |
+| ~~F15~~ | ~~no `EmbeddingPort` implementation exists~~ — `oxibrain-embed-local` (BGE-M3) implements it | workspace-wide | ✅ M7 |
+| ~~F16~~ | ~~dense search branch is a comment~~ — `dense_search` + `QueryMode::Dense` | `store/query.rs` | ✅ M7 |
+| ~~F17~~ | ~~`upsert_vector` has no production caller~~ — wired into reproject | `store/vectors.rs` | ✅ M7 |
 | ~~F18~~ | ~~vectors inside the byte-identical snapshot~~ — split into truth/ranking | `store/index_ops.rs` | ✅ M7 (structural; tolerance pending 7.3) |
 | F19 | `fabricated_entity_rate` hardcoded to `0.0` | `core/eval.rs` | M10 |
 | F20 | label propagation ignores belief confidence | `index/community.rs` | M10 |
@@ -2056,9 +2056,9 @@ verified by file and line; F22–F26 by compiling and running the code, the rest
 | ~~F22~~ | ~~FTS configured `porter unicode61`~~ — replaced by `unicode61` + `trigram` (v6) | `migrations/v3.sql:7` | ✅ M7 |
 | ~~F23~~ | ~~hardcoded English stopword list~~ — deleted, n-gram features | `index/vector.rs` | ✅ M7 |
 | ~~F24~~ | ~~`s.len() > 1` filters on **bytes**~~ — deleted, n-gram features | `index/vector.rs` | ✅ M7 |
-| F25 | **Chinese/Japanese sentence → 1 token**; Thai loses a combining mark | measured, §7.1 | M7 |
-| F26 | **Korean tokens carry agglutinated particles** | measured, §7.1 | M7 |
-| F27 | `estimate_tokens = chars/4`; CJK context-window overflow | `core/context.rs` | M7 |
+| ~~F25~~ | ~~Chinese/Japanese sentence → 1 token~~ — model tokenizer (7.1) + n-gram fallback (7.11) | measured, §7.1 | ✅ M7 |
+| ~~F26~~ | ~~Korean tokens carry agglutinated particles~~ — model tokenizer (7.1) | measured, §7.1 | ✅ M7 |
+| ~~F27~~ | ~~`estimate_tokens = chars/4`; CJK context-window overflow~~ — `TokenizerPort` exact counts (7.1, 7.4) | `core/context.rs` | ✅ M7 |
 | ~~F28~~ | ~~`jaro_winkler` prefix bonus boosts shared surnames~~ — replaced by n-gram Jaccard | `core/resolution.rs` | ✅ M7 |
 | F29 | MCP `search`/`traverse` never exposed `as_of` / `min_confidence` — so adding them is additive | `mcp/server.rs::tool_list` | M8 |
 | F30 | `recall`'s advertised description promises layers that are never populated | `mcp/server.rs::tool_list` | M8 |
