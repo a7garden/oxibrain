@@ -1,9 +1,19 @@
-//! Retrieval types: Query, TraversalSpec, RankingResult (DESIGN §9).
-//! Type definitions only — execution lives in store.
+//! Retrieval types: Query, TraversalSpec, and legacy store-side handles.
+//!
+//! The M8 `Retrieval` type and its `rank()` live in [`crate::rank`]. This
+//! module keeps the legacy `Query` / `QueryMode` / `SearchHit` / `SearchTarget`
+//! types that the pre-M8 `hybrid_query` path in `oxibrain-store::query`
+//! consumes. The presets in `crate::rank::Retrieval::hybrid()` etc. translate
+//! the same `QueryMode` strings into a `Retrieval` so the MCP `mode`
+//! parameter keeps working without a server-side rename (F29).
 
 use crate::knowledge::{EntityId, StatementId};
 use oxibrain_ports::Timestamp;
 use serde::{Deserialize, Serialize};
+
+// Re-export the M8 rank types so existing import paths
+// (`oxibrain_core::retrieval::RankingResult` etc.) continue to resolve.
+pub use crate::rank::{DropReason, DroppedItem, RankedItem, RankingResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Query {
@@ -35,6 +45,21 @@ pub enum QueryMode {
     Community,
 }
 
+impl QueryMode {
+    /// Translate the M7 string enum to an M8 preset name. The preset lives in
+    /// `crate::rank::Retrieval::hybrid/lexical/semantic/graph/community`.
+    pub fn to_preset(self) -> &'static str {
+        match self {
+            QueryMode::Hybrid => "hybrid",
+            QueryMode::Lexical => "lexical",
+            QueryMode::LexicalVector => "lexical", // TF-IDF KNN collapses into lexical
+            QueryMode::Dense => "semantic",
+            QueryMode::Graph => "graph",
+            QueryMode::Community => "community",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchHit {
     pub target: SearchTarget,
@@ -48,39 +73,6 @@ pub enum SearchTarget {
     Episode { id: String },
     Statement { id: StatementId },
     Entity { id: EntityId },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RankedItem {
-    pub target: SearchTarget,
-    pub fused_score: f64,
-    pub rank: usize,
-    pub mode_ranks: Vec<(QueryMode, usize)>,
-    pub salience: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RankingResult {
-    pub items: Vec<RankedItem>,
-    pub dropped: Vec<DroppedItem>,
-    pub total_found: usize,
-    pub query: Query,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DroppedItem {
-    pub target: SearchTarget,
-    pub reason: DropReason,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DropReason {
-    BelowConfidenceFloor { actual: f32, floor: f32 },
-    OutsideValidWindow { valid_at: Timestamp },
-    TrustExcluded { tier: String },
-    TruncatedByBudget { position: usize },
-    BelowSalienceFloor { salience: f64, floor: f64 },
 }
 
 // --- Traversal ---
@@ -112,7 +104,7 @@ impl Default for TraversalSpec {
         }
     }
 }
-// Direction and PredicateFilter now live in oxibrain-index (spec.rs) per §18
+// Direction and PredicateFilter live in oxibrain-index (spec.rs) per §18
 // rule 1 (core depends on index, not the reverse). Re-exported here so
 // existing `oxibrain_core::retrieval::Direction` paths continue to work.
 pub use oxibrain_index::{Direction, PredicateFilter};

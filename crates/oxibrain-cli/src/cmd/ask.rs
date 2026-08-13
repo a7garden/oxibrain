@@ -1,14 +1,14 @@
 use oxibrain::Brain;
 use oxibrain::BrainConfig;
-use oxibrain_core::retrieval::{Query, QueryMode, SearchTarget};
+use oxibrain_core::TargetId;
 use std::path::Path;
 
 pub async fn run(dir: &Path, question: &str, space: &str) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
     let space_id = brain.ensure_space(space).await?;
-    let q = Query {
+    let q = oxibrain_core::Query {
         text: question.to_string(),
-        mode: QueryMode::Hybrid,
+        mode: oxibrain_core::QueryMode::Hybrid,
         space: space_id,
         as_of: None,
         limit: 20,
@@ -16,15 +16,17 @@ pub async fn run(dir: &Path, question: &str, space: &str) -> anyhow::Result<()> 
     };
     let result = brain.query(q).await?;
     println!(
-        "hits: {} (total found: {})",
+        "hits: {} (total candidates: {})",
         result.items.len(),
-        result.total_found
+        result.total_candidates
     );
     for item in &result.items {
         let target = match &item.target {
-            SearchTarget::Episode { id } => format!("episode:{id}"),
-            SearchTarget::Statement { id } => format!("statement:{id}"),
-            SearchTarget::Entity { id } => format!("entity:{id}"),
+            TargetId::Episode { id } => format!("episode:{id}"),
+            TargetId::Statement { id } => format!("statement:{id}"),
+            TargetId::Entity { id } => format!("entity:{id}"),
+            TargetId::Chunk { id } => format!("chunk:{id}"),
+            TargetId::Community { id } => format!("community:{id}"),
         };
         println!(
             "  rank={} score={:.4} salience={:.4} -> {target}",

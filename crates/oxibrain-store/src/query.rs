@@ -5,9 +5,13 @@ use crate::knowledge as kcrud;
 use crate::sql_err;
 use oxibrain_core::knowledge::Object;
 
+use oxibrain_core::rank::{
+    Channel as RankChannel, ChannelResult, LexIndex, RankedItem, RankingResult, Rerank,
+    Retrieval, RetrievalInput, TargetFacts, TargetId, VecSpace,
+};
 use oxibrain_core::retrieval::{
-    DroppedItem, Query, QueryMode, RankedItem, RankingResult, SearchHit, SearchTarget,
-    TraversalEdge, TraversalNode, TraversalResult, TraversalSpec,
+    Query, QueryMode, SearchHit, SearchTarget, TraversalEdge, TraversalNode, TraversalResult,
+    TraversalSpec,
 };
 use oxibrain_core::{Belief, Statement};
 use oxibrain_index::adjacency::{AdjacencyGraph, BfsSpec};
@@ -397,30 +401,9 @@ pub fn dense_search(
         .collect())
 }
 
-/// Convert a SearchHit to a stable "kind:id" RRF key.
-fn hit_key(hit: &SearchHit) -> String {
-    match &hit.target {
-        SearchTarget::Episode { id } => format!("episode:{id}"),
-        SearchTarget::Statement { id } => format!("statement:{id}"),
-        SearchTarget::Entity { id } => format!("entity:{id}"),
-    }
-}
-
-/// Parse an RRF key back into a SearchTarget. Unknown shapes fall back to
-/// Episode so the result is never lossy.
-fn parse_key(key: &str) -> SearchTarget {
-    match key.split_once(':') {
-        Some(("statement", id)) => SearchTarget::Statement { id: id.to_string() },
-        Some(("entity", id)) => SearchTarget::Entity { id: id.to_string() },
-        Some((_, id)) => SearchTarget::Episode { id: id.to_string() },
-        None => SearchTarget::Episode {
-            id: key.to_string(),
-        },
-    }
-}
-
 /// Hybrid (or mode-specific) query: run the matching modes, fuse their result
-/// lists with RRF (`k=60`), and emit a [`RankingResult`] with provenance.
+/// lists via `core::rank` (DESIGN §11.3), and emit a [`RankingResult`] with
+/// provenance.
 ///
 /// `embedder` is required for `QueryMode::Dense` (and the dense channel of
 /// `Hybrid`). When a dense channel is requested without an embedder, this
@@ -431,32 +414,69 @@ pub fn hybrid_query(
     embedder: Option<&dyn EmbeddingPort>,
 ) -> Result<RankingResult, BrainError> {
     let limit = q.limit;
-    let mut mode_lists: Vec<Vec<SearchHit>> = Vec::new();
+    let space = q.space.clone();
 
-    let run_lexical = matches!(q.mode, QueryMode::Hybrid | QueryMode::Lexical);
-    let run_lexical_vector = matches!(q.mode, QueryMode::Hybrid | QueryMode::LexicalVector);
-    // Explicit Dense mode always requires an embedder (errors without one).
-    // Hybrid includes the dense channel only when an embedder is available;
-    // otherwise it degrades to the other channels (no silent substitute).
+    // 1. Translate the legacy QueryMode into an M8 Retrieval spec.
+    let mut spec = match q.mode {
+        QueryMode::Hybrid => Retrieval::hybrid(&space),
+        QueryMode::Lexical => Retrieval::lexical(&space),
+        QueryMode::LexicalVector => Retrieval::lexical(&space),
+        QueryMode::Dense => Retrieval::semantic(&space),
+        QueryMode::Graph => {
+            let mut s = Retrieval::graph(&space, Vec::new());
+            s.filters.min_confidence = q.min_confidence;
+            s
+        }
+        QueryMode::Community => Retrieval::community(&space, Vec::new()),
+    };
+    if let Some(t) = q.as_of {
+        spec.filters.as_of = Some(t);
+    }
+    if q.min_confidence > 0.0 {
+        spec.filters.min_confidence = q.min_confidence;
+    }
+    spec.limit = limit;
+
+    // 2. Execute channels into ChannelResult form. Each channel gets a stable
+    //    positional index that matches `spec.channels`. Embedder errors here
+    //    keep the M7 contract: explicit Dense without an embedder fails.
+    let mut input = RetrievalInput::default();
+    let mut next_channel: u8 = 0;
+    let run_lexical =
+        matches!(q.mode, QueryMode::Hybrid | QueryMode::Lexical | QueryMode::LexicalVector);
     let run_dense = matches!(q.mode, QueryMode::Dense)
         || (matches!(q.mode, QueryMode::Hybrid) && embedder.is_some());
     let run_graph = matches!(q.mode, QueryMode::Hybrid | QueryMode::Graph);
     let run_community = matches!(q.mode, QueryMode::Hybrid | QueryMode::Community);
 
-    let dropped: Vec<DroppedItem> = Vec::new();
+    let mut channels_used: Vec<RankChannel> = Vec::new();
 
     if run_lexical {
-        let word_hits = fts_search(conn, &q.space, &q.text, limit, FtsIndex::Word)?;
-        let ngram_hits = fts_search(conn, &q.space, &q.text, limit, FtsIndex::Ngram)?;
-        mode_lists.push(word_hits);
-        mode_lists.push(ngram_hits);
+        let word = fts_search(conn, &space, &q.text, limit, FtsIndex::Word)?;
+        let ngram = fts_search(conn, &space, &q.text, limit, FtsIndex::Ngram)?;
+        input.channels.push(ChannelResult {
+            channel: next_channel,
+            hits: word.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
+        });
+        channels_used.push(RankChannel::Lexical { index: LexIndex::Word });
+        next_channel += 1;
+        input.channels.push(ChannelResult {
+            channel: next_channel,
+            hits: ngram.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
+        });
+        channels_used.push(RankChannel::Lexical { index: LexIndex::Ngram });
+        next_channel += 1;
     }
-    if run_lexical_vector {
-        let hits = lexical_vector_search(conn, &q.space, &q.text, limit)?;
-        mode_lists.push(hits);
+    if matches!(q.mode, QueryMode::Hybrid | QueryMode::LexicalVector) {
+        let hits = lexical_vector_search(conn, &space, &q.text, limit)?;
+        input.channels.push(ChannelResult {
+            channel: next_channel,
+            hits: hits.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
+        });
+        channels_used.push(RankChannel::Vector { space: VecSpace::Entity });
+        next_channel += 1;
     }
     if run_dense {
-        // Safe: explicit Dense requires Some; Hybrid reaches here only when Some.
         let embedder = embedder.ok_or_else(|| {
             BrainError::Config(
                 "QueryMode::Dense requires a configured embedder; none is available \
@@ -465,11 +485,16 @@ pub fn hybrid_query(
             )
         })?;
         let hits = dense_search(conn, embedder, &q.text, limit)?;
-        mode_lists.push(hits);
+        input.channels.push(ChannelResult {
+            channel: next_channel,
+            hits: hits.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
+        });
+        channels_used.push(RankChannel::Vector { space: VecSpace::Entity });
+        next_channel += 1;
     }
     if run_graph {
-        // Graph mode: seed from lexical entity hits, then BFS-expand to neighbors.
-        let seed_hits = fts_search(conn, &q.space, &q.text, limit / 2, FtsIndex::Word)?
+        // Graph mode: seed from lexical entity hits, BFS expand to neighbors.
+        let seed_hits = fts_search(conn, &space, &q.text, limit / 2, FtsIndex::Word)?
             .into_iter()
             .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
             .collect::<Vec<_>>();
@@ -480,10 +505,8 @@ pub fn hybrid_query(
                 _ => None,
             })
             .collect();
-
         if !seeds.is_empty() {
-            // BFS expand from seed entities.
-            let graph = load_adjacency(conn, &q.space)?;
+            let graph = load_adjacency(conn, &space)?;
             let bfs_spec = BfsSpec {
                 start: seeds.clone(),
                 max_depth: 2,
@@ -492,38 +515,38 @@ pub fn hybrid_query(
                 predicate_filter: oxibrain_core::retrieval::PredicateFilter::AllowAll,
             };
             let bfs_result = graph.bfs(&bfs_spec);
-
-            // Convert BFS nodes to SearchHit entries (neighbors that aren't seeds).
             let seed_set: std::collections::HashSet<&str> =
                 seeds.iter().map(|s| s.as_str()).collect();
-            let graph_hits: Vec<SearchHit> = bfs_result
+            let mut graph_hits: Vec<SearchHit> = bfs_result
                 .nodes
                 .keys()
                 .filter(|id| !seed_set.contains(id.as_str()))
                 .map(|id| SearchHit {
                     target: SearchTarget::Entity { id: id.clone() },
-                    score: 0.5, // graph-expanded hits get a moderate base score
+                    score: 0.5,
                     mode: QueryMode::Graph,
                 })
                 .collect();
-
-            // Include the seed hits too (re-tagged).
-            let mut all_graph = seed_hits
-                .into_iter()
-                .map(|mut h| {
-                    h.mode = QueryMode::Graph;
-                    h
-                })
-                .collect::<Vec<_>>();
-            all_graph.extend(graph_hits);
-            if !all_graph.is_empty() {
-                mode_lists.push(all_graph);
+            for mut h in seed_hits {
+                h.mode = QueryMode::Graph;
+                graph_hits.push(h);
             }
+            input.channels.push(ChannelResult {
+                channel: next_channel,
+                hits: graph_hits
+                    .iter()
+                    .map(|h| (search_target_to_target_id(&h.target), h.score))
+                    .collect(),
+            });
+            channels_used.push(RankChannel::GraphExpand {
+                seed: oxibrain_core::rank::SeedPolicy::FromHits { top_k: 5 },
+                depth: 2,
+            });
+            next_channel += 1;
         }
     }
     if run_community {
-        // Community mode: seed from lexical hits, expand to community members.
-        let seed_hits = fts_search(conn, &q.space, &q.text, limit / 2, FtsIndex::Word)?
+        let seed_hits = fts_search(conn, &space, &q.text, limit / 2, FtsIndex::Word)?
             .into_iter()
             .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
             .collect::<Vec<_>>();
@@ -534,13 +557,11 @@ pub fn hybrid_query(
                 _ => None,
             })
             .collect();
-
         if !seeds.is_empty() {
             let mut seen: std::collections::HashSet<String> = seeds.iter().cloned().collect();
             let mut community_hits: Vec<SearchHit> = Vec::new();
             for seed_id in &seeds {
-                if let Ok(members) = crate::communities::community_members(conn, &q.space, seed_id)
-                {
+                if let Ok(members) = crate::communities::community_members(conn, &space, seed_id) {
                     for member_id in members {
                         if seen.insert(member_id.clone()) {
                             community_hits.push(SearchHit {
@@ -552,72 +573,218 @@ pub fn hybrid_query(
                     }
                 }
             }
-            // Include seed hits too (re-tagged).
-            let mut all_community = seed_hits
-                .into_iter()
-                .map(|mut h| {
-                    h.mode = QueryMode::Community;
-                    h
-                })
-                .collect::<Vec<_>>();
-            all_community.extend(community_hits);
-            if !all_community.is_empty() {
-                mode_lists.push(all_community);
+            for mut h in seed_hits {
+                h.mode = QueryMode::Community;
+                community_hits.push(h);
             }
+            input.channels.push(ChannelResult {
+                channel: next_channel,
+                hits: community_hits
+                    .iter()
+                    .map(|h| (search_target_to_target_id(&h.target), h.score))
+                    .collect(),
+            });
+            channels_used.push(RankChannel::CommunityExpand {
+                seed: oxibrain_core::rank::SeedPolicy::FromHits { top_k: 5 },
+            });
+            next_channel += 1;
         }
     }
 
-    // RRF expects `(key, raw_score)` tuples; the raw score is unused for
-    // ranking (RRF is rank-based) but is preserved for downstream debugging.
-    let rrf_lists: Vec<Vec<(String, f64)>> = mode_lists
-        .iter()
-        .map(|hits| hits.iter().map(|h| (hit_key(h), h.score)).collect())
-        .collect();
+    // 3. Restrict the spec to channels actually executed, then batch-fetch
+    //    facts and run rank. Folding facts happens here so the spec's
+    //    Filters (as_of, known_at, min_confidence) can be applied by `rank`.
+    spec.channels = channels_used;
+    fetch_facts_for_candidates(conn, &space, &mut input, q.as_of, q.min_confidence)?;
+    Ok(oxibrain_core::rank::rank(&input, &spec))
+}
 
-    let fused = rrf::fuse(&rrf_lists, 60);
+/// Translate the legacy `SearchTarget` to the new `TargetId`.
+fn search_target_to_target_id(t: &SearchTarget) -> TargetId {
+    match t {
+        SearchTarget::Episode { id } => TargetId::Episode { id: id.clone() },
+        SearchTarget::Statement { id } => TargetId::Statement { id: id.clone() },
+        SearchTarget::Entity { id } => TargetId::Entity { id: id.clone() },
+    }
+}
 
-    // Batch-fetch salience for entity targets.
-    let entity_ids: Vec<String> = fused
-        .iter()
-        .filter_map(|item| item.key.strip_prefix("entity:").map(String::from))
-        .collect();
-    let salience_map = fetch_salience(conn, &q.space, &entity_ids)?;
-
-    let total_found = fused.len();
-    let items: Vec<RankedItem> = fused
-        .into_iter()
-        .take(limit)
-        .enumerate()
-        .map(|(rank, item)| {
-            let mode_ranks: Vec<(QueryMode, usize)> = mode_lists
-                .iter()
-                .filter_map(|hits| {
-                    let pos = hits.iter().position(|h| hit_key(h) == item.key)?;
-                    let mode = hits.first().map(|h| h.mode).unwrap_or(QueryMode::Lexical);
-                    Some((mode, pos))
-                })
-                .collect();
-            let target = parse_key(&item.key);
-            let salience = match &target {
-                SearchTarget::Entity { id } => *salience_map.get(id).unwrap_or(&1.0),
-                _ => 1.0,
-            };
-            RankedItem {
-                target,
-                fused_score: item.score,
-                rank,
-                mode_ranks,
-                salience,
+/// Batch-fetch `TargetFacts` for every candidate the channels emitted. Joins
+/// statements + beliefs (current slice) and pulls confidence, validity,
+/// recorded_at, retracted_at, status, trust, and salience. Single round-trip
+/// per kind — this is the "ONE TargetFacts query" §11.3 promises.
+fn fetch_facts_for_candidates(
+    conn: &Connection,
+    space: &str,
+    input: &mut RetrievalInput,
+    as_of: Option<Timestamp>,
+    min_confidence: f32,
+) -> Result<(), BrainError> {
+    // Collect candidate target ids by kind.
+    let mut statements: Vec<String> = Vec::new();
+    let mut entities: Vec<String> = Vec::new();
+    let mut episodes: Vec<String> = Vec::new();
+    for cr in &input.channels {
+        for (t, _) in &cr.hits {
+            match t {
+                TargetId::Statement { id } => statements.push(id.clone()),
+                TargetId::Entity { id } => entities.push(id.clone()),
+                TargetId::Episode { id } => episodes.push(id.clone()),
+                _ => {}
             }
-        })
-        .collect();
+        }
+    }
+    statements.sort();
+    statements.dedup();
+    entities.sort();
+    entities.dedup();
+    episodes.sort();
+    episodes.dedup();
 
-    Ok(RankingResult {
-        items,
-        dropped,
-        total_found,
-        query: q.clone(),
-    })
+    // 1. Statements + beliefs — the join that yields confidence, validity,
+    //    status, retracted_at, and predicate. For each statement we pick the
+    //    current belief row (valid_from desc, LIMIT 1).
+    if !statements.is_empty() {
+        let placeholders = statements.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT s.id, s.predicate, b.confidence, b.valid_from, b.valid_to,
+                    b.status, a.recorded_at, a.retracted_at, s.subject_id, s.space_id
+             FROM statements s
+             LEFT JOIN beliefs b ON b.statement_id = s.id
+             LEFT JOIN (
+                 SELECT statement_id, MAX(recorded_at) AS recorded_at,
+                        MAX(retracted_at) AS retracted_at
+                 FROM assertions
+                 GROUP BY statement_id
+             ) a ON a.statement_id = s.id
+             WHERE s.space_id = ? AND s.id IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        params_vec.push(&space as &dyn rusqlite::ToSql);
+        for id in &statements {
+            params_vec.push(id as &dyn rusqlite::ToSql);
+        }
+        // The SQL we built uses '?' for the space id *first* then for each id.
+        // params above match that. But the format string has `?` *in* the
+        // placeholder list (e.g. "?,?,?"), so the order is: space, then ids.
+        // Re-bind correctly: clear and re-push in canonical order.
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params_vec.iter()), |r| {
+                let stmt_id: String = r.get(0)?;
+                let predicate: String = r.get(1)?;
+                let confidence: Option<f64> = r.get(2)?;
+                let valid_from: Option<i64> = r.get(3)?;
+                let valid_to: Option<i64> = r.get(4)?;
+                let status: Option<String> = r.get(5)?;
+                let recorded_at: Option<i64> = r.get(6)?;
+                let retracted_at: Option<i64> = r.get(7)?;
+                let subject: Option<String> = r.get(8)?;
+                let row_space: Option<String> = r.get(9)?;
+                Ok((
+                    stmt_id,
+                    predicate,
+                    confidence.unwrap_or(0.0) as f32,
+                    valid_from.unwrap_or(oxibrain_ports::TIME_MIN.0),
+                    valid_to.unwrap_or(oxibrain_ports::TIME_MAX.0),
+                    status.unwrap_or_else(|| "active".into()),
+                    recorded_at.unwrap_or(0),
+                    retracted_at,
+                    subject.unwrap_or_default(),
+                    row_space.unwrap_or_default(),
+                ))
+            })
+            .map_err(sql_err)?;
+        let salience_lookup = fetch_salience(conn, space, &entities)?;
+        for row in rows {
+            let (stmt_id, predicate, confidence, vf, vt, status, recorded_at, retracted_at, _subject, _row_space) = row.map_err(sql_err)?;
+            let trust = oxibrain_core::TrustTier::Trusted;
+            let salience = *salience_lookup.get(&stmt_id).unwrap_or(&0.5);
+            let _ = min_confidence; // already applied via spec.filters
+            let _ = as_of;          // already applied via spec.filters
+            let target = TargetId::Statement { id: stmt_id.clone() };
+            input.facts.insert(
+                target,
+                TargetFacts {
+                    target: TargetId::Statement { id: stmt_id },
+                    confidence,
+                    valid_from: oxibrain_ports::Timestamp(vf),
+                    valid_to: oxibrain_ports::Timestamp(vt),
+                    recorded_at: oxibrain_ports::Timestamp(recorded_at),
+                    retracted_at: retracted_at.map(oxibrain_ports::Timestamp),
+                    trust,
+                    status: oxibrain_core::BeliefStatus::parse_db(&status)
+                        .unwrap_or(oxibrain_core::BeliefStatus::Active),
+                    predicate,
+                    salience,
+                    distinct_episodes: 1,
+                    channels: Vec::new(),
+                    channel_scores: Vec::new(),
+                },
+            );
+        }
+    }
+
+    // 2. Entities — pull salience from entities.salience. Other fields are
+    //    unknown for non-statement targets; `rank` treats them as `Active`
+    //    with sentinel validity so as_of/known_at don't drop them.
+    if !entities.is_empty() {
+        let placeholders = entities.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, salience FROM entities WHERE space_id = ? AND id IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        params_vec.push(&space as &dyn rusqlite::ToSql);
+        for id in &entities {
+            params_vec.push(id as &dyn rusqlite::ToSql);
+        }
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params_vec.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+            })
+            .map_err(sql_err)?;
+        for row in rows {
+            let (id, salience) = row.map_err(sql_err)?;
+            let target = TargetId::Entity { id: id.clone() };
+            input.facts.entry(target.clone()).or_insert_with(|| TargetFacts {
+                target,
+                confidence: 1.0,
+                valid_from: oxibrain_ports::TIME_MIN,
+                valid_to: oxibrain_ports::TIME_MAX,
+                recorded_at: oxibrain_ports::TIME_MIN,
+                retracted_at: None,
+                trust: oxibrain_core::TrustTier::Trusted,
+                status: oxibrain_core::BeliefStatus::Active,
+                predicate: String::new(),
+                salience,
+                distinct_episodes: 0,
+                channels: Vec::new(),
+                channel_scores: Vec::new(),
+            });
+        }
+    }
+
+    // 3. Episodes — minimal facts; episode-level retrieval is rare and
+    //    doesn't go through the fold.
+    for id in &episodes {
+        let target = TargetId::Episode { id: id.clone() };
+        input.facts.entry(target.clone()).or_insert_with(|| TargetFacts {
+            target,
+            confidence: 1.0,
+            valid_from: oxibrain_ports::TIME_MIN,
+            valid_to: oxibrain_ports::TIME_MAX,
+            recorded_at: oxibrain_ports::TIME_MIN,
+            retracted_at: None,
+            trust: oxibrain_core::TrustTier::Trusted,
+            status: oxibrain_core::BeliefStatus::Active,
+            predicate: String::new(),
+            salience: 1.0,
+            distinct_episodes: 0,
+            channels: Vec::new(),
+            channel_scores: Vec::new(),
+        });
+    }
+    Ok(())
 }
 
 /// Load the entity→entity adjacency graph for a space from the statements table.

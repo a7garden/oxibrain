@@ -7,7 +7,8 @@
 //! - explicit error when Dense mode has no embedder (no silent fallback)
 
 use oxibrain::Brain;
-use oxibrain_core::retrieval::{Query, QueryMode, SearchTarget};
+use oxibrain_core::retrieval::{Query, QueryMode};
+use oxibrain_core::TargetId;
 use oxibrain_ports::{BrainError, EmbeddingPort, FakeClock, Timestamp};
 use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 use std::collections::HashSet;
@@ -148,7 +149,7 @@ async fn reproject_embeds_entities_and_dense_knn_finds_them() {
     // Every hit must be an entity (the vec0 table is entity-keyed).
     for item in &result.items {
         assert!(
-            matches!(item.target, SearchTarget::Entity { .. }),
+            matches!(item.target, TargetId::Entity { .. }),
             "dense hits must be entities, got {:?}",
             item.target
         );

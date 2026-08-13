@@ -47,7 +47,7 @@ pub fn assemble_context(
     let mut beliefs_text = String::new();
     let mut beliefs_provenance: Vec<String> = Vec::new();
     for item in &ranking.items {
-        if let SearchTarget::Statement { id } = &item.target {
+        if let oxibrain_core::TargetId::Statement { id } = &item.target {
             let entry = render_belief(conn, space, id)?;
             beliefs_text.push_str(&entry.text);
             beliefs_text.push('\n');
