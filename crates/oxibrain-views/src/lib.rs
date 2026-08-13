@@ -132,10 +132,7 @@ pub fn render_entity(brief: &EntityBrief) -> String {
     if !brief.beliefs.is_empty() {
         out.push_str("## Beliefs\n\n");
         let mut beliefs = brief.beliefs.clone();
-        beliefs.sort_by(|a, b| {
-            (&a.predicate, &a.object)
-                .cmp(&(&b.predicate, &b.object))
-        });
+        beliefs.sort_by(|a, b| (&a.predicate, &a.object).cmp(&(&b.predicate, &b.object)));
         for b in &beliefs {
             let obj = match &b.object_entity {
                 Some(id) => link(&b.object, id),
@@ -189,15 +186,17 @@ pub fn render_entity(brief: &EntityBrief) -> String {
         out.push_str("## Neighbours\n\n");
         let mut ns = brief.neighbours.clone();
         ns.sort_by(|a, b| {
-            (&a.surface, &a.predicate, &a.direction).cmp(&(
-                &b.surface,
-                &b.predicate,
-                &b.direction,
-            ))
+            (&a.surface, &a.predicate, &a.direction).cmp(&(&b.surface, &b.predicate, &b.direction))
         });
         for n in &ns {
             let dir = if n.direction == "in" { "←" } else { "→" };
-            let _ = writeln!(out, "- {} {} {}", link(&n.surface, &n.entity), n.predicate, dir);
+            let _ = writeln!(
+                out,
+                "- {} {} {}",
+                link(&n.surface, &n.entity),
+                n.predicate,
+                dir
+            );
         }
         out.push('\n');
     }
@@ -206,11 +205,13 @@ pub fn render_entity(brief: &EntityBrief) -> String {
     if !brief.timeline.is_empty() {
         out.push_str("## Timeline\n\n");
         let mut ts = brief.timeline.clone();
-        ts.sort_by(|a, b| {
-            (&a.at, &a.predicate, &a.object).cmp(&(&b.at, &b.predicate, &b.object))
-        });
+        ts.sort_by(|a, b| (&a.at, &a.predicate, &a.object).cmp(&(&b.at, &b.predicate, &b.object)));
         for t in &ts {
-            let _ = writeln!(out, "- {}: **{}** {} ({})", t.at, t.predicate, t.object, t.status);
+            let _ = writeln!(
+                out,
+                "- {}: **{}** {} ({})",
+                t.at, t.predicate, t.object, t.status
+            );
         }
         out.push('\n');
     }
@@ -243,7 +244,10 @@ pub fn render_entity(brief: &EntityBrief) -> String {
 fn join_refs(ids: &[String]) -> String {
     let mut v = ids.to_vec();
     v.sort();
-    v.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")
+    v.iter()
+        .map(|s| format!("`{s}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

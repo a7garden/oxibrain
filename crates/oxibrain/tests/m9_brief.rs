@@ -2,7 +2,7 @@
 //! neighbours (followable links), timeline and sources — and is deterministic.
 
 use oxibrain::Brain;
-use oxibrain_ports::{FakeClock, Timestamp, TIME_MAX, TIME_MIN};
+use oxibrain_ports::{FakeClock, TIME_MAX, TIME_MIN, Timestamp};
 use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -49,15 +49,30 @@ async fn brief_renders_and_is_deterministic() {
     let brief = brain.brief(&space, &alice).await.expect("brief");
 
     // Identity + beliefs + neighbours with a followable link.
-    assert!(brief.contains("Alice"), "brief must title the entity:\n{brief}");
-    assert!(brief.contains("Person"), "brief must name the type:\n{brief}");
-    assert!(brief.contains("works_on"), "brief must list beliefs:\n{brief}");
-    assert!(brief.contains("Project X"), "brief must render the object:\n{brief}");
+    assert!(
+        brief.contains("Alice"),
+        "brief must title the entity:\n{brief}"
+    );
+    assert!(
+        brief.contains("Person"),
+        "brief must name the type:\n{brief}"
+    );
+    assert!(
+        brief.contains("works_on"),
+        "brief must list beliefs:\n{brief}"
+    );
+    assert!(
+        brief.contains("Project X"),
+        "brief must render the object:\n{brief}"
+    );
     assert!(
         brief.contains("entity://"),
         "brief must contain followable links:\n{brief}"
     );
-    assert!(brief.contains("Seoul"), "brief must include all beliefs:\n{brief}");
+    assert!(
+        brief.contains("Seoul"),
+        "brief must include all beliefs:\n{brief}"
+    );
 
     // Determinism: brief twice on an unchanged ledger is byte-equal (§14.2).
     let brief2 = brain.brief(&space, &alice).await.expect("brief2");
@@ -73,5 +88,8 @@ async fn brief_renders_and_is_deterministic() {
         .navigate(&space, "ignored", &format!("entity://{bob}"))
         .await
         .expect("navigate");
-    assert!(bob_page.contains("Bob"), "navigate must render the target:\n{bob_page}");
+    assert!(
+        bob_page.contains("Bob"),
+        "navigate must render the target:\n{bob_page}"
+    );
 }

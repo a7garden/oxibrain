@@ -144,7 +144,6 @@ pub fn chunk_id(episode_id: &str, ordinal: u32) -> Id {
     ]))
 }
 
-
 /// EntityMerge id = blake3(loser, winner, provenance)
 pub fn entity_merge_id(loser: &str, winner: &str, provenance: &str) -> Id {
     hex(derive(&[

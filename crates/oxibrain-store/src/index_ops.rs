@@ -2,8 +2,8 @@
 //! All operations are deterministic functions of the projection data.
 
 use crate::sql_err;
-use oxibrain_core::chunking::{ChunkPolicy, render_context_prefix, split_into_chunks};
 use oxibrain_core::chunk_id;
+use oxibrain_core::chunking::{ChunkPolicy, render_context_prefix, split_into_chunks};
 use oxibrain_core::knowledge::{Object, Statement};
 use oxibrain_core::object_repr;
 #[allow(unused_imports)]
@@ -416,12 +416,8 @@ pub fn rebuild_chunks(conn: &Connection, space: &str) -> Result<(), BrainError> 
         let chunks = split_into_chunks(&content, &policy);
         for chunk in chunks {
             let cid = chunk_id(&id, chunk.ordinal);
-            let context = render_context_prefix(
-                Timestamp(occurred_at),
-                &source_kind,
-                episode_mentions,
-                None,
-            );
+            let context =
+                render_context_prefix(Timestamp(occurred_at), &source_kind, episode_mentions, None);
             conn.execute(
                 "INSERT OR REPLACE INTO chunks
                    (id, space_id, episode_id, ordinal, span_start, span_end, context)

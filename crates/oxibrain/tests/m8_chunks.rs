@@ -66,7 +66,10 @@ Kim agreed to own the migration and write the rollout plan. "
         .collect::<Result<Vec<_>, _>>()
         .expect("collect");
 
-    assert!(!rows.is_empty(), "chunks table must be populated after rebuild");
+    assert!(
+        !rows.is_empty(),
+        "chunks table must be populated after rebuild"
+    );
 
     let mut prev_end: i64 = 0;
     let mut ordinals: Vec<i64> = Vec::new();
@@ -90,7 +93,10 @@ Kim agreed to own the migration and write the rollout plan. "
         prev_end = *span_end;
         ordinals.push(*ordinal);
         // Context prefix carries the deterministic source kind.
-        assert!(context.contains("note"), "context must name the source kind: {context}");
+        assert!(
+            context.contains("note"),
+            "context must name the source kind: {context}"
+        );
     }
     assert_eq!(ordinals[0], 0, "first chunk ordinal is 0");
 

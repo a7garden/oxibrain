@@ -79,6 +79,12 @@ pub enum Command {
         #[arg(long, default_value = "personal")]
         space: String,
     },
+    /// Render an entity page (brief) with followable links.
+    Page {
+        entity: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
     /// Reproject the store.
     Reproject,
     /// Redact (the only true delete).

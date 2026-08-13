@@ -472,7 +472,12 @@ impl Brain {
 
     /// Follow a followable link from a page (§14.1, M9 §9.3). `link` is either
     /// a raw entity id or an `entity://<id>` link; returns that entity's brief.
-    pub async fn navigate(&self, space: &str, _from: &str, link: &str) -> Result<String, BrainError> {
+    pub async fn navigate(
+        &self,
+        space: &str,
+        _from: &str,
+        link: &str,
+    ) -> Result<String, BrainError> {
         let target = oxibrain_views::parse_entity_link(link).unwrap_or(link);
         if target.is_empty() {
             return Err(BrainError::Config(format!("invalid link: {link}")));
@@ -1498,7 +1503,9 @@ fn render_entity_brief(data: &oxibrain_store::brief::EntityBriefData) -> String 
     views::render_entity(&brief)
 }
 
-fn uncertainty_for(data: &oxibrain_store::brief::EntityBriefData) -> oxibrain_views::UncertaintyView {
+fn uncertainty_for(
+    data: &oxibrain_store::brief::EntityBriefData,
+) -> oxibrain_views::UncertaintyView {
     let contradicted = data
         .beliefs
         .iter()

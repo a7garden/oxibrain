@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Command::Contradictions { space } => cmd::contradictions::run(&dir, &space).await,
+        Command::Page { entity, space } => cmd::page::run(&dir, &entity, &space).await,
         Command::Reproject => cmd::reproject::run(&dir).await,
         Command::Redact {
             target,

@@ -55,7 +55,10 @@ fn home_dir() -> PathBuf {
 }
 
 fn probes_path() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../eval/probes/probes.toml"))
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../eval/probes/probes.toml"
+    ))
 }
 
 fn load_probes() -> ProbeSet {
@@ -76,15 +79,8 @@ fn recall_at_10(query_vec: &[f32], entity_vecs: &[(String, Vec<f32>)], relevant:
         .map(|(id, v)| (cosine(query_vec, v), id.as_str()))
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let top: std::collections::HashSet<&str> = scored
-        .iter()
-        .take(10)
-        .map(|(_, id)| *id)
-        .collect();
-    let found = relevant
-        .iter()
-        .filter(|r| top.contains(r.as_str()))
-        .count();
+    let top: std::collections::HashSet<&str> = scored.iter().take(10).map(|(_, id)| *id).collect();
+    let found = relevant.iter().filter(|r| top.contains(r.as_str())).count();
     if relevant.is_empty() {
         1.0
     } else {
@@ -137,7 +133,8 @@ fn ranking_equivalence_cpu_vs_metal() {
         },
     )
     .expect("open CPU embedder");
-    let metal = LocalEmbedder::open(&path, LocalEmbedderOptions::default()).expect("open Metal embedder");
+    let metal =
+        LocalEmbedder::open(&path, LocalEmbedderOptions::default()).expect("open Metal embedder");
 
     let cpu_recalls = measure(&cpu, &probes, RUNS);
     let metal_recalls = measure(&metal, &probes, RUNS);
@@ -160,7 +157,10 @@ fn ranking_equivalence_cpu_vs_metal() {
     eprintln!("ranking_equivalence (recall@10, {RUNS} runs each):");
     eprintln!("  cpu   mean = {cpu_mean:.4}");
     eprintln!("  metal mean = {metal_mean:.4}");
-    eprintln!("  observed_max_delta = {observed_max_delta:.4} ({:.2}pp)", observed_max_delta * 100.0);
+    eprintln!(
+        "  observed_max_delta = {observed_max_delta:.4} ({:.2}pp)",
+        observed_max_delta * 100.0
+    );
     eprintln!(
         "  tolerance = max(2pp, 2×delta) = {:.2}pp",
         (observed_max_delta * 2.0).max(0.02) * 100.0

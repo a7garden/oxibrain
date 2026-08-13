@@ -15,7 +15,7 @@ use oxibrain::{
 use oxibrain_core::retrieval::{
     Direction, PredicateFilter, Query, QueryMode, Strategy, TraversalSpec,
 };
-use oxibrain_ports::{ClockPort, SystemClock, Timestamp};
+use oxibrain_ports::{ClockPort, SystemClock};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::io::{
@@ -86,8 +86,8 @@ impl BrainServer {
     /// `None` for unknown tools — dispatch then returns method-not-found.
     fn required_capability(tool: &str) -> Option<Capability> {
         match tool {
-            "search" | "recall" | "get_entity" | "why" | "contradictions" | "traverse"
-            | "timeline" | "review_merges" | "stats" => Some(Capability::Read),
+            "search" | "recall" | "brief" | "navigate" | "why" | "contradictions" | "traverse"
+            | "review_merges" | "stats" => Some(Capability::Read),
             "ingest" => Some(Capability::Ingest),
             "declare" | "remember" | "retract" | "merge_entities" => Some(Capability::Write),
             "redact" => Some(Capability::Redact),
@@ -216,9 +216,9 @@ impl BrainServer {
         let outcome = match name {
             "search" => self.tool_search(&args).await,
             "recall" => self.tool_recall(&args).await,
-            "get_entity" => self.tool_get_entity(&args).await,
+            "brief" => self.tool_brief(&args).await,
+            "navigate" => self.tool_navigate(&args).await,
             "traverse" => self.tool_traverse(&args).await,
-            "timeline" => self.tool_timeline(&args).await,
             "why" => self.tool_why(&args).await,
             "contradictions" => self.tool_contradictions(&args).await,
             "stats" => self.tool_stats(&args).await,
@@ -269,15 +269,23 @@ impl BrainServer {
         to_json(&ctx)
     }
 
-    async fn tool_get_entity(&self, args: &Value) -> Result<String, ToolErr> {
+    async fn tool_brief(&self, args: &Value) -> Result<String, ToolErr> {
         let entity_id = str_arg(args, "entity_id")?;
         let space_id = self.ensure_space(&space_arg(args)).await?;
-        let beliefs = self
-            .brain
-            .beliefs(&space_id, entity_id)
+        self.brain
+            .brief(&space_id, entity_id)
             .await
-            .map_err(ToolErr::run)?;
-        to_json(&beliefs)
+            .map_err(ToolErr::run)
+    }
+
+    async fn tool_navigate(&self, args: &Value) -> Result<String, ToolErr> {
+        let from = str_arg(args, "from")?;
+        let link = str_arg(args, "link")?;
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        self.brain
+            .navigate(&space_id, from, link)
+            .await
+            .map_err(ToolErr::run)
     }
 
     async fn tool_ingest(
@@ -443,19 +451,6 @@ impl BrainServer {
             .await
             .map_err(ToolErr::run)?;
         to_json(&result)
-    }
-
-    async fn tool_timeline(&self, args: &Value) -> Result<String, ToolErr> {
-        let entity_id = str_arg(args, "entity_id")?;
-        let space_id = self.ensure_space(&space_arg(args)).await?;
-        let from = args.get("from").and_then(|v| v.as_i64()).map(Timestamp);
-        let to = args.get("to").and_then(|v| v.as_i64()).map(Timestamp);
-        let entries = self
-            .brain
-            .timeline(&space_id, entity_id, from, to)
-            .await
-            .map_err(ToolErr::run)?;
-        to_json(&entries)
     }
 
     async fn tool_review_merges(&self, args: &Value) -> Result<String, ToolErr> {
@@ -836,8 +831,8 @@ fn tool_list() -> Value {
                     },
                     "required": ["query"]
                 })),
-            tool("get_entity",
-                "Get an entity's current beliefs — all statements about it with status, confidence, and validity intervals.",
+            tool("brief",
+                "Render an entity page as Markdown with followable links: identity, aliases, current beliefs (validity, confidence, support), contradictions with both provenances, neighbours as links, timeline change points, and sources.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -845,6 +840,17 @@ fn tool_list() -> Value {
                         "space": { "type": "string", "description": "Space name (default: personal)." }
                     },
                     "required": ["entity_id"]
+                })),
+            tool("navigate",
+                "Follow a followable link from a rendered page to another entity page. Returns the target's brief.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "from": { "type": "string", "description": "The view/page the link came from (e.g. an entity:// id)." },
+                        "link": { "type": "string", "description": "The link to follow (entity://<id> or a raw entity id)." },
+                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                    },
+                    "required": ["from", "link"]
                 })),
             tool("ingest",
                 "Ingest text content as a new Primary episode. Set extract:true to trigger realtime extraction via client sampling (§12.3) — the server asks the client's model to extract claims. Requires the Sample capability on authenticated sessions.",
@@ -908,18 +914,6 @@ fn tool_list() -> Value {
                         "min_confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Confidence floor for edges (default: 0)." }
                     },
                     "required": ["start"]
-                })),
-            tool("timeline",
-                "Belief intervals for an entity over a time range. Returns statements with validity windows, status, and recording timestamps.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "entity_id": { "type": "string", "description": "The entity's content-derived ID." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." },
-                        "from": { "type": "integer", "description": "Start of range in Unix milliseconds (optional)." },
-                        "to": { "type": "integer", "description": "End of range in Unix milliseconds (optional)." }
-                    },
-                    "required": ["entity_id"]
                 })),
             tool("review_merges",
                 "List entity merge records in a space — which entities were merged, by whom (rule/user/import), and when.",
@@ -1592,9 +1586,9 @@ mod tests {
         for expected in [
             "search",
             "recall",
-            "get_entity",
+            "brief",
+            "navigate",
             "traverse",
-            "timeline",
             "why",
             "contradictions",
             "stats",
@@ -1724,7 +1718,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn declare_then_get_entity_round_trip() {
+    async fn declare_then_brief_round_trip() {
         let (_dir, server) = fresh_server().await;
 
         // Declare "Alice employed_by Acme Corp" — deterministic, no LLM.
@@ -1766,19 +1760,28 @@ mod tests {
                 2,
                 "tools/call",
                 Some(json!({
-                    "name": "get_entity",
+                    "name": "brief",
                     "arguments": { "space": "t", "entity_id": alice }
                 })),
             ))
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        // Belief carries the statement ID + status + confidence (predicate lives
-        // on Statement, not Belief). One active belief at full confidence.
-        let beliefs: Vec<Value> = serde_json::from_str(text).expect("beliefs parse");
-        assert_eq!(beliefs.len(), 1);
-        assert_eq!(beliefs[0]["status"], "active");
-        assert_eq!(beliefs[0]["confidence"], 1.0);
+        // brief renders identity + beliefs as Markdown; the belief is active
+        // at full confidence with the employed_by predicate and object surface.
+        assert!(text.contains("Alice"), "brief titles the entity:\n{text}");
+        assert!(
+            text.contains("employed_by"),
+            "brief lists the belief:\n{text}"
+        );
+        assert!(
+            text.contains("Acme Corp"),
+            "brief renders the object surface:\n{text}"
+        );
+        assert!(
+            text.contains("active"),
+            "belief status is rendered:\n{text}"
+        );
     }
 
     #[tokio::test]
@@ -2393,25 +2396,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn timeline_returns_entries() {
+    async fn navigate_follows_link() {
         let (_dir, server) = fresh_server().await;
-        let (_ep, alice) = declare_alice(&server, "t").await;
+        let (_ep, _alice) = declare_alice(&server, "t").await;
+        let space_id = server.brain.ensure_space("t").await.unwrap();
+        let acme = server
+            .brain
+            .resolve_entity_id(&space_id, "Organization", "Acme Corp")
+            .await
+            .unwrap()
+            .expect("Acme should exist");
 
         let resp = server
             .handle(msg(
                 2,
                 "tools/call",
                 Some(json!({
-                    "name": "timeline",
-                    "arguments": { "space": "t", "entity_id": alice }
+                    "name": "navigate",
+                    "arguments": { "space": "t", "from": "entity://alice", "link": format!("entity://{acme}") }
                 })),
             ))
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let entries: Vec<Value> = serde_json::from_str(text).expect("timeline parse");
-        assert!(!entries.is_empty(), "should have timeline entries");
-        assert_eq!(entries[0]["predicate"], "employed_by");
+        assert!(
+            text.contains("Acme Corp"),
+            "navigate renders the target:\n{text}"
+        );
     }
 
     #[tokio::test]
