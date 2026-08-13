@@ -6,7 +6,7 @@
 
 use crate::knowledge as kcrud;
 use crate::ledger;
-use crate::project::{EntityRef, resolve_or_create};
+use crate::project::{EntityRef, ResolutionCache, resolve_or_create};
 use crate::registry;
 use crate::sql_err;
 use oxibrain_core::confidence::CalibrationTable;
@@ -292,7 +292,7 @@ pub fn get_cached_response(
 
 /// Project valid claims from an extraction into assertions + mentions.
 /// Runs inside a WriteOp transaction. Idempotent (content-derived IDs).
-/// Returns the number of claims projected.
+#[allow(clippy::too_many_arguments)]
 pub fn project_extraction(
     conn: &Connection,
     space: &str,
@@ -300,6 +300,7 @@ pub fn project_extraction(
     extractor_id: &str,
     claims: &[Claim],
     now: Timestamp,
+    cache: &mut ResolutionCache,
 ) -> Result<usize, BrainError> {
     let mut count = 0;
 
@@ -317,10 +318,11 @@ pub fn project_extraction(
             claim.subject.span.0,
             now,
             &[],
+            cache,
         )?;
 
         // Resolve object.
-        let resolved_obj = resolve_claim_object(conn, space, claim, episode_id, now)?;
+        let resolved_obj = resolve_claim_object(conn, space, claim, episode_id, now, cache)?;
         let object = resolved_obj.object;
         let obj_mention_data = resolved_obj.entity;
 
@@ -425,6 +427,7 @@ fn resolve_claim_object(
     claim: &Claim,
     episode_id: &str,
     now: Timestamp,
+    cache: &mut ResolutionCache,
 ) -> Result<ResolvedClaimObject, BrainError> {
     match &claim.object {
         ClaimObject::Entity { mention } => {
@@ -432,8 +435,16 @@ fn resolve_claim_object(
                 surface: mention.surface.clone(),
                 ty: mention.entity_type.clone(),
             };
-            let (eid, method) =
-                resolve_or_create(conn, space, &eref, episode_id, mention.span.0, now, &[])?;
+            let (eid, method) = resolve_or_create(
+                conn,
+                space,
+                &eref,
+                episode_id,
+                mention.span.0,
+                now,
+                &[],
+                cache,
+            )?;
             Ok(ResolvedClaimObject {
                 object: Object::Entity(eid.clone()),
                 entity: Some((eid, method, mention.surface.clone(), mention.span)),
@@ -500,7 +511,7 @@ pub fn uncached_episodes(
 }
 
 /// Parse + validate + project from a cached response — no LLM call.
-/// Used by reproject to replay extractions deterministically.
+#[allow(clippy::too_many_arguments)]
 pub fn project_from_cache(
     conn: &Connection,
     space: &str,
@@ -509,12 +520,21 @@ pub fn project_from_cache(
     raw_response: &str,
     content: &str,
     now: Timestamp,
+    cache: &mut ResolutionCache,
 ) -> Result<usize, BrainError> {
     let response: ExtractionResponse = serde_json::from_str(raw_response)
         .map_err(|e| BrainError::Extraction(format!("parse cached response: {e}")))?;
     let predicates = oxibrain_core::registry::core_v1();
     let result = oxibrain_core::extraction::validate_claims(&response.claims, content, predicates);
-    project_extraction(conn, space, episode_id, extractor_id, &result.valid, now)
+    project_extraction(
+        conn,
+        space,
+        episode_id,
+        extractor_id,
+        &result.valid,
+        now,
+        cache,
+    )
 }
 
 /// Ensure an episode exists and enqueue an extraction job for it.

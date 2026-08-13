@@ -439,7 +439,6 @@ pub fn rebuild_chunks(conn: &Connection, space: &str) -> Result<(), BrainError> 
     Ok(())
 }
 
-/// Full index rebuild for a space: FTS + TF-IDF + salience + chunks.
 pub fn rebuild_indexes(conn: &Connection, space: &str) -> Result<(), BrainError> {
     rebuild_fts(conn, space)?;
     rebuild_tfidf(conn, space, 1024)?;

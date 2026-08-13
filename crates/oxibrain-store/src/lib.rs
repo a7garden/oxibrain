@@ -33,8 +33,8 @@ pub use security::{AuditRow, list_audit, write_audit};
 
 pub use backup::{BackupManifest, online_backup};
 pub use project::{
-    DeclObject, Declaration, EntityRef, canonical_declaration_content, parse_declaration,
-    project_declaration,
+    DeclObject, Declaration, EntityRef, ResolutionCache, canonical_declaration_content,
+    parse_declaration, project_declaration,
 };
 pub use reader::ReaderPool;
 pub use reproject::reproject;

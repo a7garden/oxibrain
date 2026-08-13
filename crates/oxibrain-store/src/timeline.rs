@@ -9,7 +9,15 @@ use serde::{Deserialize, Serialize};
 pub struct TimelineEntry {
     pub statement_id: String,
     pub predicate: String,
+    /// Rendered object (surface name for entity objects, literal text otherwise).
+    /// Always populated — if the SQL row has only `object_entity`, the caller is
+    /// expected to resolve it to a surface via `brief::surface_of` or similar.
+    /// (`object_entity` is set alongside so callers can choose to render a
+    /// followable link instead of the bare surface.)
     pub object_repr: String,
+    /// Raw entity id when the object is an entity reference, else `None`.
+    /// `None` for literal objects.
+    pub object_entity: Option<String>,
     pub valid_from: Timestamp,
     pub valid_to: Timestamp,
     pub status: String,
@@ -49,12 +57,12 @@ pub fn timeline(
         .query_map(params![space, entity_id, to_millis, from_millis], |r| {
             let object_entity: Option<String> = r.get(2)?;
             let object_literal: Option<String> = r.get(3)?;
-            let object_repr = object_entity.or(object_literal).unwrap_or_default();
             let recorded_at: Option<i64> = r.get(7)?;
             Ok(TimelineEntry {
                 statement_id: r.get(0)?,
                 predicate: r.get(1)?,
-                object_repr,
+                object_repr: object_entity.clone().or(object_literal).unwrap_or_default(),
+                object_entity,
                 valid_from: Timestamp(r.get::<_, i64>(4)?),
                 valid_to: Timestamp(r.get::<_, i64>(5)?),
                 status: r.get(6)?,
@@ -142,7 +150,8 @@ fn beliefs_at(
             Ok(TimelineEntry {
                 statement_id: r.get(0)?,
                 predicate: r.get(1)?,
-                object_repr: object_entity.or(object_literal).unwrap_or_default(),
+                object_repr: object_entity.clone().or(object_literal).unwrap_or_default(),
+                object_entity,
                 valid_from: Timestamp(r.get::<_, i64>(4)?),
                 valid_to: Timestamp(r.get::<_, i64>(5)?),
                 status: r.get(6)?,

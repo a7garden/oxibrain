@@ -199,8 +199,15 @@ mod tests {
             valid_from: 0,
             valid_to: oxibrain_ports::TIME_MAX.millis(),
         };
-        crate::project::project_declaration(&conn, &sid, &decl, Timestamp::from_millis(1000))
-            .expect("declare");
+        let mut cache = crate::project::ResolutionCache::new();
+        crate::project::project_declaration(
+            &conn,
+            &sid,
+            &decl,
+            Timestamp::from_millis(1000),
+            &mut cache,
+        )
+        .expect("declare");
         conn
     }
 

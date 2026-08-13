@@ -162,15 +162,18 @@ impl Brain {
         let h = self.handle.clone();
         let embedder = self.embedder.clone();
         tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
             h.writer()?.submit(Box::new(move |conn| {
-                reproject::reproject(conn)?;
-                let _ = tx.send(());
+                let result = reproject::reproject(conn).map_err(|e| e.to_string());
+                let _ = tx.send(result);
                 Ok(())
             }))?;
             h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("reproject channel dropped".into()))?;
+            match rx.recv() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(BrainError::Storage(format!("reproject: {e}"))),
+                Err(_) => return Err(BrainError::Storage("reproject channel dropped".into())),
+            }
 
             // Embed after reproject, outside the writer transaction.
             if let Some(emb) = embedder {
@@ -230,7 +233,14 @@ impl Brain {
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer()?.submit(Box::new(move |conn| {
-                let ep_id = oxibrain_store::project::project_declaration(conn, &space, &decl, now)?;
+                // Single-declaration path: the cache has no amortisation
+                // value (one call), but the API is uniform — the same
+                // `project_declaration` signature is used for both
+                // `Brain::declare` (one call) and `reproject` (N calls).
+                let mut cache = oxibrain_store::project::ResolutionCache::new();
+                let ep_id = oxibrain_store::project::project_declaration(
+                    conn, &space, &decl, now, &mut cache,
+                )?;
                 let _ = tx.send(ep_id);
                 Ok(())
             }))?;
@@ -979,6 +989,9 @@ impl Brain {
                     now,
                 )?;
                 // Project valid claims.
+                // Single-extract path: cache has no amortisation value but the
+                // API is uniform with `reproject`.
+                let mut cache = oxibrain_store::project::ResolutionCache::new();
                 let n = oxibrain_store::extraction::project_extraction(
                     conn,
                     &space,
@@ -986,6 +999,7 @@ impl Brain {
                     &extractor_id,
                     &valid,
                     now,
+                    &mut cache,
                 )?;
                 // File invalid claims.
                 for (_claim, errors) in &invalid {
@@ -1486,6 +1500,7 @@ fn render_entity_brief(data: &oxibrain_store::brief::EntityBriefData) -> String 
                 at: fmt_ts(t.valid_from),
                 predicate: t.predicate.clone(),
                 object: t.object_repr.clone(),
+                object_entity: t.object_entity.clone(),
                 status: t.status.clone(),
             })
             .collect(),

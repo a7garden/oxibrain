@@ -87,7 +87,12 @@ pub fn entity_brief(
     let statements = load_statements(conn, space, &resolved)?;
     let beliefs = load_belief_rows(conn, space, &resolved, &statements)?;
     let neighbours = build_neighbours(conn, &statements, &resolved)?;
-    let timeline = timeline::timeline(conn, space, &resolved, None, None)?;
+    let mut timeline = timeline::timeline(conn, space, &resolved, None, None)?;
+    // M9 known-gap fix: timeline entries' `object_repr` is the raw entity id
+    // for entity objects (SQL returns the id, not the surface). Resolve each
+    // entry to its surface so the rendered timeline shows readable names; the
+    // raw id is preserved on `object_entity` for followable-link rendering.
+    resolve_timeline_surfaces(conn, &mut timeline)?;
     let sources = load_sources(conn, space, &resolved)?;
     let contradictions = load_contradictions(conn, &beliefs, &statements)?;
 
@@ -101,6 +106,21 @@ pub fn entity_brief(
         sources,
         contradictions,
     })
+}
+
+/// Walk timeline entries and replace `object_repr` (raw id) with the canonical
+/// surface for entity objects. Literal objects are unchanged. Resolution errors
+/// fall back to the raw id so a missing entity never aborts the whole brief.
+fn resolve_timeline_surfaces(
+    conn: &Connection,
+    entries: &mut [timeline::TimelineEntry],
+) -> Result<(), BrainError> {
+    for entry in entries {
+        if let Some(eid) = entry.object_entity.clone() {
+            entry.object_repr = surface_of(conn, &eid).unwrap_or(eid);
+        }
+    }
+    Ok(())
 }
 
 fn load_keys(conn: &Connection, entity_id: &str) -> Result<Vec<EntityKey>, BrainError> {

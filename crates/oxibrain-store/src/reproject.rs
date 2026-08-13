@@ -1,7 +1,7 @@
 //! Reprojection: drop all projection tables and replay the ledger (DESIGN §14.3).
 //! The single most valuable test in the suite — proves P1 (byte-identical rebuild).
 
-use crate::project::{parse_declaration, project_declaration};
+use crate::project::{ResolutionCache, parse_declaration, project_declaration};
 use crate::sql_err;
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::Connection;
@@ -49,7 +49,6 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
         .map_err(sql_err)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(sql_err)?;
-
     drop(stmt); // release the prepared statement before we write
 
     // 3. Replay each declaration, passing its ORIGINAL ingested_at as the
@@ -57,9 +56,14 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
     //    episode ids from the incremental path — required for byte-identical
     //    output. project_declaration is idempotent (INSERT OR IGNORE), so
     //    re-inserting rows is a no-op.
+    //
+    //    Shared `ResolutionCache` so the LSH blocking index is built once per
+    //    (space, type) for the whole reproject (M9 §10.1 — sublinear per
+    //    mention amortized, not just per individual resolution).
+    let mut cache = ResolutionCache::new();
     for (_ep_id, space, content, ingested_at) in &episodes {
         let decl = parse_declaration(content)?;
-        project_declaration(conn, space, &decl, Timestamp(*ingested_at))?;
+        project_declaration(conn, space, &decl, Timestamp(*ingested_at), &mut cache)?;
     }
     drop(episodes);
 
@@ -102,6 +106,7 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
             raw,
             content,
             Timestamp(*ingested_at),
+            &mut cache,
         )?;
     }
     drop(extractions);

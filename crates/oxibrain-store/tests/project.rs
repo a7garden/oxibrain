@@ -1,5 +1,7 @@
 use oxibrain_ports::{ClockPort, FakeClock, TIME_MAX, TIME_MIN, Timestamp};
-use oxibrain_store::project::{DeclObject, Declaration, EntityRef, project_declaration};
+use oxibrain_store::project::{
+    DeclObject, Declaration, EntityRef, ResolutionCache, project_declaration,
+};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -41,7 +43,8 @@ fn declare_statement_creates_belief() {
         valid_to: TIME_MAX.millis(),
     };
 
-    let ep_id = project_declaration(&conn, "s1", &decl, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    let ep_id = project_declaration(&conn, "s1", &decl, clock.now(), &mut cache).unwrap();
     assert!(!ep_id.is_empty());
 
     // Check a belief was created.
@@ -70,7 +73,8 @@ fn supersession_updates_beliefs() {
         valid_from: 100,
         valid_to: TIME_MAX.millis(),
     };
-    project_declaration(&conn, "s1", &d1, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d1, clock.now(), &mut cache).unwrap();
 
     // Declare employed_by(Alice, Globex) — should supersede Acme.
     let d2 = Declaration::AddStatement {
@@ -88,7 +92,8 @@ fn supersession_updates_beliefs() {
         valid_to: TIME_MAX.millis(),
     };
     clock.advance(100);
-    project_declaration(&conn, "s1", &d2, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d2, clock.now(), &mut cache).unwrap();
 
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0))

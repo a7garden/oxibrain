@@ -1,5 +1,7 @@
 use oxibrain_ports::{ClockPort, FakeClock, TIME_MAX, TIME_MIN, Timestamp};
-use oxibrain_store::project::{DeclObject, Declaration, EntityRef, project_declaration};
+use oxibrain_store::project::{
+    DeclObject, Declaration, EntityRef, ResolutionCache, project_declaration,
+};
 use oxibrain_store::query;
 use rusqlite::Connection;
 
@@ -33,7 +35,8 @@ fn declare_employed(conn: &Connection, clock: &FakeClock, person: &str, org: &st
         valid_from: from,
         valid_to: TIME_MAX.millis(),
     };
-    project_declaration(conn, "s1", &decl, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    project_declaration(conn, "s1", &decl, clock.now(), &mut cache).unwrap();
 }
 
 #[test]
@@ -74,7 +77,8 @@ fn contradictions_finds_static_conflicts() {
         valid_from: TIME_MIN.millis(),
         valid_to: TIME_MAX.millis(),
     };
-    project_declaration(&conn, "s1", &d1, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d1, clock.now(), &mut cache).unwrap();
 
     // born_in(Alice, Busan) — contradiction!
     let d2 = Declaration::AddStatement {
@@ -92,7 +96,8 @@ fn contradictions_finds_static_conflicts() {
         valid_to: TIME_MAX.millis(),
     };
     clock.advance(100);
-    project_declaration(&conn, "s1", &d2, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d2, clock.now(), &mut cache).unwrap();
 
     let contradicted = query::contradictions(&conn, "s1").unwrap();
     assert_eq!(

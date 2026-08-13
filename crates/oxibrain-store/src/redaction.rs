@@ -596,7 +596,8 @@ mod tests {
         };
         let sid = crate::ledger::create_space(conn, "personal", Timestamp::from_millis(0))
             .expect("ensure space");
-        crate::project::project_declaration(conn, &sid, &decl, now).expect("declare")
+        let mut cache = crate::project::ResolutionCache::new();
+        crate::project::project_declaration(conn, &sid, &decl, now, &mut cache).expect("declare")
     }
 
     #[test]

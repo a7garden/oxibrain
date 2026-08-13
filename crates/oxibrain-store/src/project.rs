@@ -22,8 +22,69 @@ use oxibrain_index::{BlockingConfig, LshIndex};
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
+/// Per-(space, type) cache of the LSH blocking index and the entity-key set it
+/// was built over. Constructed at the start of a reproject or single-declare
+/// batch and threaded through `resolve_or_create` so the O(N) MinHash/LSH
+/// build happens once per (space, type) instead of once per mention.
+///
+/// Not `Send`: projection is serial on a single connection. The cache lives
+/// on the call stack of the projection loop.
+pub struct ResolutionCache {
+    /// `(space_id, type_name)` → (LSH index over `keys`, the keys themselves).
+    entries: HashMap<(String, String), (LshIndex, Vec<EntityKey>)>,
+}
+
+impl ResolutionCache {
+    /// Empty cache. Used by single-call paths (Brain::declare) where there is
+    /// only one resolution; the cache is built lazily on first lookup and
+    /// reused for any second lookup in the same call.
+    pub fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    /// Get or build the LSH index for `(space, type)`. Building reads all keys
+    /// for the type from the projection and constructs the MinHash/LSH index
+    /// over their normalized surfaces.
+    fn get_or_build(
+        &mut self,
+        conn: &Connection,
+        space: &str,
+        ty: &str,
+    ) -> Result<(&LshIndex, &[EntityKey]), BrainError> {
+        let key = (space.to_string(), ty.to_string());
+        if !self.entries.contains_key(&key) {
+            let config = BlockingConfig::default();
+            let all_keys = kcrud::find_keys_for_type(conn, space, ty)?;
+            let shingle_sets: Vec<BTreeSet<String>> = all_keys
+                .iter()
+                .map(|k| ngram::shingles(&k.normalized, 3))
+                .collect();
+            let index = LshIndex::build(&shingle_sets, &config);
+            self.entries.insert(key.clone(), (index, all_keys));
+        }
+        let (idx, keys) = self.entries.get(&key).expect("just inserted");
+        Ok((idx, keys.as_slice()))
+    }
+
+    /// Invalidate the cache for `(space, type)`. Call after a new entity key
+    /// is inserted for that type, so the next lookup rebuilds the LSH index
+    /// over the expanded set. Reserved for callers that insert keys outside
+    /// the resolution path (none yet — placeholder for future batch imports).
+    #[allow(dead_code)]
+    pub fn invalidate(&mut self, space: &str, ty: &str) {
+        self.entries.remove(&(space.to_string(), ty.to_string()));
+    }
+}
+
+impl Default for ResolutionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 /// A reference to an entity by surface form + type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityRef {
@@ -88,6 +149,7 @@ pub fn parse_declaration(content: &str) -> Result<Declaration, BrainError> {
         .map_err(|e| BrainError::Invalid(format!("declaration parse: {e}")))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_or_create(
     conn: &Connection,
     space: &str,
@@ -96,12 +158,17 @@ pub(crate) fn resolve_or_create(
     span_start: u32,
     now: Timestamp,
     context: &[String],
+    cache: &mut ResolutionCache,
 ) -> Result<(String, ResolutionMethod), BrainError> {
     let normalized = resolution::normalize(&eref.surface, &eref.ty);
-    let all_keys = kcrud::find_keys_for_type(conn, space, &eref.ty)?;
+    // M9 §10.1 + caching: build the LSH blocking index once per (space, type)
+    // per projection batch, not once per mention. The cache is populated
+    // lazily on first lookup and reused for every subsequent mention of the
+    // same type. See `ResolutionCache` for the per-(space, type) keys+index.
+    let (index, all_keys) = cache.get_or_build(conn, space, &eref.ty)?;
     // M9 §10.1: block via MinHash/LSH over 3-gram shingles + entropy gate, plus
     // exact key hits. Sublinear candidate generation instead of a full scan.
-    let candidates = block_candidates(&all_keys, &normalized);
+    let candidates = block_candidates(all_keys, &normalized, index);
 
     // Precompute context neighbours once, outside the per-candidate closure.
     let context_neighbors: Vec<BTreeSet<String>> = context
@@ -163,6 +230,10 @@ pub(crate) fn resolve_or_create(
                     origin: KeyOrigin::UserDeclared,
                 },
             )?;
+            // Cache invalidation: a new key was added for `(space, ty)`, so
+            // the cached LSH index is stale — the next mention of the same
+            // type must rebuild it to see this key as a candidate.
+            cache.invalidate(space, &eref.ty);
             Ok((eid, method))
         }
         oxibrain_core::resolution::Decision::Candidate { existing, .. } => {
@@ -197,6 +268,7 @@ pub(crate) fn resolve_or_create(
             // For M1, we just create the entity; the merge candidate is visible
             // via entity_merges table queries. The new entity is returned.
             let _ = existing; // merge candidate recording is deferred to review tooling (M4)
+            cache.invalidate(space, &eref.ty);
             Ok((eid, ResolutionMethod::New))
         }
     }
@@ -205,14 +277,13 @@ pub(crate) fn resolve_or_create(
 /// M9 §10.1 candidate blocking: exact key hits plus MinHash/LSH candidates over
 /// 3-gram shingles, gated on shingle entropy. Low-entropy surfaces (short or
 /// repetitive) skip the fuzzy path — they only match exactly.
-fn block_candidates(all_keys: &[EntityKey], normalized: &str) -> Vec<EntityKey> {
+///
+/// `index` is the LSH index over `all_keys` — the caller (resolution cache)
+/// supplies it pre-built so multiple mentions against the same `(space, type)`
+/// share one index build.
+fn block_candidates(all_keys: &[EntityKey], normalized: &str, index: &LshIndex) -> Vec<EntityKey> {
     let config = BlockingConfig::default();
     let mention_shingles = ngram::shingles(normalized, 3);
-    let shingle_sets: Vec<BTreeSet<String>> = all_keys
-        .iter()
-        .map(|k| ngram::shingles(&k.normalized, 3))
-        .collect();
-    let index = LshIndex::build(&shingle_sets, &config);
     let mut idxs: BTreeSet<usize> = index
         .candidates(&mention_shingles, config.min_entropy)
         .into_iter()
@@ -296,7 +367,7 @@ struct ResolvedObject {
     surface: String,
     ty: String,
 }
-
+#[allow(clippy::too_many_arguments)]
 fn resolve_object(
     conn: &Connection,
     space: &str,
@@ -305,6 +376,7 @@ fn resolve_object(
     span_start: u32,
     now: Timestamp,
     context: &[String],
+    cache: &mut ResolutionCache,
 ) -> Result<ResolvedObject, BrainError> {
     match obj {
         DeclObject::Entity { surface, ty } => {
@@ -312,8 +384,9 @@ fn resolve_object(
                 surface: surface.clone(),
                 ty: ty.clone(),
             };
-            let (eid, method) =
-                resolve_or_create(conn, space, &eref, episode_id, span_start, now, context)?;
+            let (eid, method) = resolve_or_create(
+                conn, space, &eref, episode_id, span_start, now, context, cache,
+            )?;
             Ok(ResolvedObject {
                 object: Object::Entity(eid.clone()),
                 entity: Some((eid, method)),
@@ -359,11 +432,19 @@ fn parse_literal(lt: &str, value: &str) -> Result<TypedValue, BrainError> {
 
 /// Project a declaration: write episode, resolve entities, create assertions,
 /// re-fold affected group, update beliefs. All in one transaction.
+///
+/// `cache` is shared with other declarations in the same projection batch so
+/// the LSH blocking index is built once per (space, type) instead of per
+/// mention. Single-call paths (`Brain::declare`) pass a fresh
+/// `ResolutionCache::new()` — the cache has no value when only one resolution
+/// happens, but the API is uniform.
+#[allow(clippy::too_many_arguments)]
 pub fn project_declaration(
     conn: &Connection,
     space: &str,
     decl: &Declaration,
     now: Timestamp,
+    cache: &mut ResolutionCache,
 ) -> Result<String, BrainError> {
     // `now` is the transaction time: `recorded_at`, `occurred_at`, `ingested_at`.
     // Callers pass the current wall clock (facade) or an episode's stored
@@ -411,11 +492,19 @@ pub fn project_declaration(
 
             // Resolve subject entity.
             let (subj_id, subj_method) =
-                resolve_or_create(conn, space, subject, &ep_id, 0, now, &[])?;
+                resolve_or_create(conn, space, subject, &ep_id, 0, now, &[], cache)?;
 
             // Resolve object with the subject as graph context (§10.2).
-            let obj_resolved =
-                resolve_object(conn, space, object, &ep_id, 100, now, &[subj_id.clone()])?;
+            let obj_resolved = resolve_object(
+                conn,
+                space,
+                object,
+                &ep_id,
+                100,
+                now,
+                &[subj_id.clone()],
+                cache,
+            )?;
 
             // Create statement (idempotent).
             let subj_for_hash = &subj_id;
@@ -493,9 +582,17 @@ pub fn project_declaration(
             kcrud::replace_beliefs(conn, &group_stmt_ids, &beliefs)?;
         }
         Declaration::Merge { loser, winner } => {
-            let (loser_id, _) = resolve_or_create(conn, space, loser, &ep_id, 0, now, &[])?;
-            let (winner_id, _) =
-                resolve_or_create(conn, space, winner, &ep_id, 200, now, &[loser_id.clone()])?;
+            let (loser_id, _) = resolve_or_create(conn, space, loser, &ep_id, 0, now, &[], cache)?;
+            let (winner_id, _) = resolve_or_create(
+                conn,
+                space,
+                winner,
+                &ep_id,
+                200,
+                now,
+                &[loser_id.clone()],
+                cache,
+            )?;
 
             let merge_id = oxibrain_core::id::entity_merge_id(&loser_id, &winner_id, &ep_id);
             kcrud::insert_merge(
@@ -520,9 +617,17 @@ pub fn project_declaration(
             episode: _target_ep,
         } => {
             // Resolve the statement to retract.
-            let (subj_id, _) = resolve_or_create(conn, space, subject, &ep_id, 0, now, &[])?;
-            let obj_resolved =
-                resolve_object(conn, space, object, &ep_id, 100, now, &[subj_id.clone()])?;
+            let (subj_id, _) = resolve_or_create(conn, space, subject, &ep_id, 0, now, &[], cache)?;
+            let obj_resolved = resolve_object(
+                conn,
+                space,
+                object,
+                &ep_id,
+                100,
+                now,
+                &[subj_id.clone()],
+                cache,
+            )?;
             let stmt_id = statement_id(space, &subj_id, predicate, &obj_resolved.object);
 
             // Set retracted_at on ALL matching assertions (the retract is a

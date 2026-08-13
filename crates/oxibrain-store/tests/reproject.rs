@@ -1,5 +1,7 @@
 use oxibrain_ports::{ClockPort, FakeClock, TIME_MAX, TIME_MIN, Timestamp};
-use oxibrain_store::project::{DeclObject, Declaration, EntityRef, project_declaration};
+use oxibrain_store::project::{
+    DeclObject, Declaration, EntityRef, ResolutionCache, project_declaration,
+};
 use oxibrain_store::reproject;
 use rusqlite::Connection;
 
@@ -73,7 +75,8 @@ fn reproject_preserves_beliefs() {
         valid_from: TIME_MIN.millis(),
         valid_to: TIME_MAX.millis(),
     };
-    project_declaration(&conn, "s1", &d1, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d1, clock.now(), &mut cache).unwrap();
 
     clock.advance(100);
     let d2 = Declaration::AddStatement {
@@ -90,7 +93,8 @@ fn reproject_preserves_beliefs() {
         valid_from: TIME_MIN.millis(),
         valid_to: TIME_MAX.millis(),
     };
-    project_declaration(&conn, "s1", &d2, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d2, clock.now(), &mut cache).unwrap();
 
     let before = dump_beliefs(&conn);
 
@@ -123,7 +127,8 @@ fn reproject_preserves_entities() {
         valid_from: TIME_MIN.millis(),
         valid_to: TIME_MAX.millis(),
     };
-    project_declaration(&conn, "s1", &d1, clock.now()).unwrap();
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d1, clock.now(), &mut cache).unwrap();
 
     let entity_count_before: i64 = conn
         .query_row("SELECT COUNT(*) FROM entities", [], |r| r.get(0))

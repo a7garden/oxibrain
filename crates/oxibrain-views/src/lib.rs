@@ -94,7 +94,12 @@ pub struct TimelineView {
     /// `YYYY-MM-DD` of the change point.
     pub at: String,
     pub predicate: String,
+    /// Surface name for entity objects, literal text otherwise.
+    /// Resolved by the facade from the raw entity id (see
+    /// `EntityBriefData.timeline`).
     pub object: String,
+    /// Present when the object is an entity — renderable as a followable link.
+    pub object_entity: Option<String>,
     pub status: String,
 }
 
@@ -207,10 +212,14 @@ pub fn render_entity(brief: &EntityBrief) -> String {
         let mut ts = brief.timeline.clone();
         ts.sort_by(|a, b| (&a.at, &a.predicate, &a.object).cmp(&(&b.at, &b.predicate, &b.object)));
         for t in &ts {
+            let obj = match &t.object_entity {
+                Some(eid) => link(&t.object, eid),
+                None => t.object.clone(),
+            };
             let _ = writeln!(
                 out,
                 "- {}: **{}** {} ({})",
-                t.at, t.predicate, t.object, t.status
+                t.at, t.predicate, obj, t.status
             );
         }
         out.push('\n');
