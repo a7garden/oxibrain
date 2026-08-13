@@ -87,7 +87,7 @@ impl BrainServer {
     fn required_capability(tool: &str) -> Option<Capability> {
         match tool {
             "search" | "recall" | "get_entity" | "why" | "contradictions" | "traverse"
-            | "timeline" | "review_merges" => Some(Capability::Read),
+            | "timeline" | "review_merges" | "stats" => Some(Capability::Read),
             "ingest" => Some(Capability::Ingest),
             "declare" | "remember" | "retract" | "merge_entities" => Some(Capability::Write),
             "redact" => Some(Capability::Redact),
@@ -221,6 +221,7 @@ impl BrainServer {
             "timeline" => self.tool_timeline(&args).await,
             "why" => self.tool_why(&args).await,
             "contradictions" => self.tool_contradictions(&args).await,
+            "stats" => self.tool_stats(&args).await,
             "review_merges" => self.tool_review_merges(&args).await,
             "ingest" => self.tool_ingest(&args, session).await,
             "remember" => self.tool_remember(&args, session).await,
@@ -390,6 +391,12 @@ impl BrainServer {
             .await
             .map_err(ToolErr::run)?;
         to_json(&stmts)
+    }
+
+    async fn tool_stats(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let stats = self.brain.stats(&space_id).await.map_err(ToolErr::run)?;
+        to_json(&stats)
     }
 
     // ── Read tools: traverse, timeline, review_merges ────────────────────
@@ -854,6 +861,14 @@ fn tool_list() -> Value {
                 })),
             tool("contradictions",
                 "List all contradicted statements in a space — statements with both affirming and denying support.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                    }
+                })),
+            tool("stats",
+                "Aggregate counts for a space: episodes, entities, statements, and contradicted statements.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -1561,6 +1576,7 @@ mod tests {
             "timeline",
             "why",
             "contradictions",
+            "stats",
             "review_merges",
             "ingest",
             "remember",
@@ -1731,6 +1747,44 @@ mod tests {
             ..scope_for(caps, spaces)
         };
         (dir, BrainServer::from_brain_scoped(brain, scope))
+    }
+
+    #[tokio::test]
+    async fn stats_tool_reports_counts() {
+        let (_dir, server) = fresh_server().await;
+        // Ingest one note into the space.
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "ingest",
+                    "arguments": { "space": "t", "content": "The sky is blue.", "source_path": "test" }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(resp.get("result").is_some(), "ingest should succeed");
+
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "stats", "arguments": { "space": "t" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let stats: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(stats["episodes"], 1, "one ingested episode: {text}");
+        assert_eq!(stats["statements"], 0, "no extraction ran (ingest only): {text}");
+        assert_eq!(stats["contradictions"], 0, "no contradictions: {text}");
+        assert!(
+            stats["entities"].as_i64().unwrap() >= 0,
+            "entities count present: {text}"
+        );
     }
 
     #[tokio::test]

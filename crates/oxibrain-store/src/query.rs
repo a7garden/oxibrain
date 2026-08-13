@@ -87,9 +87,38 @@ pub fn beliefs_as_of(
     Ok(beliefs)
 }
 
+/// Aggregate counts for a space: episodes, entities (excluding merged-away),
+/// statements, and contradicted statements.
+pub fn space_stats(
+    conn: &Connection,
+    space: &str,
+) -> Result<oxibrain_core::SpaceStats, BrainError> {
+    let episodes = count(conn, "episodes", "space_id = ?1", space)?;
+    let entities = count(
+        conn,
+        "entities",
+        "space_id = ?1 AND merged_into IS NULL",
+        space,
+    )?;
+    let statements = count(conn, "statements", "space_id = ?1", space)?;
+    let contradictions = contradictions(conn, space)?.len();
+    Ok(oxibrain_core::SpaceStats {
+        episodes,
+        entities,
+        statements,
+        contradictions,
+    })
+}
+
+/// Count rows in `table` matching `where_clause` (bound with a single space param).
+fn count(conn: &Connection, table: &str, where_clause: &str, space: &str) -> Result<i64, BrainError> {
+    let sql = format!("SELECT COUNT(*) FROM {table} WHERE {where_clause}");
+    conn.query_row(&sql, params![space], |r| r.get(0))
+        .map_err(sql_err)
+}
+
 /// All contradicted statements in a space.
-pub fn contradictions(conn: &Connection, space: &str) -> Result<Vec<Statement>, BrainError> {
-    let mut stmt_q = conn
+pub fn contradictions(conn: &Connection, space: &str) -> Result<Vec<Statement>, BrainError> {    let mut stmt_q = conn
         .prepare(
             "SELECT DISTINCT s.id, s.space_id, s.subject_id, s.predicate,
                     s.object_entity, s.object_literal

@@ -222,6 +222,29 @@ impl BrainClient {
         .await
     }
 
+    /// `timeline` — belief intervals for an entity over a time range (Read cap).
+    pub async fn timeline(
+        &mut self,
+        entity_id: &str,
+        space: &str,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<Value> {
+        let mut args = json!({ "entity_id": entity_id, "space": space });
+        if let Some(from) = from {
+            args["from"] = json!(from);
+        }
+        if let Some(to) = to {
+            args["to"] = json!(to);
+        }
+        self.call_tool_json("timeline", args).await
+    }
+
+    /// `stats` — aggregate counts for a space (Read cap).
+    pub async fn stats(&mut self, space: &str) -> Result<Value> {
+        self.call_tool_json("stats", json!({ "space": space })).await
+    }
+
     /// `why` — provenance and confidence breakdown (Read cap).
     pub async fn why(&mut self, statement_id: &str, space: &str) -> Result<Value> {
         self.call_tool_json(
