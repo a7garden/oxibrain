@@ -342,6 +342,11 @@ pub struct ChannelResult {
 pub struct RetrievalInput {
     pub channels: Vec<ChannelResult>,
     pub facts: HashMap<TargetId, TargetFacts>,
+    /// Dense entity vectors for MMR cosine similarity (§11.4, 10.3).
+    /// Populated by the store layer from `entity_embeddings` for the
+    /// candidate entity set. Keys are entity IDs.
+    #[serde(default)]
+    pub entity_vectors: HashMap<String, Vec<f32>>,
 }
 
 /// One scored, ranked candidate. Carries its `TargetFacts` so downstream
@@ -506,7 +511,7 @@ pub fn rank(input: &RetrievalInput, spec: &Retrieval) -> RankingResult {
     }
 
     // 4. Rerank. Each variant either preserves the order or replaces it.
-    apply_rerank(&mut items, &spec.rerank);
+    apply_rerank(&mut items, &spec.rerank, &input.entity_vectors);
 
     // 5. Sort descending by fused_score; tie-break on rrf_key for determinism.
     items.sort_by(|a, b| {
@@ -688,9 +693,46 @@ fn fuse(scores: Option<&Vec<f64>>, fusion: &Fusion) -> f64 {
     }
 }
 
+/// Cosine similarity between two equal-length f32 slices. Returns 0.0 for
+/// empty or mismatched-length vectors. Pure and deterministic.
+fn cosine_sim(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x as f64) * (*y as f64))
+        .sum();
+    let na: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    let nb: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        return 0.0;
+    }
+    dot / (na * nb)
+}
+
+/// Look up the dense vector for a ranked item's target entity. Only Entity
+/// targets have vectors directly; for others we return None (MMR falls back
+/// to the score proxy for those pairs).
+fn item_vector<'a>(
+    item: &RankedItem,
+    vectors: &'a HashMap<String, Vec<f32>>,
+) -> Option<&'a Vec<f32>> {
+    match &item.target {
+        TargetId::Entity { id } => vectors.get(id),
+        _ => None,
+    }
+}
+
 /// Apply rerankers in sequence. Pure: each variant either sorts the slice
-/// in-place or leaves it alone.
-fn apply_rerank(items: &mut [RankedItem], rerank: &Rerank) {
+/// in-place or leaves it alone. `entity_vectors` provides dense vectors for
+/// MMR cosine similarity (§11.4, 10.3).
+fn apply_rerank(
+    items: &mut [RankedItem],
+    rerank: &Rerank,
+    entity_vectors: &HashMap<String, Vec<f32>>,
+) {
     match rerank {
         Rerank::None => {}
         Rerank::Corroboration => {
@@ -716,13 +758,13 @@ fn apply_rerank(items: &mut [RankedItem], rerank: &Rerank) {
             });
         }
         Rerank::Mmr { lambda } => {
-            // O(k²) MMR. We approximate by reordering greedily: pick the
-            // top-1, then each subsequent pick is `λ * score - (1-λ) * max_sim`.
-            // Without feature vectors we cannot compute the similarity term,
-            // so we use the proxy `|fused_score_a - fused_score_b|` (smaller
-            // = more similar). This is what the existing M7 MMR path already
-            // does — we keep behaviour identical so legacy callers see no
-            // regression.
+            // O(k²) MMR: pick top-1, then greedily select the item that
+            // maximises `λ * score - (1-λ) * max_sim_to_selected`.
+            //
+            // When entity vectors are available (§11.4, 10.3), similarity is
+            // cosine distance between dense embeddings — real MMR. When not,
+            // we fall back to the score proxy `|Δscore|` (smaller = more
+            // similar), preserving the legacy M7 behaviour.
             if items.is_empty() {
                 return;
             }
@@ -737,11 +779,30 @@ fn apply_rerank(items: &mut [RankedItem], rerank: &Rerank) {
             });
             reordered.push(pool.remove(0));
             while !pool.is_empty() {
-                let last = reordered.last().unwrap().fused_score;
                 let mut best_idx = 0usize;
                 let mut best_score = f64::NEG_INFINITY;
                 for (i, cand) in pool.iter().enumerate() {
-                    let sim = (last - cand.fused_score).abs();
+                    let cand_vec = item_vector(cand, entity_vectors);
+                    // max_sim: maximum similarity to any already-selected item.
+                    let mut max_sim: f64 = 0.0;
+                    let mut used_cosine = false;
+                    for sel in &reordered {
+                        let sel_vec = item_vector(sel, entity_vectors);
+                        if let (Some(cv), Some(sv)) = (cand_vec, sel_vec) {
+                            let cos = cosine_sim(cv, sv);
+                            if cos > max_sim {
+                                max_sim = cos;
+                            }
+                            used_cosine = true;
+                        }
+                    }
+                    // If no vector pairs were available, fall back to score proxy.
+                    let sim = if used_cosine {
+                        max_sim
+                    } else {
+                        let last = reordered.last().unwrap().fused_score;
+                        (last - cand.fused_score).abs()
+                    };
                     let mmr = lambda * cand.fused_score - (1.0 - lambda) * sim;
                     if mmr > best_score {
                         best_score = mmr;
@@ -754,7 +815,7 @@ fn apply_rerank(items: &mut [RankedItem], rerank: &Rerank) {
         }
         Rerank::Chain(reranks) => {
             for r in reranks {
-                apply_rerank(items, r);
+                apply_rerank(items, r, entity_vectors);
             }
         }
     }
@@ -948,6 +1009,95 @@ mod tests {
             .map(|i| (i.target.rrf_key(), i.fused_score, i.rank))
             .collect();
         assert_eq!(keys1, keys2);
+    }
+
+    // ── Corroboration rerank (§11.4, 10.4) ──────────────────────────────
+
+    #[test]
+    fn corroboration_invariance_equal_episodes_preserves_order() {
+        // When all items have the same distinct_episodes, the multiplicative
+        // boost is identical for every item — ordering must not change.
+        let mut items: Vec<RankedItem> = [0.9f64, 0.7, 0.5]
+            .iter()
+            .enumerate()
+            .map(|(i, score)| RankedItem {
+                target: TargetId::Statement {
+                    id: format!("s{i}"),
+                },
+                fused_score: *score,
+                rank: i,
+                channels: vec![],
+                salience: 0.5,
+                facts: {
+                    let mut f = facts(
+                        TargetId::Statement {
+                            id: format!("s{i}"),
+                        },
+                        0.8,
+                        "works_on",
+                    );
+                    f.distinct_episodes = 3; // all equal
+                    f
+                },
+            })
+            .collect();
+        apply_rerank(&mut items, &Rerank::Corroboration, &HashMap::new());
+        // All items get the same multiplicative boost, so the original
+        // descending-score order must be preserved.
+        let boosted: Vec<f64> = items.iter().map(|i| i.fused_score).collect();
+        for w in boosted.windows(2) {
+            assert!(
+                w[0] >= w[1],
+                "ordering broken after equal-boost corroboration"
+            );
+        }
+    }
+
+    #[test]
+    fn corroboration_monotonicity_higher_distinct_ranks_higher() {
+        // Two items with the same fused_score but different distinct_episodes.
+        // The one with more corroboration must get a higher boosted score.
+        let mut items: Vec<RankedItem> = vec![
+            RankedItem {
+                target: TargetId::Statement { id: "low".into() },
+                fused_score: 0.5,
+                rank: 0,
+                channels: vec![],
+                salience: 0.5,
+                facts: {
+                    let mut f = facts(TargetId::Statement { id: "low".into() }, 0.8, "works_on");
+                    f.distinct_episodes = 1;
+                    f
+                },
+            },
+            RankedItem {
+                target: TargetId::Statement { id: "high".into() },
+                fused_score: 0.5,
+                rank: 1,
+                channels: vec![],
+                salience: 0.5,
+                facts: {
+                    let mut f = facts(TargetId::Statement { id: "high".into() }, 0.8, "works_on");
+                    f.distinct_episodes = 10;
+                    f
+                },
+            },
+        ];
+        apply_rerank(&mut items, &Rerank::Corroboration, &HashMap::new());
+        let high_score = items
+            .iter()
+            .find(|i| i.target == TargetId::Statement { id: "high".into() })
+            .unwrap()
+            .fused_score;
+        let low_score = items
+            .iter()
+            .find(|i| i.target == TargetId::Statement { id: "low".into() })
+            .unwrap()
+            .fused_score;
+        assert!(
+            high_score > low_score,
+            "higher corroboration must rank higher: {high_score} vs {low_score}"
+        );
     }
 
     // ── Property tests (M8 §8.4) ────────────────────────────────────────

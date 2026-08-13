@@ -65,3 +65,59 @@ fn most_frequent(sorted: &[u64]) -> u64 {
     }
     best
 }
+
+/// Confidence-weighted label propagation (§9.4, 10.6). Same algorithm as
+/// `label_propagation` but neighbor votes are weighted by edge weight (mean
+/// belief confidence). An edge with weight 0.9 has 3× the vote of weight 0.3.
+pub fn label_propagation_weighted(
+    graph: &crate::adjacency::WeightedAdjacencyGraph,
+    max_iterations: usize,
+) -> CommunityMap {
+    let nodes = graph.all_nodes();
+    let mut labels: BTreeMap<String, u64> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.clone(), i as u64))
+        .collect();
+
+    for _ in 0..max_iterations {
+        let mut changed = false;
+        for node in &nodes {
+            // Collect weighted votes: (label, total_weight).
+            let mut votes: BTreeMap<u64, f64> = BTreeMap::new();
+            for (n, w) in graph.neighbors_out(node) {
+                if let Some(&l) = labels.get(n) {
+                    *votes.entry(l).or_default() += *w;
+                }
+            }
+            for (n, w) in graph.neighbors_in(node) {
+                if let Some(&l) = labels.get(n) {
+                    *votes.entry(l).or_default() += *w;
+                }
+            }
+            if votes.is_empty() {
+                continue;
+            }
+            // Pick the label with the highest total weight.
+            // Tie-break: lowest label value wins (deterministic).
+            let new_label = votes
+                .iter()
+                .max_by(|a, b| {
+                    a.1.partial_cmp(b.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| b.0.cmp(a.0))
+                })
+                .map(|(l, _)| *l)
+                .unwrap_or(0);
+            if labels.get(node) != Some(&new_label) {
+                labels.insert(node.clone(), new_label);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    CommunityMap { labels }
+}

@@ -83,6 +83,10 @@ pub struct SummaryWithUncertainty {
     pub text: String,
     pub confidence: f32,
     pub sources: Vec<String>,
+    /// Computed uncertainty for this summary (§13.1, P10, 10.1).
+    /// `None` for summaries from before uncertainty was tracked.
+    #[serde(default)]
+    pub uncertainty: Option<crate::uncertainty::Uncertainty>,
 }
 
 /// §12.3 input — the raw material pack turns into a context.
@@ -271,12 +275,19 @@ pub fn pack(
         }
     }
 
-    // 5. Summaries — paired with sources (§12.4 post-condition).
+    // 5. Summaries — paired with sources (§12.4 post-condition, P10).
+    // Drop any summary with empty sources: "a summary is never returned
+    // without its sources." This is the executable form of P10.
     let summary_blocks: Vec<(String, String)> = input
         .summaries
         .iter()
+        .filter(|s| !s.sources.is_empty() && s.confidence > 0.0)
         .map(|s| {
             let mut text = s.text.clone();
+            // Uncertainty score (§13.1, P10, 10.1).
+            if let Some(u) = &s.uncertainty {
+                text.push_str(&format!("\n  uncertainty: {:.2}", u.score()));
+            }
             // Pairing rule: a summary never travels without its sources.
             if !s.sources.is_empty() {
                 text.push_str("\n  sources: ");
@@ -584,6 +595,7 @@ mod tests {
             text: "A summary of things.".into(),
             confidence: 0.7,
             sources: vec!["ep_a".into(), "ep_b".into()],
+            uncertainty: None,
         });
         let budget = ContextBudget { max_tokens: 1000 };
         let policy = PackPolicy::for_budget(1000);
@@ -595,6 +607,63 @@ mod tests {
             .expect("summaries layer");
         assert!(layer.text.contains("ep_a"));
         assert!(layer.text.contains("ep_b"));
+    }
+
+    // ── P10: summary never without sources (§12.4, 10.2) ──────────────
+
+    #[test]
+    fn pack_drops_sourceless_summary() {
+        let mut input = ContextInput::default();
+        input.summaries.push(SummaryWithUncertainty {
+            summary_id: "sm_bad".into(),
+            text: "Summary without sources.".into(),
+            confidence: 0.7,
+            sources: vec![], // empty — must be dropped
+            uncertainty: None,
+        });
+        input.summaries.push(SummaryWithUncertainty {
+            summary_id: "sm_good".into(),
+            text: "Summary with sources.".into(),
+            confidence: 0.7,
+            sources: vec!["ep_a".into()],
+            uncertainty: None,
+        });
+        let budget = ContextBudget { max_tokens: 1000 };
+        let policy = PackPolicy::for_budget(1000);
+        let out = pack(&input, &budget, &policy, &tok());
+        let summaries_layer = out
+            .layers
+            .iter()
+            .find(|l| matches!(l.kind, LayerKind::Summaries));
+        if let Some(layer) = summaries_layer {
+            assert!(!layer.text.contains("sm_bad"), "sourceless summary leaked");
+            assert!(layer.text.contains("ep_a"), "good summary missing");
+        }
+    }
+
+    #[test]
+    fn pack_drops_zero_confidence_summary() {
+        let mut input = ContextInput::default();
+        input.summaries.push(SummaryWithUncertainty {
+            summary_id: "sm_zero".into(),
+            text: "Zero confidence.".into(),
+            confidence: 0.0,
+            sources: vec!["ep_a".into()],
+            uncertainty: None,
+        });
+        let budget = ContextBudget { max_tokens: 1000 };
+        let policy = PackPolicy::for_budget(1000);
+        let out = pack(&input, &budget, &policy, &tok());
+        let summaries_layer = out
+            .layers
+            .iter()
+            .find(|l| matches!(l.kind, LayerKind::Summaries));
+        if let Some(layer) = summaries_layer {
+            assert!(
+                !layer.text.contains("Zero confidence"),
+                "zero-conf summary leaked"
+            );
+        }
     }
 
     #[test]

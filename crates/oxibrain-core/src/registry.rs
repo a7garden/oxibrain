@@ -118,11 +118,22 @@ pub struct PredicateDef {
     /// cached extractions are unaffected (D21).
     #[serde(default)]
     pub profile_relevant: bool,
+    /// §5.5 — confidence prior for this predicate. Defaults to 1.0 (normal
+    /// evidence). Hearsay/uncertain predicates (e.g. `allegedly_employed_by`)
+    /// carry a lower prior so the fold produces low-confidence beliefs
+    /// automatically — no special-casing in the pipeline (P4).
+    #[serde(default = "default_confidence_prior")]
+    pub confidence_prior: f32,
 }
 
+/// Default confidence prior for predicates (§5.5). Normal predicates do not
+/// penalise belief confidence; hearsay predicates override this to < 1.0.
+fn default_confidence_prior() -> f32 {
+    1.0
+}
 /// Registry version for this ontology.
 pub const CORE_V1_MAJOR: u32 = 1;
-pub const CORE_V1_MINOR: u32 = 1;
+pub const CORE_V1_MINOR: u32 = 2;
 
 static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::new(|| {
     vec![
@@ -139,6 +150,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Alice is employed by Acme Corp".into()],
             deprecated_by: None,
             profile_relevant: true,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "works_on".into(),
@@ -153,6 +165,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Bob works on ProjectX".into()],
             deprecated_by: None,
             profile_relevant: false,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "born_in".into(),
@@ -167,6 +180,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Alice was born in Seoul".into()],
             deprecated_by: None,
             profile_relevant: true,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "full_name".into(),
@@ -181,6 +195,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Alice's full name is Alice Smith".into()],
             deprecated_by: None,
             profile_relevant: true,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "died_at".into(),
@@ -195,6 +210,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Alice died at 2024-03-01T00:00:00Z".into()],
             deprecated_by: None,
             profile_relevant: true,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "knows".into(),
@@ -209,6 +225,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Alice knows Bob".into()],
             deprecated_by: None,
             profile_relevant: false,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "member_of".into(),
@@ -223,6 +240,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Alice is a member of the Engineering Guild".into()],
             deprecated_by: None,
             profile_relevant: true,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "part_of".into(),
@@ -237,6 +255,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Acme subsidiary is part of Acme Corp".into()],
             deprecated_by: None,
             profile_relevant: false,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "located_in".into(),
@@ -251,6 +270,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Seoul is located in South Korea".into()],
             deprecated_by: None,
             profile_relevant: false,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "has_skill".into(),
@@ -265,6 +285,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Alice has skill Rust programming".into()],
             deprecated_by: None,
             profile_relevant: true,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "created_by".into(),
@@ -279,6 +300,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["The report was created by Alice".into()],
             deprecated_by: None,
             profile_relevant: false,
+            confidence_prior: 1.0,
         },
         PredicateDef {
             name: "aliases".into(),
@@ -293,6 +315,41 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             examples: vec!["Alice's alias is A. Smith".into()],
             deprecated_by: None,
             profile_relevant: true,
+            confidence_prior: 1.0,
+        },
+        // ── Hearsay / uncertain predicates (§5.5, M10 10.9) ──────────────
+        // These carry a low confidence_prior so beliefs derived from them
+        // are automatically down-weighted by the fold. No pipeline
+        // special-casing required (P4: semantics in the registry).
+        PredicateDef {
+            name: "allegedly_employed_by".into(),
+            object_kind: ObjectKind::Entity("Organization".into()),
+            subject_types: vec!["Person".into()],
+            cardinality: Cardinality::MultiValued,
+            temporality: Temporality::Interval,
+            invalidation: Invalidation::Coexist,
+            symmetric: false,
+            inverse_of: None,
+            description: "Unverified claim that an organization employs this person.".into(),
+            examples: vec!["Alice is allegedly employed by Acme Corp".into()],
+            deprecated_by: None,
+            profile_relevant: false,
+            confidence_prior: 0.3,
+        },
+        PredicateDef {
+            name: "rumored_knows".into(),
+            object_kind: ObjectKind::Entity("Person".into()),
+            subject_types: vec!["Person".into()],
+            cardinality: Cardinality::MultiValued,
+            temporality: Temporality::Interval,
+            invalidation: Invalidation::Coexist,
+            symmetric: false,
+            inverse_of: None,
+            description: "Unverified claim that this person knows another person.".into(),
+            examples: vec!["Alice is rumored to know Bob".into()],
+            deprecated_by: None,
+            profile_relevant: false,
+            confidence_prior: 0.3,
         },
     ]
 });

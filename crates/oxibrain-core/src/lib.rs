@@ -41,6 +41,10 @@ pub mod lifecycle;
 pub mod rank;
 pub mod retrieval;
 pub mod security;
+pub mod uncertainty;
+pub use uncertainty::{Uncertainty, UncertaintyInput, compute as compute_uncertainty};
+pub mod pipeline;
+pub use pipeline::{Outcome as PipelineOutcome, Stage as PipelineStage, step as pipeline_step};
 pub use rank::{
     Channel, ChannelRank, ChannelResult, DropReason, DroppedItem, Filters, Fusion, LexIndex,
     RankedItem, RankingResult, Rerank, Retrieval, RetrievalInput, SeedPolicy, TargetFacts,

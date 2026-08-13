@@ -81,6 +81,12 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.pragma_update(None, "user_version", 8i64)
             .map_err(sql_err)?;
     }
+    if current < 9 {
+        let sql = include_str!("migrations/v9.sql");
+        conn.execute_batch(sql).map_err(sql_err)?;
+        conn.pragma_update(None, "user_version", 9i64)
+            .map_err(sql_err)?;
+    }
     let now: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sql_err)?;
@@ -113,6 +119,15 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM entity_vectors", [], |r| r.get(0))
             .expect("vec0 table query");
         assert_eq!(vec_count, 0);
+        // v9: uncertainty_json column exists on episodes
+        let has_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('episodes') WHERE name = 'uncertainty_json'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("pragma query");
+        assert_eq!(has_col, 1, "uncertainty_json column should exist after v9");
     }
 
     #[test]

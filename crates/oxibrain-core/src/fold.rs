@@ -87,26 +87,28 @@ pub fn fold(
     // ── Step 2: Apply cross-object rules. ──
     let beliefs = match (def.cardinality, def.invalidation, def.temporality) {
         // MultiValued: per-statement, no cross-object effect.
-        (Cardinality::MultiValued, _, _) => fold_independent(&visible, calibration),
+        (Cardinality::MultiValued, _, _) => {
+            fold_independent(&visible, calibration, def.confidence_prior)
+        }
 
         // Functional + Static → contradiction on 2+ overlapping objects.
         (Cardinality::Functional, _, Temporality::Static) => {
-            fold_contradiction(&visible, calibration)
+            fold_contradiction(&visible, calibration, def.confidence_prior)
         }
 
         // Functional + Supersede + Interval/Point → newer supersedes older.
         (Cardinality::Functional, Invalidation::Supersede, _) => {
-            fold_supersede(&visible, calibration)
+            fold_supersede(&visible, calibration, def.confidence_prior)
         }
 
         // Functional + ExplicitOnly → both stay Active (no auto-close).
         (Cardinality::Functional, Invalidation::ExplicitOnly, _) => {
-            fold_independent(&visible, calibration)
+            fold_independent(&visible, calibration, def.confidence_prior)
         }
 
         // Functional + Coexist → treat as MultiValued.
         (Cardinality::Functional, Invalidation::Coexist, _) => {
-            fold_independent(&visible, calibration)
+            fold_independent(&visible, calibration, def.confidence_prior)
         }
     };
 
@@ -122,6 +124,7 @@ fn belief_confidence(
     assertions: &[Assertion],
     support: &Support,
     calibration: &CalibrationTable,
+    prior: f32,
 ) -> f32 {
     // Manual declarations (no extractor) bypass at 1.0.
     let is_declaration = assertions.iter().all(|a| a.extractor.is_none());
@@ -129,11 +132,15 @@ fn belief_confidence(
         return 1.0;
     }
 
-    // Raw: max assertion confidence (strongest evidence in the interval).
+    // Raw: max assertion confidence, multiplied by the predicate-level prior
+    // (§5.5). Hearsay predicates (e.g. allegedly_employed_by) carry a prior
+    // < 1.0 so beliefs are automatically down-weighted — no pipeline
+    // special-casing (P4: semantics in the registry).
     let raw = assertions
         .iter()
         .map(|a| a.confidence)
-        .fold(0.0_f32, f32::max);
+        .fold(0.0_f32, f32::max)
+        * prior;
 
     // Calibrated: per-extractor multiplier from eval harness (default 0.8).
     let extractor_id = assertions
@@ -185,11 +192,15 @@ fn belief_confidence(
 }
 
 /// Per-statement fold: each object's affirming intervals become Active beliefs.
-fn fold_independent(visible: &[VisibleStmt], calibration: &CalibrationTable) -> Vec<Belief> {
+fn fold_independent(
+    visible: &[VisibleStmt],
+    calibration: &CalibrationTable,
+    prior: f32,
+) -> Vec<Belief> {
     let mut beliefs = Vec::new();
     for vs in visible {
         let support = compute_support(&vs.assertions);
-        let conf = belief_confidence(&vs.assertions, &support, calibration);
+        let conf = belief_confidence(&vs.assertions, &support, calibration, prior);
         for iv in &vs.affirm {
             beliefs.push(Belief {
                 statement: vs.stmt.id.clone(),
@@ -205,11 +216,15 @@ fn fold_independent(visible: &[VisibleStmt], calibration: &CalibrationTable) -> 
 }
 
 /// Contradiction fold: for Static+Functional, all overlapping objects are Contradicted.
-fn fold_contradiction(visible: &[VisibleStmt], calibration: &CalibrationTable) -> Vec<Belief> {
+fn fold_contradiction(
+    visible: &[VisibleStmt],
+    calibration: &CalibrationTable,
+    prior: f32,
+) -> Vec<Belief> {
     // If only one object has affirming intervals, it's Active (no contradiction).
     let affirming: Vec<&VisibleStmt> = visible.iter().filter(|vs| !vs.affirm.is_empty()).collect();
     if affirming.len() <= 1 {
-        return fold_independent(visible, calibration);
+        return fold_independent(visible, calibration, prior);
     }
 
     // Check for pairwise overlaps across different statements.
@@ -237,7 +252,7 @@ fn fold_contradiction(visible: &[VisibleStmt], calibration: &CalibrationTable) -
     let mut beliefs = Vec::new();
     for vs in visible {
         let support = compute_support(&vs.assertions);
-        let conf = belief_confidence(&vs.assertions, &support, calibration);
+        let conf = belief_confidence(&vs.assertions, &support, calibration, prior);
         let is_contradicted = contradicted.contains(&vs.stmt.id.as_str());
         for iv in &vs.affirm {
             beliefs.push(Belief {
@@ -258,7 +273,11 @@ fn fold_contradiction(visible: &[VisibleStmt], calibration: &CalibrationTable) -
 }
 
 /// Supersession fold: for Functional/Supersede/Interval, newer objects close older ones.
-fn fold_supersede(visible: &[VisibleStmt], calibration: &CalibrationTable) -> Vec<Belief> {
+fn fold_supersede(
+    visible: &[VisibleStmt],
+    calibration: &CalibrationTable,
+    prior: f32,
+) -> Vec<Belief> {
     // Collect (statement_id, interval) pairs across all objects.
     let mut all: Vec<(StatementId, Interval)> = Vec::new();
     for vs in visible {
@@ -285,7 +304,7 @@ fn fold_supersede(visible: &[VisibleStmt], calibration: &CalibrationTable) -> Ve
             .find(|vs| &vs.stmt.id == stmt_id)
             .expect("statement exists in group");
         let support = compute_support(&vs.assertions);
-        let conf = belief_confidence(&vs.assertions, &support, calibration);
+        let conf = belief_confidence(&vs.assertions, &support, calibration, prior);
 
         match &current {
             None => {
@@ -454,6 +473,7 @@ mod tests {
             examples: vec![],
             deprecated_by: None,
             profile_relevant: false,
+            confidence_prior: 1.0,
         }
     }
 
@@ -471,6 +491,7 @@ mod tests {
             examples: vec![],
             deprecated_by: None,
             profile_relevant: false,
+            confidence_prior: 1.0,
         }
     }
 
@@ -488,6 +509,7 @@ mod tests {
             examples: vec![],
             deprecated_by: None,
             profile_relevant: false,
+            confidence_prior: 1.0,
         }
     }
 
@@ -514,6 +536,52 @@ mod tests {
         assert_eq!(beliefs.len(), 1);
         assert_eq!(beliefs[0].status, BeliefStatus::Active);
         assert_eq!(beliefs[0].valid_from, ts(100));
+    }
+
+    // ── Hearsay predicates produce lower confidence (§5.5, 10.9). ──
+    #[test]
+    fn hearsay_prior_lowers_confidence() {
+        let stmt = make_stmt("st1", "e1", "allegedly_employed_by", "acme");
+        // Use an assertion WITH an extractor so the declaration bypass
+        // (return 1.0) does not fire — the prior multiplier must apply.
+        let ext_assertion = Assertion {
+            id: "a_st1_ep1".into(),
+            statement: "st1".into(),
+            episode: "ep1".into(),
+            extractor: Some("ext1".into()),
+            polarity: Polarity::Affirm,
+            claimed_from: ts(100),
+            claimed_to: TIME_MAX,
+            confidence: 0.9,
+            recorded_at: ts(1),
+            retracted_at: None,
+        };
+        let group = vec![StatementEntry {
+            statement: stmt,
+            assertions: vec![ext_assertion],
+        }];
+        // Hearsay predicate with confidence_prior = 0.3
+        let mut hearsay_def = def_employed();
+        hearsay_def.confidence_prior = 0.3;
+        let hearsay_beliefs = fold(&hearsay_def, &group, TIME_MAX, &CalibrationTable::default());
+
+        // Normal predicate with confidence_prior = 1.0
+        let normal_beliefs = fold(
+            &def_employed(),
+            &group,
+            TIME_MAX,
+            &CalibrationTable::default(),
+        );
+
+        assert_eq!(hearsay_beliefs.len(), 1);
+        assert_eq!(normal_beliefs.len(), 1);
+        // The hearsay belief must have strictly lower confidence.
+        assert!(
+            hearsay_beliefs[0].confidence < normal_beliefs[0].confidence,
+            "hearsay confidence {} should be < normal confidence {}",
+            hearsay_beliefs[0].confidence,
+            normal_beliefs[0].confidence
+        );
     }
 
     // ── Supersession: two employers, second supersedes first. ──

@@ -155,6 +155,68 @@ impl TokenizerPort for LocalLlm {
     }
 }
 
+// ─── RerankPort (cross-encoder, §11.4, 10.5) ──────────────────────────────
+
+/// A prompt-based cross-encoder reranker. Wraps any [`LlmPort`] and scores
+/// (query, item) pairs by asking the model to rate relevance 0.0–1.0.
+/// One LLM call per item — simple, correct, sufficient for v1.
+pub struct CrossEncoderReranker {
+    llm: std::sync::Arc<dyn LlmPort>,
+    model_id: String,
+    max_tokens: u32,
+}
+
+impl CrossEncoderReranker {
+    pub fn new(llm: std::sync::Arc<dyn LlmPort>, model_id: impl Into<String>) -> Self {
+        Self {
+            llm,
+            model_id: model_id.into(),
+            max_tokens: 8,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl oxibrain_ports::RerankPort for CrossEncoderReranker {
+    async fn rerank(
+        &self,
+        query: &str,
+        mut items: Vec<oxibrain_ports::RerankItem>,
+    ) -> Result<Vec<oxibrain_ports::RerankItem>, BrainError> {
+        for item in items.iter_mut() {
+            let prompt = format!(
+                "Rate the relevance of this document to the query on a scale of 0.0 to 1.0. \
+                 Respond with only the number.\nQuery: {query}\nDocument: {text}",
+                text = item.text
+            );
+            let req = LlmRequest {
+                model: self.model_id.clone(),
+                system: Some("You are a relevance scoring engine.".into()),
+                prompt,
+                json_schema: None,
+                max_tokens: self.max_tokens,
+            };
+            let resp = self.llm.complete(req).await?;
+            // Parse the score: take the first f64-looking substring.
+            let score: f64 = resp
+                .text
+                .trim()
+                .split(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+                .find(|s| !s.is_empty())
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+            item.score = score;
+        }
+        items.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(items)
+    }
+}
+
 // ─── Generation ─────────────────────────────────────────────────────────────
 
 async fn generate(

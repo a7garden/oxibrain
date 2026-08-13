@@ -561,6 +561,63 @@ pub fn build_extraction_prompt(predicates: &[PredicateDef]) -> String {
     s
 }
 
+// ─── Few-shot selection (§9.6, 10.8) ──────────────────────────────────────
+
+/// A golden-corpus example for few-shot extraction (§9.6, 10.8).
+/// The `text` is the episode content; `claims_json` is the expected
+/// extraction output as a JSON string.
+#[derive(Debug, Clone)]
+pub struct FewShotExample {
+    pub text: String,
+    pub claims_json: String,
+}
+
+/// Select the k most similar golden episodes to the target text, using
+/// character trigram Jaccard similarity (§9.6, 10.8). Language-independent
+/// by construction (P11).
+///
+/// Pure function: same inputs → same selection.
+pub fn few_shot_examples<'a>(
+    target_text: &str,
+    corpus: &'a [FewShotExample],
+    k: usize,
+) -> Vec<&'a FewShotExample> {
+    if corpus.is_empty() || k == 0 {
+        return Vec::new();
+    }
+    let target_shingles = oxibrain_index::shingles(target_text.to_lowercase().trim(), 3);
+    let mut scored: Vec<(f64, &FewShotExample)> = corpus
+        .iter()
+        .map(|ex| {
+            let ex_shingles = oxibrain_index::shingles(ex.text.to_lowercase().trim(), 3);
+            let sim = oxibrain_index::jaccard(&target_shingles, &ex_shingles);
+            (sim, ex)
+        })
+        .collect();
+    // Sort by similarity descending; tie-break on text for determinism.
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.text.cmp(&b.1.text))
+    });
+    scored.iter().take(k).map(|(_, ex)| *ex).collect()
+}
+
+/// Format selected few-shot examples as prompt text (§9.6, 10.8).
+/// Injected into the system prompt before the target episode.
+pub fn format_few_shot(examples: &[&FewShotExample]) -> String {
+    if examples.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\nHere are some examples of correct extraction:\n\n");
+    for (i, ex) in examples.iter().enumerate() {
+        out.push_str(&format!("Example {}:\n", i + 1));
+        out.push_str(&format!("Input: {}\n", ex.text));
+        out.push_str(&format!("Output: {}\n\n", ex.claims_json));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,5 +989,65 @@ mod tests {
         let g = grammar_from_registry(crate::registry::core_v1());
         // The claims rule uses ? to allow zero claims.
         assert!(g.contains("(claim (ws \",\" ws claim)*)?"));
+    }
+
+    // ── Few-shot selection (§9.6, 10.8) ────────────────────────────────
+
+    #[test]
+    fn few_shot_selects_most_similar() {
+        let corpus = vec![
+            FewShotExample {
+                text: "Alice works at Acme.".into(),
+                claims_json: r#"{"claims":[]}"#.into(),
+            },
+            FewShotExample {
+                text: "Bob likes pizza.".into(),
+                claims_json: r#"{"claims":[]}"#.into(),
+            },
+        ];
+        let target = "Alice works at Globex.";
+        let selected = few_shot_examples(target, &corpus, 1);
+        assert_eq!(selected.len(), 1);
+        assert!(
+            selected[0].text.contains("Alice"),
+            "should pick the most similar example, got: {}",
+            selected[0].text
+        );
+    }
+
+    #[test]
+    fn few_shot_empty_corpus_returns_empty() {
+        let corpus: Vec<FewShotExample> = vec![];
+        let selected = few_shot_examples("any text", &corpus, 3);
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn few_shot_k_caps_results() {
+        let corpus: Vec<FewShotExample> = (0..10)
+            .map(|i| FewShotExample {
+                text: format!("Sample text {i}."),
+                claims_json: r#"{"claims":[]}"#.into(),
+            })
+            .collect();
+        let selected = few_shot_examples("Sample text", &corpus, 3);
+        assert_eq!(selected.len(), 3);
+    }
+
+    #[test]
+    fn few_shot_format_includes_input_output() {
+        let ex = FewShotExample {
+            text: "Alice works at Acme.".into(),
+            claims_json: r#"{"claims":[]}"#.into(),
+        };
+        let formatted = format_few_shot(&[&ex]);
+        assert!(formatted.contains("Alice works at Acme"));
+        assert!(formatted.contains(r#"{"claims":[]}"#));
+    }
+
+    #[test]
+    fn few_shot_format_empty_returns_empty_string() {
+        let formatted = format_few_shot(&[]);
+        assert_eq!(formatted, "");
     }
 }

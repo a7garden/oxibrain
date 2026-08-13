@@ -83,6 +83,35 @@ pub fn compute_metrics(extracted: &[ExtractedTriple], expected: &[ExtractedTripl
     }
 }
 
+/// Measure fabricated entity rate (§17.3, F19, 10.7): of the entity surfaces
+/// extracted, what fraction do NOT appear verbatim in the source text?
+/// This detects hallucinated entities that slipped past validation.
+///
+/// Pure function: same inputs → same rate. Returns 0.0 for empty input.
+pub fn measure_fabrication_rate(entity_surfaces: &[String], source_text: &str) -> f64 {
+    if entity_surfaces.is_empty() {
+        return 0.0;
+    }
+    let fabricated = entity_surfaces
+        .iter()
+        .filter(|surface| !source_text.contains(surface.as_str()))
+        .count();
+    fabricated as f64 / entity_surfaces.len() as f64
+}
+
+/// Like `compute_metrics` but with a measured fabrication rate (§17.3, 10.7).
+/// The fabricated rate is computed separately by `measure_fabrication_rate`
+/// because it requires the source text, which `compute_metrics` does not take.
+pub fn compute_metrics_with_fabrication(
+    extracted: &[ExtractedTriple],
+    expected: &[ExtractedTriple],
+    fabricated_entity_rate: f64,
+) -> EvalMetrics {
+    let mut metrics = compute_metrics(extracted, expected);
+    metrics.fabricated_entity_rate = fabricated_entity_rate;
+    metrics
+}
+
 impl EvalMetrics {
     /// Check §14.2 quality gates. Returns Err with details if any gate fails.
     pub fn check_gates(&self) -> Result<(), String> {
@@ -165,5 +194,27 @@ mod tests {
             subject_surface: s.into(),
             object_surface: o.into(),
         }
+    }
+
+    // ── Fabrication measurement (§17.3, 10.7) ──────────────────────────
+
+    #[test]
+    fn fabrication_rate_zero_when_all_surfaces_present() {
+        let surfaces = vec!["Alice".to_string(), "Acme".to_string()];
+        let text = "Alice works at Acme Corp";
+        assert_eq!(measure_fabrication_rate(&surfaces, text), 0.0);
+    }
+
+    #[test]
+    fn fabrication_rate_nonzero_when_surface_missing() {
+        let surfaces = vec!["Alice".to_string(), "Hallucinated".to_string()];
+        let text = "Alice works at Acme Corp";
+        let rate = measure_fabrication_rate(&surfaces, text);
+        assert!((rate - 0.5).abs() < 0.01, "1 of 2 fabricated, got {rate}");
+    }
+
+    #[test]
+    fn fabrication_rate_empty_input_is_zero() {
+        assert_eq!(measure_fabrication_rate(&[], "any text"), 0.0);
     }
 }

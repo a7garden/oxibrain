@@ -48,6 +48,41 @@ pub fn upsert_vector(
     Ok(())
 }
 
+/// Batch-fetch dense vectors for a set of entity IDs (§11.4, 10.3 — MMR).
+/// Entities without a vector are silently skipped. Returns at most one
+/// vector per ID. The vec0 table supports point lookups via primary key.
+pub fn fetch_vectors_for_entities(
+    conn: &Connection,
+    entity_ids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<f32>>, BrainError> {
+    let mut result = std::collections::HashMap::new();
+    for id in entity_ids {
+        let row = conn.query_row(
+            "SELECT embedding FROM entity_vectors WHERE entity_id = ?1",
+            params![id],
+            |r| {
+                let blob: Vec<u8> = r.get(0)?;
+                let n = blob.len() / 4;
+                let mut v = Vec::with_capacity(n);
+                for i in 0..n {
+                    let chunk = [
+                        blob[i * 4],
+                        blob[i * 4 + 1],
+                        blob[i * 4 + 2],
+                        blob[i * 4 + 3],
+                    ];
+                    v.push(f32::from_ne_bytes(chunk));
+                }
+                Ok(v)
+            },
+        );
+        if let Ok(vec) = row {
+            result.insert(id.clone(), vec);
+        }
+    }
+    Ok(result)
+}
+
 /// Delete the embedding vector for an entity. No-op if not present.
 pub fn delete_vector(conn: &Connection, entity_id: &str) -> Result<(), BrainError> {
     conn.execute(

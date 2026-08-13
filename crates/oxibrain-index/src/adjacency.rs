@@ -101,6 +101,58 @@ impl Default for AdjacencyGraph {
         Self::new()
     }
 }
+
+/// Weighted adjacency graph for confidence-aware community detection (§9.4, 10.6).
+/// Edges carry f64 weights derived from belief confidence. Same structure
+/// as `AdjacencyGraph` but edges are `(target, weight)` pairs.
+pub struct WeightedAdjacencyGraph {
+    nodes: BTreeSet<String>,
+    outgoing: BTreeMap<String, Vec<(String, f64)>>,
+    incoming: BTreeMap<String, Vec<(String, f64)>>,
+}
+
+impl WeightedAdjacencyGraph {
+    pub fn new() -> Self {
+        Self {
+            nodes: BTreeSet::new(),
+            outgoing: BTreeMap::new(),
+            incoming: BTreeMap::new(),
+        }
+    }
+
+    /// Add a weighted edge. Multiple edges between the same pair accumulate
+    /// (the caller typically pre-aggregates to mean confidence).
+    pub fn add_edge(&mut self, from: &str, to: &str, weight: f64) {
+        self.nodes.insert(from.into());
+        self.nodes.insert(to.into());
+        self.outgoing
+            .entry(from.into())
+            .or_default()
+            .push((to.into(), weight));
+        self.incoming
+            .entry(to.into())
+            .or_default()
+            .push((from.into(), weight));
+    }
+
+    pub fn neighbors_out(&self, e: &str) -> &[(String, f64)] {
+        self.outgoing.get(e).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    pub fn neighbors_in(&self, e: &str) -> &[(String, f64)] {
+        self.incoming.get(e).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    pub fn all_nodes(&self) -> Vec<String> {
+        self.nodes.iter().cloned().collect()
+    }
+}
+
+impl Default for WeightedAdjacencyGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub struct BfsSpec {
     pub start: Vec<String>,
     pub max_depth: u8,

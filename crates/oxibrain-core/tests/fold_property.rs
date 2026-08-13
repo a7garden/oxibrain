@@ -57,6 +57,7 @@ fn def_supersede() -> PredicateDef {
         examples: vec![],
         deprecated_by: None,
         profile_relevant: false,
+        confidence_prior: 1.0,
     }
 }
 
@@ -74,6 +75,7 @@ fn def_static() -> PredicateDef {
         examples: vec![],
         deprecated_by: None,
         profile_relevant: false,
+        confidence_prior: 1.0,
     }
 }
 
@@ -91,6 +93,7 @@ fn def_multivalued() -> PredicateDef {
         examples: vec![],
         deprecated_by: None,
         profile_relevant: false,
+        confidence_prior: 1.0,
     }
 }
 

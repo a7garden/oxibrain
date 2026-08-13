@@ -4,9 +4,23 @@
 
 mod compat;
 pub mod config;
+mod extraction;
+mod ingest;
 pub mod models;
+mod render;
 
 pub use config::BrainConfig;
+
+// Read-only boilerplate: wrap a closure to be run on a reader connection,
+// shipped to a blocking thread. Capture needed values by move before calling.
+macro_rules! read_op {
+    ($h:expr, |$conn:ident| $body:expr $(,)?) => {{
+        let h = $h.clone();
+        tokio::task::spawn_blocking(move || h.readers.read(|$conn| $body))
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }};
+}
 pub use oxibrain_core::security::{
     AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
     TokenInfo,
@@ -116,7 +130,6 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
-
     /// Ingest a note episode. Returns the episode id (content-derived).
     pub async fn ingest_note(
         &self,
@@ -125,52 +138,17 @@ impl Brain {
         content: String,
         occurred_at: Timestamp,
     ) -> Result<String, BrainError> {
-        let h = self.handle.clone();
-        let ingested_at = self.clock.now();
-        let space = space.to_string();
-        let path = path.to_string();
-        tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            h.writer()?.submit(Box::new(move |conn| {
-                let mut ep = Episode {
-                    id: String::new(),
-                    space: space.clone(),
-                    seq: 0,
-                    content_hash: oxibrain_core::ContentHash([0u8; 32]),
-                    content,
-                    source: SourceRef::Note { path },
-                    trust: TrustTier::Trusted,
-                    kind: EpisodeKind::Primary,
-                    occurred_at,
-                    ingested_at,
-                    redacted_at: None,
-                };
-                ledger::insert_episode(conn, &mut ep)?;
-                oxibrain_store::index_ops::index_episode_fts(conn, &ep.space, &ep.id, &ep.content)?;
-                let _ = tx.send(ep.id);
-                Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("ingest_note channel dropped".into()))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        self.ingest_note_impl(space, path, content, occurred_at)
+            .await
     }
 
     pub async fn get_episode(&self, id: &str) -> Result<Option<Episode>, BrainError> {
-        let h = self.handle.clone();
         let id = id.to_string();
-        tokio::task::spawn_blocking(move || h.readers.read(|conn| ledger::get_episode(conn, &id)))
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        read_op!(self.handle, |conn| ledger::get_episode(conn, &id))
     }
 
     pub async fn episode_count(&self) -> Result<i64, BrainError> {
-        let h = self.handle.clone();
-        tokio::task::spawn_blocking(move || h.readers.read(ledger::episode_count))
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        read_op!(self.handle, |conn| ledger::episode_count(conn))
     }
 
     /// Drop and rebuild the entire projection from the ledger. When an
@@ -281,20 +259,17 @@ impl Brain {
     }
 
     /// Current beliefs for an entity (follows merge chain).
+    /// Current beliefs for an entity (follows merge chain).
     pub async fn beliefs(
         &self,
         space: &str,
         entity_id: &str,
     ) -> Result<Vec<oxibrain_core::Belief>, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
         let entity_id = entity_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| query::beliefs_for_entity(conn, &space, &entity_id))
+        read_op!(self.handle, |conn| {
+            query::beliefs_for_entity(conn, &space, &entity_id)
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Beliefs as of a valid-time point.
@@ -304,15 +279,11 @@ impl Brain {
         entity_id: &str,
         valid_at: oxibrain_ports::Timestamp,
     ) -> Result<Vec<oxibrain_core::Belief>, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
         let entity_id = entity_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| query::beliefs_as_of(conn, &space, &entity_id, Some(valid_at), None))
+        read_op!(self.handle, |conn| {
+            query::beliefs_as_of(conn, &space, &entity_id, Some(valid_at), None)
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// All contradicted statements in a space.
@@ -320,23 +291,14 @@ impl Brain {
         &self,
         space: &str,
     ) -> Result<Vec<oxibrain_core::Statement>, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers.read(|conn| query::contradictions(conn, &space))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        read_op!(self.handle, |conn| query::contradictions(conn, &space))
     }
-
     /// Aggregate counts for a space (episodes, entities, statements,
     /// contradicted statements). Used by the `stats` MCP tool and dashboards.
     pub async fn stats(&self, space: &str) -> Result<oxibrain_core::SpaceStats, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
-        tokio::task::spawn_blocking(move || h.readers.read(|conn| query::space_stats(conn, &space)))
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        read_op!(self.handle, |conn| query::space_stats(conn, &space))
     }
 
     /// Hybrid (or mode-specific) query. Returns ranked results with provenance.
@@ -344,18 +306,11 @@ impl Brain {
         &self,
         q: oxibrain_core::retrieval::Query,
     ) -> Result<oxibrain_core::retrieval::RankingResult, BrainError> {
-        let h = self.handle.clone();
         let embedder = self.embedder.clone();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| query::hybrid_query(conn, &q, embedder.as_deref()))
+        read_op!(self.handle, |conn| {
+            query::hybrid_query(conn, &q, embedder.as_deref())
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
-
-    /// Rebuild all indexes for a space (FTS5, TF-IDF, salience). Runs on the
-    /// writer actor so callers never see a half-rebuilt index.
     pub async fn rebuild_indexes(&self, space: &str) -> Result<(), BrainError> {
         let h = self.handle.clone();
         let space = space.to_string();
@@ -380,13 +335,8 @@ impl Brain {
         space: &str,
         spec: oxibrain_core::retrieval::TraversalSpec,
     ) -> Result<oxibrain_core::retrieval::TraversalResult, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers.read(|conn| query::traverse(conn, &space, &spec))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        read_op!(self.handle, |conn| query::traverse(conn, &space, &spec))
     }
 
     /// Look up the entity_id for a surface form + type within a space. Returns
@@ -397,49 +347,34 @@ impl Brain {
         ty: &str,
         surface: &str,
     ) -> Result<Option<String>, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
         let ty = ty.to_string();
         let surface = surface.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| query::resolve_entity_id(conn, &space, &ty, &surface))
+        read_op!(self.handle, |conn| {
+            query::resolve_entity_id(conn, &space, &ty, &surface)
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
-    /// List entities in a space (excluding merged-away), up to `limit`.
-    /// Used by the `space://` resource.
     pub async fn list_entities(
         &self,
         space: &str,
         limit: usize,
     ) -> Result<Vec<oxibrain_core::Entity>, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| oxibrain_store::knowledge::list_entities(conn, &space, limit))
+        read_op!(self.handle, |conn| {
+            oxibrain_store::knowledge::list_entities(conn, &space, limit)
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
-
     /// List merge records in a space, most recent first.
     /// Used by the `review_merges` MCP tool.
     pub async fn list_merges(
         &self,
         space: &str,
     ) -> Result<Vec<oxibrain_core::EntityMerge>, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| oxibrain_store::knowledge::list_merges(conn, &space))
+        read_op!(self.handle, |conn| {
+            oxibrain_store::knowledge::list_merges(conn, &space)
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
     pub async fn timeline(
         &self,
@@ -448,15 +383,11 @@ impl Brain {
         from: Option<oxibrain_ports::Timestamp>,
         to: Option<oxibrain_ports::Timestamp>,
     ) -> Result<Vec<oxibrain_store::timeline::TimelineEntry>, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
         let entity_id = entity_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| oxibrain_store::timeline::timeline(conn, &space, &entity_id, from, to))
+        read_op!(self.handle, |conn| {
+            oxibrain_store::timeline::timeline(conn, &space, &entity_id, from, to)
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     pub async fn diff(
@@ -466,15 +397,11 @@ impl Brain {
         at_a: oxibrain_ports::Timestamp,
         at_b: oxibrain_ports::Timestamp,
     ) -> Result<oxibrain_store::timeline::DiffResult, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
         let entity_id = entity_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| oxibrain_store::timeline::diff(conn, &space, &entity_id, at_a, at_b))
+        read_op!(self.handle, |conn| {
+            oxibrain_store::timeline::diff(conn, &space, &entity_id, at_a, at_b)
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     pub async fn why(
@@ -482,15 +409,11 @@ impl Brain {
         space: &str,
         statement_id: &str,
     ) -> Result<oxibrain_store::explain::ExplainBlock, BrainError> {
-        let h = self.handle.clone();
         let space = space.to_string();
         let statement_id = statement_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| oxibrain_store::explain::why(conn, &space, &statement_id))
+        read_op!(self.handle, |conn| {
+            oxibrain_store::explain::why(conn, &space, &statement_id)
         })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Render an entity page (`brief`) as Markdown with followable links
@@ -505,7 +428,7 @@ impl Brain {
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-        Ok(render_entity_brief(&data))
+        Ok(render::render_entity_brief(&data))
     }
 
     /// Follow a followable link from a page (§14.1, M9 §9.3). `link` is either
@@ -551,11 +474,11 @@ impl Brain {
                 let data = h
                     .readers
                     .read(|conn| b::topic_brief(conn, &space, topic, 50))?;
-                Ok(render_topic_brief(&data))
+                Ok(render::render_topic_brief(&data))
             } else {
                 // kind == "space"
                 let data = h.readers.read(|conn| b::space_brief(conn, &space, 50))?;
-                Ok(render_space_brief(&data))
+                Ok(render::render_space_brief(&data))
             }
         })
         .await
@@ -763,31 +686,8 @@ impl Brain {
         trust: TrustTier,
         extractor_id: &str,
     ) -> Result<String, BrainError> {
-        let h = self.handle.clone();
-        let now = self.clock.now();
-        let space = space.to_string();
-        let extractor_id = extractor_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            h.writer()?.submit(Box::new(move |conn| {
-                let ep_id = oxibrain_store::extraction::ingest_and_enqueue(
-                    conn,
-                    &space,
-                    &content,
-                    source,
-                    trust,
-                    &extractor_id,
-                    now,
-                )?;
-                let _ = tx.send(ep_id);
-                Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("ingest channel dropped".into()))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        self.ingest_impl(space, content, source, trust, extractor_id)
+            .await
     }
 
     /// Issue a token. Returns (TokenInfo, secret). The secret is shown once.
@@ -976,7 +876,6 @@ impl Brain {
     /// Does NOT use the job queue — directly reads, calls the provided LLM,
     /// validates, projects. Used by the realtime MCP sampling path (§12.3):
     /// the `llm` is a [`SamplingLlmPort`](../../oxibrain_mcp/sampling/struct.SamplingLlmPort.html)
-    /// backed by the client's model.
     pub async fn extract_one_with(
         &self,
         space: &str,
@@ -984,128 +883,8 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
         llm: std::sync::Arc<dyn LlmPort>,
     ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
-        let now = self.clock.now();
-
-        // 1. Read episode content [reader].
-        let episode = self
-            .get_episode(episode_id)
-            .await?
-            .ok_or_else(|| BrainError::NotFound(format!("episode {episode_id}")))?;
-
-        // 2. Generate schema + prompt [pure].
-        let predicates = oxibrain_core::registry::core_v1();
-        let schema = oxibrain_core::extraction::schema_from_registry(predicates);
-        let system = oxibrain_core::extraction::build_extraction_prompt(predicates);
-
-        // 3. Call LLM [async, off-actor].
-        let req = LlmRequest {
-            model: config.model_id.clone(),
-            system: Some(system),
-            prompt: episode.content.clone(),
-            json_schema: Some(schema),
-            max_tokens: config.max_tokens,
-        };
-        let response = llm.complete(req.clone()).await?;
-
-        // 4. Parse + validate [pure].
-        let parsed: oxibrain_core::extraction::ExtractionResponse =
-            serde_json::from_str(&response.text)
-                .map_err(|e| BrainError::Extraction(format!("parse LLM response: {e}")))?;
-        let mut result = oxibrain_core::extraction::validate_claims(
-            &parsed.claims,
-            &episode.content,
-            predicates,
-        );
-
-        // 5. Repair loop: one retry if invalid claims exist.
-        if !result.invalid.is_empty() && config.max_tokens > 0 {
-            let errors_summary: Vec<&oxibrain_core::extraction::ValidationError> = result
-                .invalid
-                .iter()
-                .flat_map(|(_, errs)| errs.iter())
-                .collect();
-            let repair_prompt = format!(
-                "{}\n\nPrevious extraction had these errors: {:?}\nPlease re-extract, fixing these issues.",
-                episode.content, errors_summary
-            );
-            let repair_req = LlmRequest {
-                prompt: repair_prompt,
-                ..req.clone()
-            };
-            if let Ok(repair_response) = llm.complete(repair_req).await {
-                if let Ok(repair_parsed) = serde_json::from_str::<
-                    oxibrain_core::extraction::ExtractionResponse,
-                >(&repair_response.text)
-                {
-                    result = oxibrain_core::extraction::validate_claims(
-                        &repair_parsed.claims,
-                        &episode.content,
-                        predicates,
-                    );
-                }
-            }
-        }
-
-        let invalid_count = result.invalid.len();
-        let raw_response = response.text.clone();
-        let extractor_id = config.id();
-        let space = space.to_string();
-        let episode_id = episode_id.to_string();
-        let valid = result.valid.clone();
-        let invalid = result.invalid.clone();
-
-        // 6. Project [WriteOp].
-        let h = self.handle.clone();
-        let cache = self.cache.clone();
-        tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            h.writer()?.submit(Box::new(move |conn| {
-                // Cache the raw response.
-                oxibrain_store::extraction::cache_response(
-                    conn,
-                    &episode_id,
-                    &extractor_id,
-                    &raw_response,
-                    now,
-                )?;
-                // Project valid claims with the persistent resolution cache.
-                let mut cache = cache.lock().expect("resolution cache poisoned");
-                let n = oxibrain_store::extraction::project_extraction(
-                    conn,
-                    &space,
-                    &episode_id,
-                    &extractor_id,
-                    &valid,
-                    now,
-                    &mut cache,
-                )?;
-                // File invalid claims.
-                for (_claim, errors) in &invalid {
-                    let errors_json = serde_json::to_string(errors).unwrap_or_else(|_| "[]".into());
-                    oxibrain_store::quarantine::record_failure(
-                        conn,
-                        &episode_id,
-                        &extractor_id,
-                        &raw_response,
-                        &errors_json,
-                        now,
-                    )?;
-                }
-                let summary = oxibrain_core::extraction::ExtractSummary {
-                    extracted: n,
-                    quarantined: invalid_count,
-                    episodes_done: 1,
-                    episodes_failed: 0,
-                };
-                let _ = tx.send(summary);
-                Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("extract_one channel dropped".into()))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        self.extract_one_with_impl(space, episode_id, config, llm)
+            .await
     }
 
     /// Process pending extraction jobs in batch. Claims up to
@@ -1116,91 +895,17 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
         budget: &oxibrain_core::extraction::ExtractionBudget,
     ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
-        let _llm = self.require_llm()?;
-        let now = self.clock.now();
-        let extractor_id = config.id();
+        self.extract_pending_impl(space, config, budget).await
+    }
 
-        // 1. Claim jobs.
-        let h = self.handle.clone();
-        let lease_timeout = budget.lease_timeout_secs;
-        let batch_limit = budget.max_episodes_per_batch;
-        let jobs = tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            h.writer()?.submit(Box::new(move |conn| {
-                let _ = oxibrain_store::extraction::reclaim_expired(conn, now);
-                let jobs = oxibrain_store::extraction::claim_jobs(
-                    conn,
-                    &extractor_id,
-                    lease_timeout,
-                    batch_limit,
-                    now,
-                )?;
-                let _ = tx.send(jobs);
-                Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("claim_jobs channel dropped".into()))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-
-        // 2. Process each job via extract_one.
-        let mut total = oxibrain_core::extraction::ExtractSummary::default();
-        for job in jobs {
-            match self.extract_one(space, &job.episode_id, config).await {
-                Ok(summary) => {
-                    total.extracted += summary.extracted;
-                    total.quarantined += summary.quarantined;
-                    total.episodes_done += 1;
-                    // Complete the job.
-                    let h = self.handle.clone();
-                    let job_id = job.id.clone();
-                    let now = self.clock.now();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        if let Some(w) = &h.writer {
-                            let _ = w.submit(Box::new(move |conn| {
-                                let _ = tx.send(oxibrain_store::extraction::complete_job(
-                                    conn, &job_id, now,
-                                ));
-                                Ok(())
-                            }));
-                            let _ = w.flush();
-                        }
-                        rx.recv()
-                    })
-                    .await;
-                }
-                Err(e) => {
-                    total.episodes_failed += 1;
-                    // Fail the job.
-                    let h = self.handle.clone();
-                    let job_id = job.id.clone();
-                    let now = self.clock.now();
-                    let max_attempts = budget.max_repair_attempts + 1;
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        if let Some(w) = &h.writer {
-                            let _ = w.submit(Box::new(move |conn| {
-                                let _ = tx.send(oxibrain_store::extraction::fail_job(
-                                    conn,
-                                    &job_id,
-                                    &e.to_string(),
-                                    max_attempts,
-                                    now,
-                                ));
-                                Ok(())
-                            }));
-                            let _ = w.flush();
-                        }
-                        rx.recv()
-                    })
-                    .await;
-                }
-            }
-        }
-        Ok(total)
+    /// Re-extract all primary episodes with a new extractor config.
+    /// Old cache entries are preserved (different extractor_id = different PK).
+    pub async fn reextract(
+        &self,
+        space: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+    ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
+        self.reextract_impl(space, config).await
     }
 
     /// Query job queue status (counts by state).
@@ -1221,164 +926,13 @@ impl Brain {
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
-    /// Re-extract all primary episodes with a new extractor config.
-    /// Old cache entries are preserved (different extractor_id = different PK).
-    pub async fn reextract(
-        &self,
-        space: &str,
-        config: &oxibrain_core::extraction::ExtractorConfig,
-    ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
-        let _llm = self.require_llm()?;
-        let h = self.handle.clone();
-        let space = space.to_string();
-        let query_space = space.clone();
-        let extractor_id = config.id();
-
-        // Find primary episodes that don't have a cache entry for this extractor.
-        let episode_ids = tokio::task::spawn_blocking(move || {
-            h.readers.read(|conn| {
-                oxibrain_store::extraction::uncached_episodes(conn, &query_space, &extractor_id)
-            })
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-
-        // Extract each.
-        let mut total = oxibrain_core::extraction::ExtractSummary::default();
-        for ep_id in episode_ids {
-            match self.extract_one(&space, &ep_id, config).await {
-                Ok(s) => {
-                    total.extracted += s.extracted;
-                    total.quarantined += s.quarantined;
-                    total.episodes_done += 1;
-                }
-                Err(_) => {
-                    total.episodes_failed += 1;
-                }
-            }
-        }
-        Ok(total)
-    }
-
-    /// Consolidate related episodes into Derived episodes with cached summaries (§10).
     /// Clusters episodes by shared entities → LLM summarize → Derived episode.
     pub async fn consolidate(
         &self,
         space: &str,
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<Vec<String>, BrainError> {
-        let llm = self.require_llm()?.clone();
-        let now = self.clock.now();
-        let h = self.handle.clone();
-        let space_owned = space.to_string();
-        let extractor_id = config.id();
-
-        // 1. Read episode clusters [reader].
-        let clusters = tokio::task::spawn_blocking({
-            let h = h.clone();
-            let space_owned = space_owned.clone();
-            move || {
-                h.readers.read(|conn| {
-                    oxibrain_store::consolidation::find_episode_clusters(conn, &space_owned)
-                })
-            }
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-
-        // 2. For each cluster: check cache, call LLM if miss.
-        let mut summaries: Vec<(Vec<String>, String)> = Vec::new();
-        for cluster in clusters {
-            let episode_ids = cluster.episode_ids.clone();
-            let member_hash = oxibrain_store::consolidation::hash_member_set(&episode_ids);
-            let cached = tokio::task::spawn_blocking({
-                let h = h.clone();
-                let extractor_id = extractor_id.clone();
-                move || {
-                    h.readers.read(|conn| {
-                        oxibrain_store::consolidation::get_cached_summary(
-                            conn,
-                            "consolidation",
-                            &member_hash,
-                            &extractor_id,
-                        )
-                    })
-                }
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-
-            if let Some(text) = cached {
-                summaries.push((episode_ids.clone(), text));
-            } else {
-                // Build prompt and call LLM.
-                let prompt = tokio::task::spawn_blocking({
-                    let h = h.clone();
-                    let space_owned = space_owned.clone();
-                    let prompt_ids = episode_ids.clone();
-                    let prompt_shared = cluster.shared_entities.clone();
-                    move || {
-                        h.readers.read(|conn| {
-                            oxibrain_store::consolidation::build_consolidation_prompt(
-                                conn,
-                                &space_owned,
-                                &oxibrain_store::consolidation::EpisodeCluster {
-                                    episode_ids: prompt_ids,
-                                    shared_entities: prompt_shared,
-                                },
-                            )
-                        })
-                    }
-                })
-                .await
-                .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-
-                let response = llm
-                    .complete(LlmRequest {
-                        model: config.model_id.clone(),
-                        system: Some("Summarize related episodes concisely.".into()),
-                        prompt,
-                        json_schema: None,
-                        max_tokens: config.max_tokens,
-                    })
-                    .await?;
-                summaries.push((episode_ids, response.text));
-            }
-        }
-
-        // 3. Write Derived episodes + cache [WriteOp].
-        tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            h.writer()?.submit(Box::new(move |conn| {
-                let mut ids = Vec::new();
-                for (episode_ids, text) in &summaries {
-                    let member_hash = oxibrain_store::consolidation::hash_member_set(episode_ids);
-                    oxibrain_store::consolidation::cache_summary(
-                        conn,
-                        "consolidation",
-                        &member_hash,
-                        &extractor_id,
-                        text,
-                        now,
-                    )?;
-                    let id = oxibrain_store::consolidation::write_derived_episode(
-                        conn,
-                        &space_owned,
-                        text,
-                        episode_ids,
-                        now,
-                    )?;
-                    ids.push(id);
-                }
-                let _ = tx.send(ids);
-                Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("consolidate channel dropped".into()))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        self.consolidate_impl(space, config).await
     }
 
     /// Generate community summary text as cached Derived episodes (§9.4, §5.3).
@@ -1387,118 +941,7 @@ impl Brain {
         space: &str,
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<usize, BrainError> {
-        let llm = self.require_llm()?.clone();
-        let now = self.clock.now();
-        let h = self.handle.clone();
-        let space_owned = space.to_string();
-        let extractor_id = config.id();
-
-        // 1. Read community groups [reader].
-        let groups = tokio::task::spawn_blocking({
-            let h = h.clone();
-            let space_owned = space_owned.clone();
-            move || {
-                h.readers.read(|conn| {
-                    oxibrain_store::consolidation::load_community_entities(conn, &space_owned)
-                })
-            }
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-
-        // 2. For each group: check cache, call LLM if miss.
-        let mut summaries: Vec<(Vec<String>, String)> = Vec::new();
-        for group in groups {
-            let entity_ids = group.entity_ids.clone();
-            let member_hash = oxibrain_store::consolidation::hash_member_set(&group.entity_ids);
-            let cached = tokio::task::spawn_blocking({
-                let h = h.clone();
-                let extractor_id = extractor_id.clone();
-                move || {
-                    h.readers.read(|conn| {
-                        oxibrain_store::consolidation::get_cached_summary(
-                            conn,
-                            "community",
-                            &member_hash,
-                            &extractor_id,
-                        )
-                    })
-                }
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-
-            if cached.is_some() {
-                continue; // cache hit
-            }
-
-            // Build prompt and call LLM.
-            let prompt = tokio::task::spawn_blocking({
-                let h = h.clone();
-                let space_owned = space_owned.clone();
-                move || {
-                    h.readers.read(|conn| {
-                        oxibrain_store::consolidation::build_community_prompt(
-                            conn,
-                            &space_owned,
-                            &group,
-                        )
-                    })
-                }
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-
-            let response = llm
-                .complete(LlmRequest {
-                    model: config.model_id.clone(),
-                    system: Some("Summarize the themes among these entities.".into()),
-                    prompt,
-                    json_schema: None,
-                    max_tokens: config.max_tokens,
-                })
-                .await?;
-            summaries.push((entity_ids, response.text));
-        }
-
-        // 3. Write Derived episodes + cache [WriteOp].
-        let count = summaries.len();
-        if count > 0 {
-            tokio::task::spawn_blocking(move || {
-                let (tx, rx) = std::sync::mpsc::channel();
-                h.writer()?.submit(Box::new(move |conn| {
-                    for (entity_ids, text) in &summaries {
-                        let member_hash =
-                            oxibrain_store::consolidation::hash_member_set(entity_ids);
-                        oxibrain_store::consolidation::cache_summary(
-                            conn,
-                            "community",
-                            &member_hash,
-                            &extractor_id,
-                            text,
-                            now,
-                        )?;
-                        // Write as a Derived episode linking to episodes mentioning these entities.
-                        oxibrain_store::consolidation::write_derived_episode(
-                            conn,
-                            &space_owned,
-                            text,
-                            &[],
-                            now,
-                        )?;
-                    }
-                    let _ = tx.send(());
-                    Ok(())
-                }))?;
-                h.writer()?.flush()?;
-                rx.recv().map_err(|_| {
-                    BrainError::Storage("summarize_communities channel dropped".into())
-                })
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-        }
-        Ok(count)
+        self.summarize_communities_impl(space, config).await
     }
 
     /// Render statements by id as `id | subject predicate object` text.
@@ -1543,152 +986,5 @@ impl Brain {
                 })
                 .collect()
         })
-    }
-}
-
-/// Map a store brief data struct to the view model and render Markdown.
-fn render_entity_brief(data: &oxibrain_store::brief::EntityBriefData) -> String {
-    use oxibrain_views as views;
-    let brief = views::EntityBrief {
-        surface: data.canonical_surface.clone(),
-        ty: data.entity.ty.clone(),
-        aliases: data.aliases.clone(),
-        beliefs: data
-            .beliefs
-            .iter()
-            .map(|b| views::BeliefView {
-                predicate: b.predicate.clone(),
-                object: b.object.clone(),
-                object_entity: b.object_entity.clone(),
-                valid_from: fmt_ts(b.valid_from),
-                valid_to: fmt_ts(b.valid_to),
-                confidence: b.confidence,
-                affirm: b.affirm,
-                deny: b.deny,
-                episodes: b.episodes,
-                status: b.status.clone(),
-            })
-            .collect(),
-        contradictions: data
-            .contradictions
-            .iter()
-            .map(|c| views::ContradictionView {
-                predicate: c.predicate.clone(),
-                object: c.object.clone(),
-                affirm_episodes: c.affirm_episodes.clone(),
-                deny_episodes: c.deny_episodes.clone(),
-            })
-            .collect(),
-        neighbours: data
-            .neighbours
-            .iter()
-            .map(|n| views::NeighbourView {
-                surface: n.surface.clone(),
-                entity: n.entity.clone(),
-                predicate: n.predicate.clone(),
-                direction: n.direction.clone(),
-            })
-            .collect(),
-        timeline: data
-            .timeline
-            .iter()
-            .map(|t| views::TimelineView {
-                at: fmt_ts(t.valid_from),
-                predicate: t.predicate.clone(),
-                object: t.object_repr.clone(),
-                object_entity: t.object_entity.clone(),
-                status: t.status.clone(),
-            })
-            .collect(),
-        sources: data
-            .sources
-            .iter()
-            .map(|s| views::SourceView {
-                episode: s.episode.clone(),
-                kind: s.kind.clone(),
-                at: fmt_ts(s.occurred_at),
-            })
-            .collect(),
-        uncertainty: uncertainty_for(data),
-    };
-    views::render_entity(&brief)
-}
-
-/// Map store data to the view model and render Markdown for a space brief.
-fn render_space_brief(data: &oxibrain_store::brief::SpaceBriefData) -> String {
-    use oxibrain_views as views;
-    let brief = views::SpaceBrief {
-        space_name: data.space_name.clone(),
-        stats: views::SpaceStatsView {
-            episodes: data.stats.episodes,
-            entities: data.stats.entities,
-            statements: data.stats.statements,
-            contradictions: data.stats.contradictions,
-        },
-        top_entities: data
-            .top_entities
-            .iter()
-            .map(|e| views::EntityLink {
-                surface: e.surface.clone(),
-                entity_id: e.entity_id.clone(),
-                predicate_count: e.predicate_count,
-            })
-            .collect(),
-    };
-    views::render_space(&brief)
-}
-
-/// Map store data to the view model and render Markdown for a topic brief.
-fn render_topic_brief(data: &oxibrain_store::brief::TopicBriefData) -> String {
-    use oxibrain_views as views;
-    let brief = views::TopicBrief {
-        topic: data.topic.clone(),
-        matched_entities: data
-            .matched_entities
-            .iter()
-            .map(|e| views::EntityLink {
-                surface: e.surface.clone(),
-                entity_id: e.entity_id.clone(),
-                predicate_count: e.predicate_count,
-            })
-            .collect(),
-    };
-    views::render_topic(&brief)
-}
-
-fn uncertainty_for(
-    data: &oxibrain_store::brief::EntityBriefData,
-) -> oxibrain_views::UncertaintyView {
-    let contradicted = data
-        .beliefs
-        .iter()
-        .filter(|b| b.status == "contradicted")
-        .count();
-    let single_source = data
-        .beliefs
-        .iter()
-        .filter(|b| b.episodes <= 1 && b.affirm <= 1)
-        .count();
-    let note = if contradicted > 0 {
-        format!("{contradicted} belief(s) contradicted — treat as unresolved")
-    } else if single_source > 0 {
-        format!("{single_source} belief(s) from a single source")
-    } else {
-        String::new()
-    };
-    oxibrain_views::UncertaintyView {
-        contradicted,
-        single_source,
-        note,
-    }
-}
-
-/// Format a timestamp as `YYYY-MM-DD`; open intervals (TIME_MIN/TIME_MAX)
-/// render as empty.
-fn fmt_ts(t: oxibrain_ports::Timestamp) -> String {
-    if t.is_min() || t.is_max() {
-        String::new()
-    } else {
-        oxibrain_core::short_ts(t)
     }
 }

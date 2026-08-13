@@ -295,6 +295,7 @@ fn load_summaries(
                 text: content,
                 confidence: 0.5,
                 sources: vec![id],
+                uncertainty: None,
             });
     }
     Ok(())

@@ -62,11 +62,14 @@ pub fn cache_summary(
 }
 
 /// Write a Derived episode + episode_links to sources. Returns the episode id.
+/// When `uncertainty` is provided, it is stored as JSON in the
+/// `uncertainty_json` column (§13.1, P10).
 pub fn write_derived_episode(
     conn: &Connection,
     space: &str,
     text: &str,
     sources: &[String],
+    uncertainty: Option<&oxibrain_core::Uncertainty>,
     now: Timestamp,
 ) -> Result<String, BrainError> {
     let ch = oxibrain_core::content_hash(text);
@@ -90,6 +93,16 @@ pub fn write_derived_episode(
     };
     crate::ledger::insert_episode(conn, &mut episode)?;
     let ep_id = episode.id.clone();
+
+    // Store uncertainty JSON (§13.1, P10).
+    if let Some(u) = uncertainty {
+        let json = serde_json::to_string(u).unwrap_or_default();
+        conn.execute(
+            "UPDATE episodes SET uncertainty_json = ?1 WHERE id = ?2",
+            rusqlite::params![json, ep_id],
+        )
+        .map_err(sql_err)?;
+    }
 
     // Link derived episode to its sources.
     for src in sources {
@@ -329,6 +342,93 @@ pub fn build_community_prompt(
     }
     Ok(prompt)
 }
+
+/// Compute belief statistics for a set of entities, for uncertainty (§13.1, 10.1).
+/// Queries beliefs joined with statements for the given entity IDs.
+/// Returns `UncertaintyInput` ready for `compute_uncertainty`.
+pub fn belief_stats_for_entities(
+    conn: &Connection,
+    space: &str,
+    entity_ids: &[String],
+    now: Timestamp,
+) -> Result<oxibrain_core::UncertaintyInput, BrainError> {
+    if entity_ids.is_empty() {
+        return Ok(oxibrain_core::UncertaintyInput::default());
+    }
+    let placeholders = entity_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT b.status, b.support_json
+         FROM beliefs b
+         JOIN statements s ON b.statement_id = s.id
+         WHERE s.space_id = ?1
+           AND s.subject_id IN ({placeholders})
+           AND b.status IN ('active', 'superseded', 'contradicted')"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+    let bind_params: Vec<&str> = std::iter::once(space)
+        .chain(entity_ids.iter().map(|s| s.as_str()))
+        .collect();
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(bind_params.iter()), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1).unwrap_or_default(),
+            ))
+        })
+        .map_err(sql_err)?;
+
+    let mut total = 0usize;
+    let mut contradicted = 0usize;
+    let mut single_source = 0usize;
+    let mut untrusted = 0usize;
+    for row in rows {
+        let (status, support_json) = row.map_err(sql_err)?;
+        total += 1;
+        if status == "contradicted" {
+            contradicted += 1;
+        }
+        // Parse support_json for distinct_episodes and trust_weights.
+        if let Ok(support) = serde_json::from_str::<oxibrain_core::Support>(&support_json) {
+            if support.distinct_episodes <= 1 {
+                single_source += 1;
+            }
+            if support
+                .trust_weights
+                .iter()
+                .any(|(t, _)| *t == oxibrain_core::TrustTier::Untrusted)
+            {
+                untrusted += 1;
+            }
+        }
+    }
+
+    // Staleness: max ingested_at across supporting episodes.
+    let placeholders2 = entity_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let staleness_sql = format!(
+        "SELECT MAX(e.ingested_at)
+         FROM episodes e
+         JOIN assertions a ON a.episode_id = e.id
+         JOIN statements s ON a.statement_id = s.id
+         WHERE s.space_id = ?1 AND s.subject_id IN ({placeholders2})"
+    );
+    let mut stmt2 = conn.prepare(&staleness_sql).map_err(sql_err)?;
+    let max_ingested: Option<i64> = stmt2
+        .query_row(rusqlite::params_from_iter(bind_params.iter()), |r| r.get(0))
+        .ok();
+    let max_age_days = match max_ingested {
+        Some(ts) => (now.millis() - ts) as f64 / 86_400_000.0,
+        None => 0.0,
+    };
+
+    Ok(oxibrain_core::UncertaintyInput {
+        total_beliefs: total,
+        contradicted_beliefs: contradicted,
+        single_source_beliefs: single_source,
+        untrusted_beliefs: untrusted,
+        max_episode_age_days: max_age_days.max(0.0),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

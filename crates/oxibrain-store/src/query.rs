@@ -621,6 +621,22 @@ pub fn hybrid_query(
     //    Filters (as_of, known_at, min_confidence) can be applied by `rank`.
     spec.channels = channels_used;
     fetch_facts_for_candidates(conn, &space, &mut input, q.as_of, q.min_confidence)?;
+
+    // 3b. Batch-fetch entity embeddings for MMR cosine similarity (§11.4, 10.3).
+    //     Only Entity targets have vectors; the map may be empty if no embedder
+    //     is configured — MMR falls back to the score proxy in that case.
+    let entity_ids: Vec<String> = input
+        .facts
+        .keys()
+        .filter_map(|t| match t {
+            TargetId::Entity { id } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    if !entity_ids.is_empty() {
+        input.entity_vectors = crate::vectors::fetch_vectors_for_entities(conn, &entity_ids)?;
+    }
+
     Ok(oxibrain_core::rank::rank(&input, &spec))
 }
 
