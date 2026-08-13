@@ -4,7 +4,7 @@
 //! These are the *measurements* the M9 exit criteria demand — the code
 //! shipped earlier; this bench proves the numbers on real hardware.
 
-use criterion::{Criterion, criterion_group, criterion_main, Throughput};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use oxibrain::Brain;
 use oxibrain_ports::{FakeClock, TIME_MAX, TIME_MIN, Timestamp};
 use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
@@ -28,11 +28,7 @@ fn build_fixture(dir: &std::path::Path, n_entities: usize) -> Brain {
         // everyone knows (creates many incoming neighbours for Entity0).
         for i in 0..n_entities {
             let subj = format!("Entity{i}");
-            let obj = if i == 0 {
-                format!("Entity{}", (i + 1) % n_entities)
-            } else {
-                format!("Entity{}", (i + 1) % n_entities)
-            };
+            let obj = format!("Entity{}", (i + 1) % n_entities);
             brain
                 .declare(
                     &space,

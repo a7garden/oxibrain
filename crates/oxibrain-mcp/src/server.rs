@@ -2530,7 +2530,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        let page1 = resp["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        let page1 = resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(
             page1.contains("Acme Corp") && page1.contains("entity://"),
             "hop 1: brief(Alice) must show Acme Corp as a link:\n{page1}"
@@ -2557,7 +2560,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        let page2 = resp["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        let page2 = resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(
             page2.contains("Project X") && page2.contains("entity://"),
             "hop 2: navigate(Acme) must show Project X:\n{page2}"
@@ -2581,7 +2587,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        let page3 = resp["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        let page3 = resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(
             page3.contains("Bob"),
             "hop 3: navigate(Project X) must reach Bob:\n{page3}"

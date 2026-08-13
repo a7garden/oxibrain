@@ -68,7 +68,8 @@ fn build_fixture(dir: &std::path::Path, n: usize) -> (Brain, String, String) {
         .unwrap();
     }
 
-    let hub = rt.block_on(brain.resolve_entity_id(&space, "Concept", "Entity0"))
+    let hub = rt
+        .block_on(brain.resolve_entity_id(&space, "Concept", "Entity0"))
         .unwrap()
         .expect("Entity0");
     (brain, space, hub)
@@ -100,7 +101,12 @@ fn time_fresh_declare(brain: &Brain, space: &str) -> std::time::Duration {
     start.elapsed()
 }
 
+/// A *measurement*, not a CI gate: the fixture build dominates the runtime
+/// (~30 s release, minutes in debug), so the default `cargo test` skips it.
+/// Run with `cargo test --release --test m9_resolution_scaling -- --ignored
+/// --nocapture` to see the timing table.
 #[test]
+#[ignore = "slow fixture build (measurement, not a CI gate)"]
 fn resolution_is_sublinear_per_mention() {
     // The full 10⁴-entity criterion is in the source (add 10_000 back to
     // re-run the full measurement; the fixture build dominates the runtime

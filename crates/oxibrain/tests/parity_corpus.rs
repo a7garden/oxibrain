@@ -224,8 +224,14 @@ fn resolution_f1_is_within_10pp_across_writing_systems() {
         // Declare each expected statement (resolves entities as a side effect).
         for (_, ep) in &lang_eps {
             for stmt in &ep.expected_statements {
-                let subj_ty = type_of.get(stmt.subject_surface.as_str()).copied().unwrap_or("Concept");
-                let obj_ty = type_of.get(stmt.object_surface.as_str()).copied().unwrap_or("Concept");
+                let subj_ty = type_of
+                    .get(stmt.subject_surface.as_str())
+                    .copied()
+                    .unwrap_or("Concept");
+                let obj_ty = type_of
+                    .get(stmt.object_surface.as_str())
+                    .copied()
+                    .unwrap_or("Concept");
                 let _ = rt.block_on(brain.declare(
                     &space,
                     Declaration::AddStatement {
@@ -317,7 +323,11 @@ fn resolution_f1_is_within_10pp_across_writing_systems() {
         }
 
         // Precision/recall/F1 over the variant-resolution decisions.
-        let precision = if tp + fp > 0 { tp as f64 / (tp + fp) as f64 } else { 1.0 };
+        let precision = if tp + fp > 0 {
+            tp as f64 / (tp + fp) as f64
+        } else {
+            1.0
+        };
         let recall = if tp + fn_count > 0 {
             tp as f64 / (tp + fn_count) as f64
         } else {

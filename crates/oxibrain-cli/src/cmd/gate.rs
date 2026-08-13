@@ -227,8 +227,7 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
             .await
             .context("assemble_context")?;
         let recall_tokens = recall.total_tokens;
-        let brief_tokens =
-            brief_token_cost(&brain, &space_id, &keyword, &entity_surfaces).await?;
+        let brief_tokens = brief_token_cost(&brain, &space_id, &keyword, &entity_surfaces).await?;
         results.push(QuestionResult {
             id: q.id,
             category: q.category,
@@ -344,10 +343,17 @@ async fn brief_token_cost(
             continue;
         }
         if let Ok(Some(id)) = brain
-            .resolve_entity_id(space_id, &entity_type_for(brain, space_id, surface).await, surface)
+            .resolve_entity_id(
+                space_id,
+                &entity_type_for(brain, space_id, surface).await,
+                surface,
+            )
             .await
         {
-            let page = brain.brief(space_id, &id).await.context("brief cost page")?;
+            let page = brain
+                .brief(space_id, &id)
+                .await
+                .context("brief cost page")?;
             total += page.len() / 4;
         }
     }
