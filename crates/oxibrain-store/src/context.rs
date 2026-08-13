@@ -3,7 +3,7 @@
 use crate::query;
 use crate::sql_err;
 use oxibrain_core::context::{ContextBudget, ContextLayer, ContextResult, LayerKind};
-use oxibrain_core::retrieval::{Query, QueryMode, SearchTarget};
+use oxibrain_core::retrieval::{Query, QueryMode};
 use oxibrain_ports::{BrainError, TokenizerPort};
 use rusqlite::{Connection, params};
 
@@ -130,6 +130,10 @@ pub fn assemble_context(
 /// Rendered belief used by `assemble_context`. The legacy struct dropped
 /// the subject (F6); the rewritten version includes subject, canonical key,
 /// validity interval, status, confidence, support, and sources.
+/// The extra fields are the F6 contract: `core::pack::RenderedBelief` (the
+/// M8 successor) consumes them; this legacy struct only exposes `.text`
+/// until the facade migrates to `pack`.
+#[allow(dead_code)]
 struct RenderedBelief {
     subject: String,
     canonical_key: String,
@@ -163,7 +167,6 @@ fn render_belief(
          WHERE s.id = ?1 AND s.space_id = ?2
          ORDER BY b.valid_from DESC LIMIT 1",
             params![statement_id, space],
-
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -179,7 +182,17 @@ fn render_belief(
             },
         )
         .map_err(sql_err)?;
-    let (subject, canonical_key, predicate, object_repr, status, valid_from, valid_to, confidence, support_json) = row;
+    let (
+        subject,
+        canonical_key,
+        predicate,
+        object_repr,
+        status,
+        valid_from,
+        valid_to,
+        confidence,
+        support_json,
+    ) = row;
     let canonical_key = canonical_key.unwrap_or_else(|| subject.clone());
     let status = status.unwrap_or_else(|| "active".into());
     let valid_from = valid_from.unwrap_or(0);

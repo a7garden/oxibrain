@@ -6,8 +6,8 @@ use crate::sql_err;
 use oxibrain_core::knowledge::Object;
 
 use oxibrain_core::rank::{
-    Channel as RankChannel, ChannelResult, LexIndex, RankedItem, RankingResult, Rerank,
-    Retrieval, RetrievalInput, TargetFacts, TargetId, VecSpace,
+    Channel as RankChannel, ChannelResult, LexIndex, RankingResult, Retrieval, RetrievalInput,
+    TargetFacts, TargetId, VecSpace,
 };
 use oxibrain_core::retrieval::{
     Query, QueryMode, SearchHit, SearchTarget, TraversalEdge, TraversalNode, TraversalResult,
@@ -15,7 +15,6 @@ use oxibrain_core::retrieval::{
 };
 use oxibrain_core::{Belief, Statement};
 use oxibrain_index::adjacency::{AdjacencyGraph, BfsSpec};
-use oxibrain_index::rrf;
 use oxibrain_index::{KnnIndex, TfIdfModel, TfIdfVector};
 
 use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
@@ -442,8 +441,10 @@ pub fn hybrid_query(
     //    keep the M7 contract: explicit Dense without an embedder fails.
     let mut input = RetrievalInput::default();
     let mut next_channel: u8 = 0;
-    let run_lexical =
-        matches!(q.mode, QueryMode::Hybrid | QueryMode::Lexical | QueryMode::LexicalVector);
+    let run_lexical = matches!(
+        q.mode,
+        QueryMode::Hybrid | QueryMode::Lexical | QueryMode::LexicalVector
+    );
     let run_dense = matches!(q.mode, QueryMode::Dense)
         || (matches!(q.mode, QueryMode::Hybrid) && embedder.is_some());
     let run_graph = matches!(q.mode, QueryMode::Hybrid | QueryMode::Graph);
@@ -461,24 +462,39 @@ pub fn hybrid_query(
         let ngram = fts_search(conn, &space, &q.text, fetch_cap, FtsIndex::Ngram)?;
         input.channels.push(ChannelResult {
             channel: next_channel,
-            hits: word.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
+            hits: word
+                .iter()
+                .map(|h| (search_target_to_target_id(&h.target), h.score))
+                .collect(),
         });
-        channels_used.push(RankChannel::Lexical { index: LexIndex::Word });
+        channels_used.push(RankChannel::Lexical {
+            index: LexIndex::Word,
+        });
         next_channel += 1;
         input.channels.push(ChannelResult {
             channel: next_channel,
-            hits: ngram.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
+            hits: ngram
+                .iter()
+                .map(|h| (search_target_to_target_id(&h.target), h.score))
+                .collect(),
         });
-        channels_used.push(RankChannel::Lexical { index: LexIndex::Ngram });
+        channels_used.push(RankChannel::Lexical {
+            index: LexIndex::Ngram,
+        });
         next_channel += 1;
     }
     if matches!(q.mode, QueryMode::Hybrid | QueryMode::LexicalVector) {
         let hits = lexical_vector_search(conn, &space, &q.text, fetch_cap)?;
         input.channels.push(ChannelResult {
             channel: next_channel,
-            hits: hits.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
+            hits: hits
+                .iter()
+                .map(|h| (search_target_to_target_id(&h.target), h.score))
+                .collect(),
         });
-        channels_used.push(RankChannel::Vector { space: VecSpace::Entity });
+        channels_used.push(RankChannel::Vector {
+            space: VecSpace::Entity,
+        });
         next_channel += 1;
     }
     if run_dense {
@@ -492,9 +508,14 @@ pub fn hybrid_query(
         let hits = dense_search(conn, embedder, &q.text, fetch_cap)?;
         input.channels.push(ChannelResult {
             channel: next_channel,
-            hits: hits.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
+            hits: hits
+                .iter()
+                .map(|h| (search_target_to_target_id(&h.target), h.score))
+                .collect(),
         });
-        channels_used.push(RankChannel::Vector { space: VecSpace::Entity });
+        channels_used.push(RankChannel::Vector {
+            space: VecSpace::Entity,
+        });
         next_channel += 1;
     }
     if run_graph {
@@ -592,7 +613,6 @@ pub fn hybrid_query(
             channels_used.push(RankChannel::CommunityExpand {
                 seed: oxibrain_core::rank::SeedPolicy::FromHits { top_k: 5 },
             });
-            next_channel += 1;
         }
     }
 
@@ -701,12 +721,25 @@ fn fetch_facts_for_candidates(
             .map_err(sql_err)?;
         let salience_lookup = fetch_salience(conn, space, &entities)?;
         for row in rows {
-            let (stmt_id, predicate, confidence, vf, vt, status, recorded_at, retracted_at, _subject, _row_space) = row.map_err(sql_err)?;
+            let (
+                stmt_id,
+                predicate,
+                confidence,
+                vf,
+                vt,
+                status,
+                recorded_at,
+                retracted_at,
+                _subject,
+                _row_space,
+            ) = row.map_err(sql_err)?;
             let trust = oxibrain_core::TrustTier::Trusted;
             let salience = *salience_lookup.get(&stmt_id).unwrap_or(&0.5);
             let _ = min_confidence; // already applied via spec.filters
-            let _ = as_of;          // already applied via spec.filters
-            let target = TargetId::Statement { id: stmt_id.clone() };
+            let _ = as_of; // already applied via spec.filters
+            let target = TargetId::Statement {
+                id: stmt_id.clone(),
+            };
             input.facts.insert(
                 target,
                 TargetFacts {
@@ -751,7 +784,35 @@ fn fetch_facts_for_candidates(
         for row in rows {
             let (id, salience) = row.map_err(sql_err)?;
             let target = TargetId::Entity { id: id.clone() };
-            input.facts.entry(target.clone()).or_insert_with(|| TargetFacts {
+            input
+                .facts
+                .entry(target.clone())
+                .or_insert_with(|| TargetFacts {
+                    target,
+                    confidence: 1.0,
+                    valid_from: oxibrain_ports::TIME_MIN,
+                    valid_to: oxibrain_ports::TIME_MAX,
+                    recorded_at: oxibrain_ports::TIME_MIN,
+                    retracted_at: None,
+                    trust: oxibrain_core::TrustTier::Trusted,
+                    status: oxibrain_core::BeliefStatus::Active,
+                    predicate: String::new(),
+                    salience,
+                    distinct_episodes: 0,
+                    channels: Vec::new(),
+                    channel_scores: Vec::new(),
+                });
+        }
+    }
+
+    // 3. Episodes — minimal facts; episode-level retrieval is rare and
+    //    doesn't go through the fold.
+    for id in &episodes {
+        let target = TargetId::Episode { id: id.clone() };
+        input
+            .facts
+            .entry(target.clone())
+            .or_insert_with(|| TargetFacts {
                 target,
                 confidence: 1.0,
                 valid_from: oxibrain_ports::TIME_MIN,
@@ -761,33 +822,11 @@ fn fetch_facts_for_candidates(
                 trust: oxibrain_core::TrustTier::Trusted,
                 status: oxibrain_core::BeliefStatus::Active,
                 predicate: String::new(),
-                salience,
+                salience: 1.0,
                 distinct_episodes: 0,
                 channels: Vec::new(),
                 channel_scores: Vec::new(),
             });
-        }
-    }
-
-    // 3. Episodes — minimal facts; episode-level retrieval is rare and
-    //    doesn't go through the fold.
-    for id in &episodes {
-        let target = TargetId::Episode { id: id.clone() };
-        input.facts.entry(target.clone()).or_insert_with(|| TargetFacts {
-            target,
-            confidence: 1.0,
-            valid_from: oxibrain_ports::TIME_MIN,
-            valid_to: oxibrain_ports::TIME_MAX,
-            recorded_at: oxibrain_ports::TIME_MIN,
-            retracted_at: None,
-            trust: oxibrain_core::TrustTier::Trusted,
-            status: oxibrain_core::BeliefStatus::Active,
-            predicate: String::new(),
-            salience: 1.0,
-            distinct_episodes: 0,
-            channels: Vec::new(),
-            channel_scores: Vec::new(),
-        });
     }
     Ok(())
 }
@@ -815,7 +854,6 @@ pub fn load_adjacency(
            AND b.confidence >= ?2",
     );
     if valid_at.is_some() {
-
         sql.push_str(" AND (b.valid_from IS NULL OR b.valid_from <= ?3) AND (b.valid_to IS NULL OR b.valid_to >= ?3)");
     }
     let mut stmt = conn.prepare(&sql).map_err(sql_err)?;

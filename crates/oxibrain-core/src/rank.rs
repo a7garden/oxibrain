@@ -31,20 +31,15 @@ pub enum TargetKind {
 /// `Statement` covers the post-conditions for retrieval; the others exist for
 /// store-side execution only (entity-targeted queries still yield `Statement`
 /// hits whose subject equals the entity).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetSet {
+    #[default]
     Statement,
     Entity,
     Episode,
     Chunk,
     Community,
-}
-
-impl Default for TargetSet {
-    fn default() -> Self {
-        TargetSet::Statement
-    }
 }
 
 /// Which lexical index to consult (§7.4).
@@ -107,9 +102,10 @@ impl Default for Fusion {
 }
 
 /// Rerankers applied after fusion, in order. `Chain` composes them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Rerank {
+    #[default]
     None,
     /// One-step graph distance from a fixed set of seed entities.
     GraphDistance { from: Vec<EntityId> },
@@ -122,26 +118,15 @@ pub enum Rerank {
     Chain(Vec<Rerank>),
 }
 
-impl Default for Rerank {
-    fn default() -> Self {
-        Rerank::None
-    }
-}
-
 /// Trust filtering policy. Default: include all tiers except those explicitly
 /// excluded. Excluding `Untrusted` is the common agent-runtime choice.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TrustPolicy {
+    #[default]
     All,
     /// Exclude one or more tiers (e.g. `["untrusted"]`).
     Exclude(Vec<crate::TrustTier>),
-}
-
-impl Default for TrustPolicy {
-    fn default() -> Self {
-        TrustPolicy::All
-    }
 }
 
 /// Filters — the entire list of "what to include" knobs. NOT optional, NOT
@@ -197,9 +182,15 @@ impl Retrieval {
         Self {
             targets: TargetSet::Statement,
             channels: vec![
-                Channel::Lexical { index: LexIndex::Word },
-                Channel::Lexical { index: LexIndex::Ngram },
-                Channel::Vector { space: VecSpace::Entity },
+                Channel::Lexical {
+                    index: LexIndex::Word,
+                },
+                Channel::Lexical {
+                    index: LexIndex::Ngram,
+                },
+                Channel::Vector {
+                    space: VecSpace::Entity,
+                },
                 Channel::GraphExpand {
                     seed: SeedPolicy::FromHits { top_k: 5 },
                     depth: 1,
@@ -218,8 +209,12 @@ impl Retrieval {
         Self {
             targets: TargetSet::Statement,
             channels: vec![
-                Channel::Lexical { index: LexIndex::Word },
-                Channel::Lexical { index: LexIndex::Ngram },
+                Channel::Lexical {
+                    index: LexIndex::Word,
+                },
+                Channel::Lexical {
+                    index: LexIndex::Ngram,
+                },
             ],
             fusion: Fusion::Rrf { k: 60 },
             rerank: Rerank::None,
@@ -233,7 +228,9 @@ impl Retrieval {
     pub fn semantic(space: impl Into<String>) -> Self {
         Self {
             targets: TargetSet::Statement,
-            channels: vec![Channel::Vector { space: VecSpace::Entity }],
+            channels: vec![Channel::Vector {
+                space: VecSpace::Entity,
+            }],
             fusion: Fusion::Rrf { k: 60 },
             rerank: Rerank::Mmr { lambda: 0.5 },
             filters: Filters::open(space),
@@ -251,9 +248,7 @@ impl Retrieval {
                 depth: 2,
             }],
             fusion: Fusion::Rrf { k: 60 },
-            rerank: Rerank::GraphDistance {
-                from: Vec::new(),
-            },
+            rerank: Rerank::GraphDistance { from: Vec::new() },
             filters: Filters::open(space),
             limit: 50,
             explain: false,
@@ -377,13 +372,29 @@ pub struct DroppedItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DropReason {
-    BelowConfidenceFloor { actual: f32, floor: f32 },
-    OutsideValidWindow { valid_at: Timestamp },
-    BeforeKnownAt { known_at: Timestamp, recorded_at: Timestamp },
-    TrustExcluded { tier: crate::TrustTier },
-    PredicateDenied { predicate: String },
-    EntityTypeMismatch { expected: Vec<EntityTypeRef> },
-    TruncatedByBudget { position: usize },
+    BelowConfidenceFloor {
+        actual: f32,
+        floor: f32,
+    },
+    OutsideValidWindow {
+        valid_at: Timestamp,
+    },
+    BeforeKnownAt {
+        known_at: Timestamp,
+        recorded_at: Timestamp,
+    },
+    TrustExcluded {
+        tier: crate::TrustTier,
+    },
+    PredicateDenied {
+        predicate: String,
+    },
+    EntityTypeMismatch {
+        expected: Vec<EntityTypeRef>,
+    },
+    TruncatedByBudget {
+        position: usize,
+    },
 }
 
 /// Output of `rank`.
@@ -644,8 +655,7 @@ fn fuse(scores: Option<&Vec<f64>>, fusion: &Fusion) -> f64 {
             // using position+1 as rank. Channels with identical scores break
             // ties by their declaration order — that order is deterministic
             // because channel results are emitted in `spec.channels` order.
-            let mut indexed: Vec<(usize, f64)> =
-                scores.iter().copied().enumerate().collect();
+            let mut indexed: Vec<(usize, f64)> = scores.iter().copied().enumerate().collect();
             indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let k = *k as f64;
             indexed
@@ -718,7 +728,7 @@ fn apply_rerank(items: &mut [RankedItem], rerank: &Rerank) {
             }
             let lambda = *lambda as f64;
             let mut reordered: Vec<RankedItem> = Vec::with_capacity(items.len());
-            let mut pool: Vec<RankedItem> = items.iter().cloned().collect();
+            let mut pool: Vec<RankedItem> = items.to_vec();
             // First pick: highest fused score.
             pool.sort_by(|a, b| {
                 b.fused_score
@@ -927,8 +937,16 @@ mod tests {
         let r1 = rank(&make(), &spec);
         let r2 = rank(&make(), &spec);
         // rrf_keys + fused_score + rank order must match.
-        let keys1: Vec<_> = r1.items.iter().map(|i| (i.target.rrf_key(), i.fused_score, i.rank)).collect();
-        let keys2: Vec<_> = r2.items.iter().map(|i| (i.target.rrf_key(), i.fused_score, i.rank)).collect();
+        let keys1: Vec<_> = r1
+            .items
+            .iter()
+            .map(|i| (i.target.rrf_key(), i.fused_score, i.rank))
+            .collect();
+        let keys2: Vec<_> = r2
+            .items
+            .iter()
+            .map(|i| (i.target.rrf_key(), i.fused_score, i.rank))
+            .collect();
         assert_eq!(keys1, keys2);
     }
 

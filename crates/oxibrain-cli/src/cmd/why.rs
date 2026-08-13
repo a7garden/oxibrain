@@ -24,7 +24,10 @@ pub async fn run_dropped(
     };
     let result = brain.query(q).await?;
     if result.dropped.is_empty() {
-        println!("no candidates were dropped (limit {})", result.total_candidates);
+        println!(
+            "no candidates were dropped (limit {})",
+            result.total_candidates
+        );
         return Ok(());
     }
     println!(
@@ -40,7 +43,10 @@ pub async fn run_dropped(
             DropReason::OutsideValidWindow { valid_at } => {
                 format!("outside valid window at {valid_at:?}")
             }
-            DropReason::BeforeKnownAt { known_at, recorded_at } => {
+            DropReason::BeforeKnownAt {
+                known_at,
+                recorded_at,
+            } => {
                 format!("recorded {recorded_at:?} after known_at {known_at:?}")
             }
             DropReason::TrustExcluded { tier } => format!("trust tier excluded: {tier:?}"),

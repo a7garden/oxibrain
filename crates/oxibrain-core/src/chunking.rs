@@ -60,7 +60,14 @@ pub fn split_into_chunks(content: &str, policy: &ChunkPolicy) -> Vec<Chunk> {
     }
     let mut out: Vec<Chunk> = Vec::new();
     let mut ordinal = 0u32;
-    split_recursive(content.as_bytes(), 0, content.len(), &mut ordinal, policy, &mut out);
+    split_recursive(
+        content.as_bytes(),
+        0,
+        content.len(),
+        &mut ordinal,
+        policy,
+        &mut out,
+    );
     out
 }
 
@@ -201,8 +208,8 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
     let y = (yoe as i32) + (era as i32) * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
 }
@@ -246,7 +253,13 @@ mod tests {
         let content: String = s
             .chars()
             .enumerate()
-            .map(|(i, c)| if i % 200 == 199 { format!("{c}\u{3002}") } else { c.to_string() })
+            .map(|(i, c)| {
+                if i % 200 == 199 {
+                    format!("{c}\u{3002}")
+                } else {
+                    c.to_string()
+                }
+            })
             .collect();
         let chunks = split_into_chunks(&content, &ChunkPolicy::default());
         assert!(
@@ -261,13 +274,13 @@ mod tests {
         let p1 = render_context_prefix(
             Timestamp(1_700_000_000_000),
             "Note: meeting.md",
-            &vec!["Alice(Person)".into(), "ProjectX(Project)".into()],
+            &["Alice(Person)".to_string(), "ProjectX(Project)".to_string()],
             Some("infra"),
         );
         let p2 = render_context_prefix(
             Timestamp(1_700_000_000_000),
             "Note: meeting.md",
-            &vec!["Alice(Person)".into(), "ProjectX(Project)".into()],
+            &["Alice(Person)".to_string(), "ProjectX(Project)".to_string()],
             Some("infra"),
         );
         assert_eq!(p1, p2);

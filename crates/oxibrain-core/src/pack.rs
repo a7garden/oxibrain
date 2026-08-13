@@ -15,10 +15,10 @@
 //!     travels with its `sources`.
 //!   - **Determinism.** Equal inputs produce byte-equal output.
 
+use crate::TrustTier;
 use crate::context::{ContextBudget, ContextLayer, ContextResult, LayerKind};
 use crate::knowledge::{BeliefStatus, EntityId, StatementId};
 use oxibrain_ports::TokenizerPort;
-use crate::TrustTier;
 use serde::{Deserialize, Serialize};
 
 // ── §12.2 inputs ────────────────────────────────────────────────────────────
@@ -98,21 +98,16 @@ pub struct ContextInput {
 // ── §12.3 policy ────────────────────────────────────────────────────────────
 
 /// Belief rendering verbosity (§12.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BeliefForm {
     /// Single-line: "{subject} {predicate} {object}".
+    #[default]
     OneLine,
     /// Adds the validity interval.
     WithValidity,
     /// Adds source episode ids.
     WithProvenance,
-}
-
-impl Default for BeliefForm {
-    fn default() -> Self {
-        BeliefForm::OneLine
-    }
 }
 
 /// Reserve share per layer. The Profile layer's reservation is a floor
@@ -176,12 +171,6 @@ impl PackPolicy {
     }
 }
 
-/// Pack a `ContextInput` to the budget under `PackPolicy`.
-
-/// §12.3 output. Built layer-by-layer; total_tokens is exact via the
-
-// ── §12.3 pack ──────────────────────────────────────────────────────────────
-
 /// Pack a `ContextInput` to the budget under `PackPolicy`. The function is
 /// pure: time-invariant, no I/O, no model. Layer order is fixed (§12.2):
 /// Profile first (always), then Pinned, HighSalienceBeliefs,
@@ -228,7 +217,12 @@ pub fn pack(
     let belief_lines: Vec<(String, String)> = input
         .beliefs
         .iter()
-        .map(|b| (render_belief_line(b, policy.belief_form), b.statement_id.clone()))
+        .map(|b| {
+            (
+                render_belief_line(b, policy.belief_form),
+                b.statement_id.clone(),
+            )
+        })
         .collect();
     if !belief_lines.is_empty() {
         let ceiling = policy.reserve.beliefs_tokens.min(remaining);
@@ -310,8 +304,6 @@ pub fn pack(
     let truncated = render_episodes(
         &input.episodes,
         policy.expand_top_k,
-        policy.reserve.episodes_tokens.min(remaining),
-        remaining,
         tokenizer,
         &mut layers,
         &mut total_tokens,
@@ -400,8 +392,6 @@ fn fill_lines(
 fn render_episodes(
     episodes: &[EpisodeExcerpt],
     expand_top_k: usize,
-    _ceiling: usize,
-    _remaining: usize,
     tokenizer: &dyn TokenizerPort,
     layers: &mut Vec<ContextLayer>,
     total_tokens: &mut usize,
@@ -506,11 +496,7 @@ fn format_validity(from: i64, to: i64) -> String {
 }
 
 fn short(id: &str) -> &str {
-    if id.len() > 16 {
-        &id[..16]
-    } else {
-        id
-    }
+    if id.len() > 16 { &id[..16] } else { id }
 }
 
 #[cfg(test)]
@@ -568,7 +554,12 @@ mod tests {
         let budget = ContextBudget { max_tokens: 800 };
         let policy = PackPolicy::for_budget(800);
         let out = pack(&input, &budget, &policy, &tok());
-        assert!(out.total_tokens <= budget.max_tokens, "total={} > budget={}", out.total_tokens, budget.max_tokens);
+        assert!(
+            out.total_tokens <= budget.max_tokens,
+            "total={} > budget={}",
+            out.total_tokens,
+            budget.max_tokens
+        );
     }
 
     #[test]
@@ -578,10 +569,11 @@ mod tests {
         let budget = ContextBudget { max_tokens: 1000 };
         let policy = PackPolicy::for_budget(1000);
         let out = pack(&input, &budget, &policy, &tok());
-        assert!(out
-            .layers
-            .iter()
-            .any(|l| matches!(l.kind, LayerKind::Profile)));
+        assert!(
+            out.layers
+                .iter()
+                .any(|l| matches!(l.kind, LayerKind::Profile))
+        );
     }
 
     #[test]

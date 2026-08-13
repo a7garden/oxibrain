@@ -38,13 +38,13 @@ pub mod context;
 pub mod eval;
 pub mod extraction;
 pub mod lifecycle;
+pub mod rank;
 pub mod retrieval;
 pub mod security;
-pub mod rank;
 pub use rank::{
-    Channel, ChannelRank, ChannelResult, DropReason, DroppedItem, Filters, Fusion,
-    LexIndex, RankedItem, RankingResult, Rerank, Retrieval, RetrievalInput, SeedPolicy,
-    TargetFacts, TargetId, TargetSet, TrustPolicy, VecSpace, explain_item, rank,
+    Channel, ChannelRank, ChannelResult, DropReason, DroppedItem, Filters, Fusion, LexIndex,
+    RankedItem, RankingResult, Rerank, Retrieval, RetrievalInput, SeedPolicy, TargetFacts,
+    TargetId, TargetSet, TrustPolicy, VecSpace, explain_item, rank,
 };
 pub mod pack;
 pub use pack::{
@@ -62,7 +62,7 @@ pub use security::{
 pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens_rough};
 pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};
 pub use retrieval::{
-    Direction, PredicateFilter, Query, QueryMode, SearchHit, SearchTarget, Strategy,
-    TraversalEdge, TraversalNode, TraversalResult, TraversalSpec,
+    Direction, PredicateFilter, Query, QueryMode, SearchHit, SearchTarget, Strategy, TraversalEdge,
+    TraversalNode, TraversalResult, TraversalSpec,
 };
 pub use stats::SpaceStats;

@@ -417,7 +417,7 @@ pub fn project_declaration(
             subject,
             predicate,
             object,
-            episode: target_ep,
+            episode: _target_ep,
         } => {
             // Resolve the statement to retract.
             let (subj_id, _) = resolve_or_create(conn, space, subject, &ep_id, 0, now)?;

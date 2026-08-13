@@ -7,8 +7,8 @@
 //! - explicit error when Dense mode has no embedder (no silent fallback)
 
 use oxibrain::Brain;
-use oxibrain_core::retrieval::{Query, QueryMode};
 use oxibrain_core::TargetId;
+use oxibrain_core::retrieval::{Query, QueryMode};
 use oxibrain_ports::{BrainError, EmbeddingPort, FakeClock, Timestamp};
 use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 use std::collections::HashSet;

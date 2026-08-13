@@ -14,14 +14,20 @@ use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 use tempfile::tempdir;
 
 fn entity(surface: &str, ty: &str) -> EntityRef {
-    EntityRef { surface: surface.to_string(), ty: ty.to_string() }
+    EntityRef {
+        surface: surface.to_string(),
+        ty: ty.to_string(),
+    }
 }
 
 fn decl_add(s: &str, sty: &str, p: &str, o: &str, oty: &str) -> Declaration {
     Declaration::AddStatement {
         subject: entity(s, sty),
         predicate: p.into(),
-        object: DeclObject::Entity { surface: o.into(), ty: oty.into() },
+        object: DeclObject::Entity {
+            surface: o.into(),
+            ty: oty.into(),
+        },
         polarity: "affirm".into(),
         valid_from: 0,
         valid_to: oxibrain_ports::TIME_MAX.0,
@@ -33,13 +39,18 @@ fn decl_add(s: &str, sty: &str, p: &str, o: &str, oty: &str) -> Declaration {
 async fn rank_truncation_drops_are_attributed() {
     let dir = tempdir().expect("tempdir");
     let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
-    let brain = Brain::with_clock(BrainConfig::at(dir.path().to_str().unwrap()), clock).await.expect("open");
+    let brain = Brain::with_clock(BrainConfig::at(dir.path().to_str().unwrap()), clock)
+        .await
+        .expect("open");
     let space = brain.ensure_space("test").await.expect("space");
 
     // Declare 5 statements so FTS has 5 candidates.
     for i in 0..5 {
         brain
-            .declare(&space, decl_add("A", "Concept", "knows", &format!("B{i}"), "Concept"))
+            .declare(
+                &space,
+                decl_add("A", "Concept", "knows", &format!("B{i}"), "Concept"),
+            )
             .await
             .expect("declare");
     }
@@ -57,7 +68,10 @@ async fn rank_truncation_drops_are_attributed() {
     let result = brain.query(q).await.expect("query");
 
     assert!(
-        result.dropped.iter().any(|d| matches!(d.reason, DropReason::TruncatedByBudget { .. })),
+        result
+            .dropped
+            .iter()
+            .any(|d| matches!(d.reason, DropReason::TruncatedByBudget { .. })),
         "expected at least one TruncatedByBudget drop, got {:?}",
         result.dropped
     );
@@ -66,5 +80,3 @@ async fn rank_truncation_drops_are_attributed() {
     assert_eq!(total, result.total_candidates);
     assert!(total >= 5, "expected at least 5 candidates, got {total}");
 }
-
-

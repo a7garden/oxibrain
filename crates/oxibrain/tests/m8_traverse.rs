@@ -13,14 +13,20 @@ use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 use tempfile::tempdir;
 
 fn entity(surface: &str, ty: &str) -> EntityRef {
-    EntityRef { surface: surface.to_string(), ty: ty.to_string() }
+    EntityRef {
+        surface: surface.to_string(),
+        ty: ty.to_string(),
+    }
 }
 
 fn decl_add(s: &str, sty: &str, p: &str, o: &str, oty: &str) -> Declaration {
     Declaration::AddStatement {
         subject: entity(s, sty),
         predicate: p.into(),
-        object: DeclObject::Entity { surface: o.into(), ty: oty.into() },
+        object: DeclObject::Entity {
+            surface: o.into(),
+            ty: oty.into(),
+        },
         polarity: "affirm".into(),
         valid_from: 0,
         valid_to: oxibrain_ports::TIME_MAX.0,
@@ -45,15 +51,31 @@ async fn find_statement_id(brain: &Brain, space: &str, surface: &str, ty: &str) 
 async fn traverse_excludes_retracted_edges() {
     let dir = tempdir().expect("tempdir");
     let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
-    let brain = Brain::with_clock(BrainConfig::at(dir.path().to_str().unwrap()), clock).await.expect("open");
+    let brain = Brain::with_clock(BrainConfig::at(dir.path().to_str().unwrap()), clock)
+        .await
+        .expect("open");
     let space = brain.ensure_space("test").await.expect("space");
 
     // Chain A -> B -> C
-    brain.declare(&space, decl_add("A", "Concept", "knows", "B", "Concept")).await.expect("declare A->B");
-    brain.declare(&space, decl_add("B", "Concept", "knows", "C", "Concept")).await.expect("declare B->C");
+    brain
+        .declare(&space, decl_add("A", "Concept", "knows", "B", "Concept"))
+        .await
+        .expect("declare A->B");
+    brain
+        .declare(&space, decl_add("B", "Concept", "knows", "C", "Concept"))
+        .await
+        .expect("declare B->C");
 
-    let a = brain.resolve_entity_id(&space, "Concept", "A").await.expect("resolve").expect("A");
-    let c = brain.resolve_entity_id(&space, "Concept", "C").await.expect("resolve").expect("C");
+    let a = brain
+        .resolve_entity_id(&space, "Concept", "A")
+        .await
+        .expect("resolve")
+        .expect("A");
+    let c = brain
+        .resolve_entity_id(&space, "Concept", "C")
+        .await
+        .expect("resolve")
+        .expect("C");
 
     // Pre-retraction: A reaches C in 2 hops.
     let pre_spec = TraversalSpec {
@@ -66,7 +88,10 @@ async fn traverse_excludes_retracted_edges() {
         min_confidence: 0.0,
         strategy: Strategy::Bfs,
     };
-    let pre = brain.traverse(&space, pre_spec).await.expect("pre-traverse");
+    let pre = brain
+        .traverse(&space, pre_spec)
+        .await
+        .expect("pre-traverse");
     let pre_targets: Vec<String> = pre.nodes.iter().map(|n| n.entity.clone()).collect();
     assert!(
         pre_targets.contains(&c),
@@ -82,7 +107,10 @@ async fn traverse_excludes_retracted_edges() {
             Declaration::Retract {
                 subject: entity("B", "Concept"),
                 predicate: "knows".into(),
-                object: DeclObject::Entity { surface: "C".into(), ty: "Concept".into() },
+                object: DeclObject::Entity {
+                    surface: "C".into(),
+                    ty: "Concept".into(),
+                },
                 episode: stmt_bc,
             },
         )
@@ -101,7 +129,10 @@ async fn traverse_excludes_retracted_edges() {
         min_confidence: 0.0,
         strategy: Strategy::Bfs,
     };
-    let post = brain.traverse(&space, post_spec).await.expect("post-traverse");
+    let post = brain
+        .traverse(&space, post_spec)
+        .await
+        .expect("post-traverse");
     let post_targets: Vec<String> = post.nodes.iter().map(|n| n.entity.clone()).collect();
     assert!(
         !post_targets.contains(&c),

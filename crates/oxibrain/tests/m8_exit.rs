@@ -10,20 +10,28 @@
 
 use oxibrain::Brain;
 use oxibrain::BrainConfig;
-use oxibrain_core::retrieval::{Direction, PredicateFilter, Query, QueryMode, Strategy, TraversalSpec};
+use oxibrain_core::retrieval::{
+    Direction, PredicateFilter, Query, QueryMode, Strategy, TraversalSpec,
+};
 use oxibrain_ports::{FakeClock, Timestamp};
 use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 use tempfile::tempdir;
 
 fn entity(surface: &str, ty: &str) -> EntityRef {
-    EntityRef { surface: surface.to_string(), ty: ty.to_string() }
+    EntityRef {
+        surface: surface.to_string(),
+        ty: ty.to_string(),
+    }
 }
 
 fn decl_add(s: &str, sty: &str, p: &str, o: &str, oty: &str) -> Declaration {
     Declaration::AddStatement {
         subject: entity(s, sty),
         predicate: p.into(),
-        object: DeclObject::Entity { surface: o.into(), ty: oty.into() },
+        object: DeclObject::Entity {
+            surface: o.into(),
+            ty: oty.into(),
+        },
         polarity: "affirm".into(),
         valid_from: 0,
         valid_to: oxibrain_ports::TIME_MAX.0,
@@ -38,7 +46,9 @@ fn decl_add(s: &str, sty: &str, p: &str, o: &str, oty: &str) -> Declaration {
 async fn search_as_of_returns_different_result_set() {
     let dir = tempdir().expect("tempdir");
     let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
-    let brain = Brain::with_clock(BrainConfig::at(dir.path().to_str().unwrap()), clock).await.expect("open");
+    let brain = Brain::with_clock(BrainConfig::at(dir.path().to_str().unwrap()), clock)
+        .await
+        .expect("open");
     let space = brain.ensure_space("test").await.expect("space");
 
     brain
@@ -47,7 +57,10 @@ async fn search_as_of_returns_different_result_set() {
             Declaration::AddStatement {
                 subject: entity("Alice", "Person"),
                 predicate: "employed_by".into(),
-                object: DeclObject::Entity { surface: "Acme".into(), ty: "Organization".into() },
+                object: DeclObject::Entity {
+                    surface: "Acme".into(),
+                    ty: "Organization".into(),
+                },
                 polarity: "affirm".into(),
                 valid_from: 1_000,
                 valid_to: 2_000,
@@ -61,7 +74,10 @@ async fn search_as_of_returns_different_result_set() {
             Declaration::AddStatement {
                 subject: entity("Alice", "Person"),
                 predicate: "employed_by".into(),
-                object: DeclObject::Entity { surface: "Globex".into(), ty: "Organization".into() },
+                object: DeclObject::Entity {
+                    surface: "Globex".into(),
+                    ty: "Organization".into(),
+                },
                 polarity: "affirm".into(),
                 valid_from: 2_000,
                 valid_to: oxibrain_ports::TIME_MAX.0,
@@ -71,7 +87,10 @@ async fn search_as_of_returns_different_result_set() {
         .expect("declare #2");
 
     // Index the statements so FTS5 surfaces them.
-    brain.rebuild_indexes(&space).await.expect("rebuild indexes");
+    brain
+        .rebuild_indexes(&space)
+        .await
+        .expect("rebuild indexes");
 
     // Search "Alice employed" without as_of — both beliefs are live (the
     // current fold shows Globex as the active employer and Acme as
@@ -100,16 +119,10 @@ async fn search_as_of_returns_different_result_set() {
     };
     let asof = brain.query(q_asof).await.expect("query as-of");
 
-    let keys_no_asof: std::collections::HashSet<String> = no_asof
-        .items
-        .iter()
-        .map(|i| i.target.rrf_key())
-        .collect();
-    let keys_asof: std::collections::HashSet<String> = asof
-        .items
-        .iter()
-        .map(|i| i.target.rrf_key())
-        .collect();
+    let keys_no_asof: std::collections::HashSet<String> =
+        no_asof.items.iter().map(|i| i.target.rrf_key()).collect();
+    let keys_asof: std::collections::HashSet<String> =
+        asof.items.iter().map(|i| i.target.rrf_key()).collect();
 
     assert_ne!(
         keys_no_asof, keys_asof,
@@ -124,15 +137,31 @@ async fn search_as_of_returns_different_result_set() {
 async fn traverse_valid_at_excludes_retracted_edge() {
     let dir = tempdir().expect("tempdir");
     let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
-    let brain = Brain::with_clock(BrainConfig::at(dir.path().to_str().unwrap()), clock).await.expect("open");
+    let brain = Brain::with_clock(BrainConfig::at(dir.path().to_str().unwrap()), clock)
+        .await
+        .expect("open");
     let space = brain.ensure_space("test").await.expect("space");
 
     // Chain A -> B -> C, then retract B->C.
-    brain.declare(&space, decl_add("A", "Concept", "knows", "B", "Concept")).await.expect("A->B");
-    brain.declare(&space, decl_add("B", "Concept", "knows", "C", "Concept")).await.expect("B->C");
+    brain
+        .declare(&space, decl_add("A", "Concept", "knows", "B", "Concept"))
+        .await
+        .expect("A->B");
+    brain
+        .declare(&space, decl_add("B", "Concept", "knows", "C", "Concept"))
+        .await
+        .expect("B->C");
 
-    let a = brain.resolve_entity_id(&space, "Concept", "A").await.expect("resolve").expect("A");
-    let c = brain.resolve_entity_id(&space, "Concept", "C").await.expect("resolve").expect("C");
+    let a = brain
+        .resolve_entity_id(&space, "Concept", "A")
+        .await
+        .expect("resolve")
+        .expect("A");
+    let c = brain
+        .resolve_entity_id(&space, "Concept", "C")
+        .await
+        .expect("resolve")
+        .expect("C");
 
     // Pre-retraction with valid_at = now: C reachable.
     let pre = TraversalSpec {
@@ -152,7 +181,11 @@ async fn traverse_valid_at_excludes_retracted_edge() {
     );
 
     // Retract B->C.
-    let b_entity = brain.resolve_entity_id(&space, "Concept", "B").await.expect("resolve").expect("B");
+    let b_entity = brain
+        .resolve_entity_id(&space, "Concept", "B")
+        .await
+        .expect("resolve")
+        .expect("B");
     let beliefs = brain.beliefs(&space, &b_entity).await.expect("beliefs");
     let stmt_bc = beliefs[0].statement.clone();
     brain
@@ -161,7 +194,10 @@ async fn traverse_valid_at_excludes_retracted_edge() {
             Declaration::Retract {
                 subject: entity("B", "Concept"),
                 predicate: "knows".into(),
-                object: DeclObject::Entity { surface: "C".into(), ty: "Concept".into() },
+                object: DeclObject::Entity {
+                    surface: "C".into(),
+                    ty: "Concept".into(),
+                },
                 episode: stmt_bc,
             },
         )
