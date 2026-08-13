@@ -32,6 +32,9 @@ pub struct ContextResult {
     pub truncated: bool,
 }
 
-pub fn estimate_tokens(text: &str) -> usize {
+/// Pre-load fallback token estimate (§7.5). Uses chars/4 — off by roughly
+/// fivefold on CJK (F27). Replaced by `TokenizerPort::count()` once the model
+/// tokenizer is available.
+pub fn estimate_tokens_rough(text: &str) -> usize {
     (text.chars().count() / 4).max(1)
 }

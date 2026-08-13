@@ -83,10 +83,7 @@ fn no_language_specific_code_outside_index() {
             }
             for pattern in FORBIDDEN_PATTERNS {
                 if line.to_lowercase().contains(&pattern.to_lowercase()) {
-                    let rel = file
-                        .strip_prefix(&workspace)
-                        .unwrap_or(file)
-                        .display();
+                    let rel = file.strip_prefix(&workspace).unwrap_or(file).display();
                     violations.push(format!(
                         "{rel}:{lineno}: forbidden pattern '{pattern}' (§18 rule 6)"
                     ));

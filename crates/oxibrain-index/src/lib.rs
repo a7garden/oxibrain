@@ -3,17 +3,19 @@
 //! functions over in-memory data structures.
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
+pub mod adjacency;
+pub mod community;
+pub mod knn;
 pub mod ngram;
+pub mod quantize;
 pub mod rrf;
 pub mod spec;
 pub mod vector;
+pub use adjacency::{AdjacencyGraph, BfsResult, BfsSpec};
+pub use community::{CommunityMap, label_propagation};
+pub use knn::KnnIndex;
 pub use ngram::{jaccard, lsh_bands, minhash, shingle_entropy, shingles};
+pub use quantize::{cosine_approx, dequantize_signs, hamming, quantize};
 pub use rrf::{FusedItem, fuse};
 pub use spec::{Direction, PredicateFilter};
 pub use vector::{TfIdfModel, TfIdfVector, cosine_sim, features};
-pub mod adjacency;
-pub mod knn;
-pub use adjacency::{AdjacencyGraph, BfsResult, BfsSpec};
-pub use knn::KnnIndex;
-pub mod community;
-pub use community::{CommunityMap, label_propagation};

@@ -12,7 +12,8 @@ pub use oxibrain_core::security::{
 };
 pub use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier};
 pub use oxibrain_ports::{
-    BrainError, ClockPort, LlmPort, LlmRequest, LlmResponse, SystemClock, Timestamp,
+    BrainError, CharTokenizer, ClockPort, LlmPort, LlmRequest, LlmResponse, SystemClock, Timestamp,
+    TokenizerPort,
 };
 
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
@@ -25,6 +26,7 @@ pub struct Brain {
     handle: Arc<StoreHandle>,
     clock: Arc<dyn ClockPort>,
     llm: Option<Arc<dyn LlmPort>>,
+    tokenizer: Arc<dyn TokenizerPort>,
 }
 
 impl Brain {
@@ -36,6 +38,7 @@ impl Brain {
             handle: Arc::new(store),
             clock: Arc::new(SystemClock),
             llm: None,
+            tokenizer: Arc::new(CharTokenizer),
         })
     }
 
@@ -50,6 +53,7 @@ impl Brain {
             handle: Arc::new(store),
             clock,
             llm: None,
+            tokenizer: Arc::new(CharTokenizer),
         })
     }
 
@@ -64,6 +68,7 @@ impl Brain {
             handle: Arc::new(store),
             clock: Arc::new(SystemClock),
             llm: None,
+            tokenizer: Arc::new(CharTokenizer),
         })
     }
 
@@ -116,12 +121,7 @@ impl Brain {
                     redacted_at: None,
                 };
                 ledger::insert_episode(conn, &mut ep)?;
-                oxibrain_store::index_ops::index_episode_fts(
-                    conn,
-                    &ep.space,
-                    &ep.id,
-                    &ep.content,
-                )?;
+                oxibrain_store::index_ops::index_episode_fts(conn, &ep.space, &ep.id, &ep.content)?;
                 let _ = tx.send(ep.id);
                 Ok(())
             }))?;
@@ -498,11 +498,19 @@ impl Brain {
         token_budget: usize,
     ) -> Result<oxibrain_core::context::ContextResult, BrainError> {
         let h = self.handle.clone();
+        let tokenizer = self.tokenizer.clone();
         let space = space.to_string();
         let query = query.to_string();
         tokio::task::spawn_blocking(move || {
             h.readers.read(|conn| {
-                oxibrain_store::context::assemble_context(conn, &space, &query, token_budget, None)
+                oxibrain_store::context::assemble_context(
+                    conn,
+                    &space,
+                    &query,
+                    token_budget,
+                    None,
+                    tokenizer.as_ref(),
+                )
             })
         })
         .await
@@ -521,6 +529,7 @@ impl Brain {
         hints: &oxibrain_store::context::RecallHints,
     ) -> Result<oxibrain_core::context::ContextResult, BrainError> {
         let h = self.handle.clone();
+        let tokenizer = self.tokenizer.clone();
         let space = space.to_string();
         let query = query.to_string();
         let hints = hints.clone();
@@ -532,6 +541,7 @@ impl Brain {
                     &query,
                     token_budget,
                     Some(&hints),
+                    tokenizer.as_ref(),
                 )
             })
         })
@@ -552,6 +562,7 @@ impl Brain {
             handle: Arc::new(store),
             clock,
             llm: Some(llm),
+            tokenizer: Arc::new(CharTokenizer),
         })
     }
 

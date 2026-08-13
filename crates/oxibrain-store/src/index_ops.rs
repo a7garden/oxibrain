@@ -85,7 +85,8 @@ pub fn index_episode_fts(
     Ok(())
 }
 
-pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {    conn.execute("DELETE FROM fts_word WHERE space_id = ?1", params![space])
+pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
+    conn.execute("DELETE FROM fts_word WHERE space_id = ?1", params![space])
         .map_err(sql_err)?;
     conn.execute("DELETE FROM fts_ngram WHERE space_id = ?1", params![space])
         .map_err(sql_err)?;

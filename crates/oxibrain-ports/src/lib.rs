@@ -8,9 +8,11 @@ pub mod error;
 pub mod llm;
 pub mod llm_fake;
 pub mod time;
+pub mod tokenizer;
 
 pub use clock::{ClockPort, FakeClock, SystemClock};
 pub use error::BrainError;
-pub use llm::{LlmPort, LlmRequest, LlmResponse};
+pub use llm::{LlmCapabilities, LlmPort, LlmRequest, LlmResponse};
 pub use llm_fake::FakeLlmPort;
 pub use time::{TIME_MAX, TIME_MIN, Timestamp};
+pub use tokenizer::{CharTokenizer, TokenizerPort};

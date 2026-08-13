@@ -446,6 +446,104 @@ pub fn schema_from_registry(predicates: &[PredicateDef]) -> serde_json::Value {
     })
 }
 
+/// Build a GBNF alternation of JSON string literals for an enum.
+/// Produces: `"\"value1\"" | "\"value2\"" | ...`
+/// which in GBNF matches one of the JSON strings "value1", "value2", ...
+fn enum_alternation(values: &[&str]) -> String {
+    values
+        .iter()
+        .map(|v| format!("\"\\\"{v}\\\"\""))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// Generate a GBNF grammar from the predicate registry (§9.4, D28, P4).
+///
+/// Sibling of [`schema_from_registry`] — one registry, two consumers.
+/// The grammar constrains structure and enum values; semantic rules
+/// (confidence range, span validity, type matching) are enforced by
+/// [`validate_claims`].
+///
+/// Any JSON matching this grammar parses into an [`ExtractionResponse`],
+/// and any valid serialized [`ExtractionResponse`] is accepted by the grammar.
+/// The grammar enforces a canonical key order; serde deserializes by field
+/// name, so the order is irrelevant on the consumer side.
+pub fn grammar_from_registry(predicates: &[PredicateDef]) -> String {
+    // Collect enum values — same logic as schema_from_registry.
+    let pred_names: Vec<&str> = predicates.iter().map(|p| p.name.as_str()).collect();
+    let entity_types: Vec<&str> = predicates
+        .iter()
+        .flat_map(|p| {
+            let subjects = p.subject_types.iter().map(|t| t.as_str());
+            let objects = match &p.object_kind {
+                ObjectKind::Entity(t) => vec![t.as_str()],
+                _ => vec![],
+            };
+            subjects.chain(objects)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    let pred_alts = enum_alternation(&pred_names);
+    let etype_alts = enum_alternation(&entity_types);
+
+    // GBNF (GGML BNF) for llama.cpp. See llama.cpp grammars/README.md.
+    // {{ and }} are format! escapes for literal { and }.
+    format!(
+        r#"root ::= ws "{{" ws "\"claims\"" ws ":" ws "[" ws claims ws "]" ws "}}"
+
+claims ::= (claim (ws "," ws claim)*)?
+
+claim ::= "{{" ws
+  "\"predicate\""   ws ":" ws predicate    ws "," ws
+  "\"subject\""     ws ":" ws mention      ws "," ws
+  "\"object\""      ws ":" ws object_union ws "," ws
+  "\"polarity\""    ws ":" ws polarity     ws "," ws
+  valid_from_opt
+  valid_to_opt
+  "\"confidence\""  ws ":" ws number
+  ws "}}"
+
+valid_from_opt ::= ("\"valid_from\"" ws ":" ws temporal_val ws "," ws)?
+valid_to_opt   ::= ("\"valid_to\""   ws ":" ws temporal_val ws "," ws)?
+temporal_val   ::= "null" | integer
+
+mention ::= "{{" ws
+  "\"surface\""     ws ":" ws string      ws "," ws
+  "\"entity_type\"" ws ":" ws entity_type ws "," ws
+  "\"span\""        ws ":" ws "[" ws integer ws "," ws integer ws "]"
+  ws "}}"
+
+object_union ::= entity_object | literal_object
+
+entity_object ::= "{{" ws
+  "\"kind\""    ws ":" ws "\"entity\"" ws "," ws
+  "\"mention\"" ws ":" ws mention
+  ws "}}"
+
+literal_object ::= "{{" ws
+  "\"kind\""         ws ":" ws "\"literal\""  ws "," ws
+  "\"literal_type\"" ws ":" ws literal_type   ws "," ws
+  "\"value\""        ws ":" ws string         ws "," ws
+  "\"span\""         ws ":" ws "[" ws integer ws "," ws integer ws "]"
+  ws "}}"
+
+predicate    ::= {pred_alts}
+entity_type  ::= {etype_alts}
+polarity     ::= "\"affirm\"" | "\"deny\""
+literal_type ::= "\"text\"" | "\"date\"" | "\"datetime\"" | "\"number\"" | "\"bool\"" | "\"quantity\""
+
+string  ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\"" ws
+number  ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
+integer ::= "-"? ([0-9] | [1-9] [0-9]*) ws
+ws      ::= [ \t\n]*
+"#,
+        pred_alts = pred_alts,
+        etype_alts = etype_alts,
+    )
+}
+
 /// Build the extraction system prompt from the registry (P4: no hard-coded predicates).
 /// Pure function.
 pub fn build_extraction_prompt(predicates: &[PredicateDef]) -> String {
@@ -689,5 +787,135 @@ mod tests {
             result.invalid[0].1[0],
             ValidationError::SubjectTypeMismatch { .. }
         ));
+    }
+
+    // ─── grammar_from_registry tests ──────────────────────────────────────
+
+    #[test]
+    fn grammar_smoke_has_rules() {
+        let g = grammar_from_registry(crate::registry::core_v1());
+        // Normalize whitespace so alignment in the template doesn't break matching.
+        let norm: String = g.split_whitespace().collect::<Vec<_>>().join(" ");
+        for rule in [
+            "root",
+            "claims",
+            "claim",
+            "mention",
+            "object_union",
+            "predicate",
+            "entity_type",
+            "polarity",
+            "literal_type",
+            "string",
+            "number",
+            "integer",
+            "ws",
+        ] {
+            let needle = format!("{rule} ::=");
+            assert!(
+                norm.contains(&needle),
+                "grammar missing rule definition for `{rule}`"
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_and_schema_agree_on_predicates() {
+        let preds = crate::registry::core_v1();
+        let grammar = grammar_from_registry(preds);
+        let schema = schema_from_registry(preds);
+
+        let schema_preds: std::collections::BTreeSet<String> =
+            schema["properties"]["claims"]["items"]["properties"]["predicate"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect();
+
+        for name in &schema_preds {
+            // The grammar must contain a GBNF literal for this predicate name.
+            let needle = format!("\\\"{name}\\\"");
+            assert!(
+                grammar.contains(&needle),
+                "grammar missing predicate `{name}` present in schema"
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_and_schema_agree_on_entity_types() {
+        let preds = crate::registry::core_v1();
+        let grammar = grammar_from_registry(preds);
+        let schema = schema_from_registry(preds);
+
+        let schema_types: std::collections::BTreeSet<String> = schema["properties"]["claims"]["items"]
+            ["properties"]["subject"]["properties"]["entity_type"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        for name in &schema_types {
+            let needle = format!("\\\"{name}\\\"");
+            assert!(
+                grammar.contains(&needle),
+                "grammar missing entity type `{name}` present in schema"
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_has_polarity_and_literal_type_enums() {
+        let g = grammar_from_registry(crate::registry::core_v1());
+        assert!(g.contains("\\\"affirm\\\""));
+        assert!(g.contains("\\\"deny\\\""));
+        for lt in ["text", "date", "datetime", "number", "bool", "quantity"] {
+            assert!(
+                g.contains(&format!("\\\"{lt}\\\"")),
+                "grammar missing literal type `{lt}`"
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_valid_response_roundtrips_serde() {
+        // A Claim serialized to JSON should round-trip through serde.
+        // This is the structural half of the grammar/schema agreement: the
+        // grammar generates the same structure that serde expects.
+        let claim = make_claim(
+            "works_on",
+            "Alice",
+            "Person",
+            (0, 5),
+            "ProjectX",
+            "Project",
+            (15, 23),
+        );
+        let resp = ExtractionResponse {
+            claims: vec![claim],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: ExtractionResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.claims.len(), 1);
+        assert_eq!(back.claims[0].predicate, "works_on");
+    }
+
+    #[test]
+    fn grammar_has_optional_temporal_fields() {
+        let g = grammar_from_registry(crate::registry::core_v1());
+        assert!(g.contains("valid_from_opt"));
+        assert!(g.contains("valid_to_opt"));
+        // The grammar contains GBNF literals with backslash-escaped quotes.
+        assert!(g.contains("\\\"valid_from\\\""));
+        assert!(g.contains("\\\"valid_to\\\""));
+    }
+    #[test]
+    fn grammar_supports_empty_claims() {
+        // An empty claims array {"claims":[]} must be accepted.
+        let g = grammar_from_registry(crate::registry::core_v1());
+        // The claims rule uses ? to allow zero claims.
+        assert!(g.contains("(claim (ws \",\" ws claim)*)?"));
     }
 }

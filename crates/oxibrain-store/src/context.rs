@@ -2,11 +2,9 @@
 
 use crate::query;
 use crate::sql_err;
-use oxibrain_core::context::{
-    ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens,
-};
+use oxibrain_core::context::{ContextBudget, ContextLayer, ContextResult, LayerKind};
 use oxibrain_core::retrieval::{Query, QueryMode, SearchTarget};
-use oxibrain_ports::BrainError;
+use oxibrain_ports::{BrainError, TokenizerPort};
 use rusqlite::{Connection, params};
 
 /// Hints that broaden context assembly (DESIGN §9.5, sub-project L3).
@@ -28,6 +26,7 @@ pub fn assemble_context(
     query_text: &str,
     budget: usize,
     hints: Option<&RecallHints>,
+    tokenizer: &dyn TokenizerPort,
 ) -> Result<ContextResult, BrainError> {
     let mut layers: Vec<ContextLayer> = Vec::new();
     let mut total_tokens = 0;
@@ -56,7 +55,7 @@ pub fn assemble_context(
         }
     }
     if !beliefs_text.is_empty() {
-        let tokens = estimate_tokens(&beliefs_text);
+        let tokens = tokenizer.count(&beliefs_text);
         total_tokens += tokens;
         layers.push(ContextLayer {
             kind: LayerKind::HighSalienceBeliefs,
@@ -102,20 +101,20 @@ pub fn assemble_context(
         let mut episode_prov: Vec<String> = Vec::new();
         for (id, content) in &recent {
             let remaining = budget.saturating_sub(total_tokens);
-            if estimate_tokens(content) > remaining {
+            if tokenizer.count(content) > remaining {
                 truncated = true;
                 break;
             }
             episode_text.push_str(content);
             episode_text.push('\n');
             episode_prov.push(id.clone());
-            total_tokens += estimate_tokens(content);
+            total_tokens += tokenizer.count(content);
         }
         if !episode_text.is_empty() {
             layers.push(ContextLayer {
                 kind: LayerKind::RecentEpisodes,
                 text: episode_text.clone(),
-                estimated_tokens: estimate_tokens(&episode_text),
+                estimated_tokens: tokenizer.count(&episode_text),
                 provenance: episode_prov,
             });
         }

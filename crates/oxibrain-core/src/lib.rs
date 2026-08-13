@@ -46,7 +46,7 @@ pub use security::{
     TokenInfo,
 };
 
-pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens};
+pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens_rough};
 pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};
 pub use retrieval::{
     Direction, DropReason, DroppedItem, PredicateFilter, Query, QueryMode, RankedItem,
