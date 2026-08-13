@@ -1,26 +1,34 @@
-//! TF-IDF vector model with hashing trick (deterministic, fixed dimensionality).
+//! Lexical-vector model: character n-gram shingles with hashing trick
+//! (deterministic, fixed dimensionality).
+//!
+//! Replaces the v1.0 English word tokenizer (F23: stopword list, F24: byte-length
+//! filter) with language-independent character n-grams from `ngram::shingles`.
+//! The hashing trick and fixed dimensionality are preserved — determinism is
+//! unchanged, only the feature space becomes script-neutral (P11).
+
+use crate::ngram;
+
 fn fnv1a(s: &str) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
 }
-const STOP_WORDS: &[&str] = &[
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
-    "do", "does", "did", "will", "would", "could", "should", "may", "might", "must", "can", "of",
-    "in", "on", "at", "to", "for", "with", "by", "from", "as", "into", "about", "than", "then",
-    "no", "not", "or", "and", "but", "if", "so", "it", "its", "this", "that", "these", "those",
-    "i", "you", "he", "she", "we", "they",
-];
-pub fn tokenize(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty() && s.len() > 1 && !STOP_WORDS.contains(s))
-        .map(String::from)
+
+/// Extract character n-gram features from text.
+///
+/// Returns 3-gram shingles of the lowercased text, including boundary
+/// sentinels. Language-independent (P11): no word boundaries, no stopword list,
+/// no byte-length filter, no script check.
+pub fn features(text: &str) -> Vec<String> {
+    let normalized = text.to_lowercase();
+    ngram::shingles(&normalized, 3)
+        .into_iter()
         .collect()
 }
+
 pub struct TfIdfModel {
     pub dim: usize,
     idf: Vec<f32>,
@@ -32,7 +40,7 @@ impl TfIdfModel {
         let mut df = vec![0u32; dim];
         for text in texts {
             let mut seen = std::collections::HashSet::new();
-            for t in tokenize(text) {
+            for t in features(text) {
                 seen.insert((fnv1a(&t) as usize) % dim);
             }
             for d in seen {
@@ -47,7 +55,7 @@ impl TfIdfModel {
     }
     pub fn transform(&self, text: &str) -> TfIdfVector {
         let mut v = vec![0f32; self.dim];
-        for t in tokenize(text) {
+        for t in features(text) {
             v[(fnv1a(&t) as usize) % self.dim] += 1.0;
         }
         let mut n = 0.;

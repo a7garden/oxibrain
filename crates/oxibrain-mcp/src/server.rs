@@ -777,7 +777,7 @@ fn u_arg_or(args: &Value, key: &str, default: usize) -> usize {
 fn parse_mode(s: &str) -> QueryMode {
     match s {
         "lexical" => QueryMode::Lexical,
-        "semantic" => QueryMode::Semantic,
+        "lexical-vector" => QueryMode::LexicalVector,
         "graph" => QueryMode::Graph,
         "community" => QueryMode::Community,
         _ => QueryMode::Hybrid,
@@ -795,13 +795,13 @@ fn tool_list() -> Value {
     json!({
         "tools": [
             tool("search",
-                "Search the brain via hybrid/lexical/semantic/graph/community retrieval. Returns ranked results with scores, targets, and provenance.",
+                "Search the brain via hybrid/lexical/lexical-vector/graph/community retrieval. Returns ranked results with scores, targets, and provenance.",
                 json!({
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "The search query text." },
                         "space": { "type": "string", "description": "Space name (default: personal)." },
-                        "mode": { "type": "string", "enum": ["hybrid","lexical","semantic","graph","community"], "description": "Retrieval mode (default: hybrid)." },
+                        "mode": { "type": "string", "enum": ["hybrid","lexical","lexical-vector","graph","community"], "description": "Retrieval mode (default: hybrid)." },
                         "limit": { "type": "integer", "minimum": 1, "description": "Maximum results (default: 20)." }
                     },
                     "required": ["query"]

@@ -303,9 +303,12 @@ pub fn load_knn_index(conn: &Connection, space: &str) -> Result<KnnIndex, BrainE
     Ok(index)
 }
 
-/// Semantic search: prefer sqlite-vec KNN over dense entity_vectors; fall back to
-/// TF-IDF brute-force kNN if no vectors exist (v1 default — no model loaded).
-pub fn semantic_search(
+/// Lexical-vector search: prefer sqlite-vec KNN over dense entity_vectors; fall
+/// back to TF-IDF brute-force kNN if no vectors exist (v1 default — no model
+/// loaded). This is a *lexical* channel (hashed bag-of-shingles), not semantic —
+/// the name was corrected because calling it "semantic" is how F16 survived
+/// review (§7.3, §7.4).
+pub fn lexical_vector_search(
     conn: &Connection,
     space: &str,
     query_text: &str,
@@ -334,7 +337,7 @@ pub fn semantic_search(
             SearchHit {
                 target,
                 score,
-                mode: QueryMode::Semantic,
+                mode: QueryMode::LexicalVector,
             }
         })
         .collect();
@@ -370,7 +373,7 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
     let mut mode_lists: Vec<Vec<SearchHit>> = Vec::new();
 
     let run_lexical = matches!(q.mode, QueryMode::Hybrid | QueryMode::Lexical);
-    let run_semantic = matches!(q.mode, QueryMode::Hybrid | QueryMode::Semantic);
+    let run_lexical_vector = matches!(q.mode, QueryMode::Hybrid | QueryMode::LexicalVector);
     let run_graph = matches!(q.mode, QueryMode::Hybrid | QueryMode::Graph);
     let run_community = matches!(q.mode, QueryMode::Hybrid | QueryMode::Community);
 
@@ -380,8 +383,8 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
         let hits = fts_search(conn, &q.space, &q.text, limit)?;
         mode_lists.push(hits);
     }
-    if run_semantic {
-        let hits = semantic_search(conn, &q.space, &q.text, limit)?;
+    if run_lexical_vector {
+        let hits = lexical_vector_search(conn, &q.space, &q.text, limit)?;
         mode_lists.push(hits);
     }
     if run_graph {

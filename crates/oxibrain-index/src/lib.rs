@@ -8,7 +8,7 @@ pub mod vector;
 pub mod ngram;
 pub mod spec;
 pub use rrf::{FusedItem, fuse};
-pub use vector::{TfIdfModel, TfIdfVector, cosine_sim, tokenize};
+pub use vector::{TfIdfModel, TfIdfVector, cosine_sim, features};
 pub use ngram::{jaccard, lsh_bands, minhash, shingles, shingle_entropy};
 pub use spec::{Direction, PredicateFilter};
 pub mod adjacency;

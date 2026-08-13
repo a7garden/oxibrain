@@ -20,10 +20,10 @@ fn fts_search_empty_space_returns_empty() {
 }
 
 #[test]
-fn semantic_search_empty_space_returns_empty() {
+fn lexical_vector_search_empty_space_returns_empty() {
     let (_dir, store) = setup_store();
     let conn = store.connection();
-    let hits = oxibrain_store::query::semantic_search(conn, "nonexistent", "test", 10)
-        .expect("semantic_search");
+    let hits = oxibrain_store::query::lexical_vector_search(conn, "nonexistent", "test", 10)
+        .expect("lexical_vector_search");
     assert!(hits.is_empty());
 }

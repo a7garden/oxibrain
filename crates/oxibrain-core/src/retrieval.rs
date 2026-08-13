@@ -27,7 +27,7 @@ fn default_limit() -> usize {
 pub enum QueryMode {
     Hybrid,
     Lexical,
-    Semantic,
+    LexicalVector,
     Graph,
     Community,
 }

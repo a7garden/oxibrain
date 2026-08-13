@@ -5,7 +5,7 @@ use crate::sql_err;
 use oxibrain_core::knowledge::{Object, Statement};
 use oxibrain_core::object_repr;
 #[allow(unused_imports)]
-use oxibrain_index::{TfIdfModel, TfIdfVector, tokenize};
+use oxibrain_index::{TfIdfModel, TfIdfVector, features};
 use oxibrain_ports::BrainError;
 use rusqlite::{Connection, params};
 
