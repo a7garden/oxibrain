@@ -14,7 +14,7 @@ use oxibrain_index::adjacency::{AdjacencyGraph, BfsSpec};
 use oxibrain_index::rrf;
 use oxibrain_index::{KnnIndex, TfIdfModel, TfIdfVector};
 
-use oxibrain_ports::{BrainError, Timestamp};
+use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
 use rusqlite::{Connection, params};
 
 /// Batch-fetch salience values for a set of entity IDs.
@@ -336,13 +336,10 @@ pub fn lexical_vector_search(
     query_text: &str,
     limit: usize,
 ) -> Result<Vec<SearchHit>, BrainError> {
-    // Try dense vectors first.
-    if crate::vectors::count_vectors(conn).unwrap_or(0) > 0 {
-        // Dense path requires a query vector; without an embedding model we
-        // can't transform the text. Fall through to TF-IDF.
-        // (The EmbeddingPort adapter wiring is a future R1 task.)
-    }
-
+    // Lexical-vector channel: n-gram shingles hashed into a fixed-dim vector,
+    // searched via the TF-IDF kNN index. This is the language-independent
+    // fallback (§7.3); the DENSE embedding channel is a separate path
+    // (QueryMode::Dense) that requires an EmbeddingPort.
     let model = load_tfidf_model(conn, space, 1024)?;
     let query_vec = model.transform(query_text);
     let index = load_knn_index(conn, space)?;
@@ -364,6 +361,40 @@ pub fn lexical_vector_search(
         })
         .collect();
     Ok(hits)
+}
+
+/// Dense embedding search: embed the query, KNN via sqlite-vec (§7.6, F16).
+///
+/// Requires a configured [`EmbeddingPort`]. Returns an explicit error when
+/// the embedder is absent — never a silent lexical substitute.
+pub fn dense_search(
+    conn: &Connection,
+    embedder: &dyn EmbeddingPort,
+    query_text: &str,
+    limit: usize,
+) -> Result<Vec<SearchHit>, BrainError> {
+    let vecs = embedder
+        .embed(&[query_text])
+        .map_err(|e| BrainError::Config(format!("query embedding: {e}")))?;
+    let query_vec = vecs
+        .first()
+        .ok_or_else(|| BrainError::Config("embedder returned no vectors".into()))?;
+    if query_vec.len() != crate::vectors::EMBEDDING_DIM {
+        return Err(BrainError::Config(format!(
+            "embedder dim {} != table dim {}",
+            query_vec.len(),
+            crate::vectors::EMBEDDING_DIM
+        )));
+    }
+    let hits = crate::vectors::knn_search(conn, query_vec, limit)?;
+    Ok(hits
+        .into_iter()
+        .map(|h| SearchHit {
+            target: SearchTarget::Entity { id: h.entity_id },
+            score: 1.0 - h.distance,
+            mode: QueryMode::Dense,
+        })
+        .collect())
 }
 
 /// Convert a SearchHit to a stable "kind:id" RRF key.
@@ -390,12 +421,25 @@ fn parse_key(key: &str) -> SearchTarget {
 
 /// Hybrid (or mode-specific) query: run the matching modes, fuse their result
 /// lists with RRF (`k=60`), and emit a [`RankingResult`] with provenance.
-pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, BrainError> {
+///
+/// `embedder` is required for `QueryMode::Dense` (and the dense channel of
+/// `Hybrid`). When a dense channel is requested without an embedder, this
+/// returns an explicit error — never a silent lexical substitute (§7.6, F16).
+pub fn hybrid_query(
+    conn: &Connection,
+    q: &Query,
+    embedder: Option<&dyn EmbeddingPort>,
+) -> Result<RankingResult, BrainError> {
     let limit = q.limit;
     let mut mode_lists: Vec<Vec<SearchHit>> = Vec::new();
 
     let run_lexical = matches!(q.mode, QueryMode::Hybrid | QueryMode::Lexical);
     let run_lexical_vector = matches!(q.mode, QueryMode::Hybrid | QueryMode::LexicalVector);
+    // Explicit Dense mode always requires an embedder (errors without one).
+    // Hybrid includes the dense channel only when an embedder is available;
+    // otherwise it degrades to the other channels (no silent substitute).
+    let run_dense = matches!(q.mode, QueryMode::Dense)
+        || (matches!(q.mode, QueryMode::Hybrid) && embedder.is_some());
     let run_graph = matches!(q.mode, QueryMode::Hybrid | QueryMode::Graph);
     let run_community = matches!(q.mode, QueryMode::Hybrid | QueryMode::Community);
 
@@ -409,6 +453,18 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
     }
     if run_lexical_vector {
         let hits = lexical_vector_search(conn, &q.space, &q.text, limit)?;
+        mode_lists.push(hits);
+    }
+    if run_dense {
+        // Safe: explicit Dense requires Some; Hybrid reaches here only when Some.
+        let embedder = embedder.ok_or_else(|| {
+            BrainError::Config(
+                "QueryMode::Dense requires a configured embedder; none is available \
+                 (run `oxibrain model pull` and configure the embed port)"
+                    .into(),
+            )
+        })?;
+        let hits = dense_search(conn, embedder, &q.text, limit)?;
         mode_lists.push(hits);
     }
     if run_graph {

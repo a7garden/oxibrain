@@ -28,6 +28,9 @@ pub enum QueryMode {
     Hybrid,
     Lexical,
     LexicalVector,
+    /// Dense embedding KNN via sqlite-vec. Requires a configured embedder;
+    /// without one, querying in this mode returns an explicit error (§7.6).
+    Dense,
     Graph,
     Community,
 }

@@ -43,7 +43,7 @@ pub fn assemble_context(
         limit: 10,
         min_confidence: 0.0,
     };
-    let ranking = query::hybrid_query(conn, &q)?;
+    let ranking = query::hybrid_query(conn, &q, None)?;
     let mut beliefs_text = String::new();
     let mut beliefs_provenance: Vec<String> = Vec::new();
     for item in &ranking.items {

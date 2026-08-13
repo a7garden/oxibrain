@@ -1,8 +1,8 @@
 //! Dense embedding vector storage (sqlite-vec).
 //!
-//! Wraps the `entity_vectors` vec0 virtual table. Vectors are 384-dim f32
-//! (all-MiniLM-L6-v2 default). Vectors are projection (derived) — reproject()
-//! rebuilds them. See DESIGN §9.1.
+//! Wraps the `entity_vectors` vec0 virtual table. Vectors are 1024-dim f32
+//! (BGE-M3, the default multilingual embedder). Vectors are projection
+//! (derived) — reproject() rebuilds them. See ARCHITECTURE.md §9.1.
 //!
 //! The sqlite-vec extension must be loaded via `migration::ensure_vec_extension()`
 //! before opening any connection.
@@ -11,9 +11,9 @@ use crate::sql_err;
 use oxibrain_ports::BrainError;
 use rusqlite::{Connection, params};
 
-/// Default embedding dimension. Matches all-MiniLM-L6-v2 (smallest GGUF
-/// that works well for semantic search).
-pub const EMBEDDING_DIM: usize = 384;
+/// Default embedding dimension. Matches BGE-M3 (the shipped default embedder).
+/// Migrated from 384 (all-MiniLM-L6-v2) at schema v7.
+pub const EMBEDDING_DIM: usize = 1024;
 
 /// Unsafe view: reinterpret an `f32` slice as bytes for sqlite-vec.
 /// Caller MUST ensure the slice length matches `EMBEDDING_DIM`.

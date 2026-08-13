@@ -779,6 +779,7 @@ fn parse_mode(s: &str) -> QueryMode {
     match s {
         "lexical" => QueryMode::Lexical,
         "lexical-vector" => QueryMode::LexicalVector,
+        "dense" => QueryMode::Dense,
         "graph" => QueryMode::Graph,
         "community" => QueryMode::Community,
         _ => QueryMode::Hybrid,

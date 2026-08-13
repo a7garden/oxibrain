@@ -13,8 +13,8 @@ pub use oxibrain_core::security::{
 };
 pub use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier};
 pub use oxibrain_ports::{
-    BrainError, CharTokenizer, ClockPort, LlmPort, LlmRequest, LlmResponse, SystemClock, Timestamp,
-    TokenizerPort,
+    BrainError, CharTokenizer, ClockPort, EmbeddingPort, LlmPort, LlmRequest, LlmResponse,
+    SystemClock, Timestamp, TokenizerPort,
 };
 
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
@@ -28,6 +28,8 @@ pub struct Brain {
     clock: Arc<dyn ClockPort>,
     llm: Option<Arc<dyn LlmPort>>,
     tokenizer: Arc<dyn TokenizerPort>,
+    /// Optional dense embedder for QueryMode::Dense / hybrid dense channel.
+    embedder: Option<Arc<dyn EmbeddingPort>>,
 }
 
 impl Brain {
@@ -40,6 +42,7 @@ impl Brain {
             clock: Arc::new(SystemClock),
             llm: None,
             tokenizer: Arc::new(CharTokenizer),
+            embedder: None,
         })
     }
 
@@ -55,6 +58,7 @@ impl Brain {
             clock,
             llm: None,
             tokenizer: Arc::new(CharTokenizer),
+            embedder: None,
         })
     }
 
@@ -70,6 +74,7 @@ impl Brain {
             clock: Arc::new(SystemClock),
             llm: None,
             tokenizer: Arc::new(CharTokenizer),
+            embedder: None,
         })
     }
 
@@ -149,9 +154,13 @@ impl Brain {
             .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
-    /// Drop and rebuild the entire projection from the ledger.
+    /// Drop and rebuild the entire projection from the ledger. When an
+    /// embedder is configured, dense entity vectors are recomputed after the
+    /// reproject pass (§7.6, F17): entity texts read via readers, embeddings
+    /// computed outside any writer lock, upserts submitted to the writer.
     pub async fn reproject(&self) -> Result<(), BrainError> {
         let h = self.handle.clone();
+        let embedder = self.embedder.clone();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer()?.submit(Box::new(move |conn| {
@@ -161,7 +170,53 @@ impl Brain {
             }))?;
             h.writer()?.flush()?;
             rx.recv()
-                .map_err(|_| BrainError::Storage("reproject channel dropped".into()))
+                .map_err(|_| BrainError::Storage("reproject channel dropped".into()))?;
+
+            // Embed after reproject, outside the writer transaction.
+            if let Some(emb) = embedder {
+                // Phase 1: read entity texts (readers — read-only is fine).
+                let items: Vec<(String, String)> = h.readers.read(|conn| {
+                    let mut stmt = conn
+                        .prepare("SELECT id FROM spaces ORDER BY id")
+                        .map_err(|e| BrainError::Storage(format!("space list: {e}")))?;
+                    let spaces: Vec<String> = stmt
+                        .query_map([], |r| r.get(0))
+                        .map_err(|e| BrainError::Storage(format!("space list: {e}")))?
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| BrainError::Storage(format!("space list: {e}")))?;
+                    drop(stmt);
+                    let mut all: Vec<(String, String)> = Vec::new();
+                    for space in spaces {
+                        let per_space =
+                            oxibrain_store::index_ops::entity_embedding_texts(conn, &space)?;
+                        all.extend(per_space);
+                    }
+                    Ok(all)
+                })?;
+                if !items.is_empty() {
+                    // Phase 2: compute embeddings outside any writer lock.
+                    let text_refs: Vec<&str> = items.iter().map(|(_, t)| t.as_str()).collect();
+                    let vectors = emb
+                        .embed(&text_refs)
+                        .map_err(|e| BrainError::Config(format!("entity embedding: {e}")))?;
+                    let with_vectors: Vec<(String, Vec<f32>)> = items
+                        .into_iter()
+                        .zip(vectors.into_iter())
+                        .map(|((id, _), v)| (id, v))
+                        .collect();
+                    // Phase 3: upsert via the writer (each a short independent write).
+                    let (tx2, rx2) = std::sync::mpsc::channel();
+                    h.writer()?.submit(Box::new(move |conn| {
+                        oxibrain_store::index_ops::upsert_entity_embeddings(conn, &with_vectors)?;
+                        let _ = tx2.send(());
+                        Ok(())
+                    }))?;
+                    h.writer()?.flush()?;
+                    rx2.recv()
+                        .map_err(|_| BrainError::Storage("embed upsert channel dropped".into()))?;
+                }
+            }
+            Ok(())
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
@@ -252,9 +307,13 @@ impl Brain {
         q: oxibrain_core::retrieval::Query,
     ) -> Result<oxibrain_core::retrieval::RankingResult, BrainError> {
         let h = self.handle.clone();
-        tokio::task::spawn_blocking(move || h.readers.read(|conn| query::hybrid_query(conn, &q)))
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        let embedder = self.embedder.clone();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| query::hybrid_query(conn, &q, embedder.as_deref()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Rebuild all indexes for a space (FTS5, TF-IDF, salience). Runs on the
@@ -564,7 +623,19 @@ impl Brain {
             clock,
             llm: Some(llm),
             tokenizer: Arc::new(CharTokenizer),
+            embedder: None,
         })
+    }
+
+    /// Attach a dense embedder for QueryMode::Dense / hybrid dense channel (§7.6).
+    pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingPort>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    /// Returns the configured embedder, or None.
+    pub fn embedder(&self) -> Option<&Arc<dyn EmbeddingPort>> {
+        self.embedder.as_ref()
     }
 
     /// Returns the configured LLM port, or an error if none.

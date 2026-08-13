@@ -6,7 +6,7 @@ use oxibrain_core::knowledge::{Object, Statement};
 use oxibrain_core::object_repr;
 #[allow(unused_imports)]
 use oxibrain_index::{TfIdfModel, TfIdfVector, features};
-use oxibrain_ports::BrainError;
+use oxibrain_ports::{BrainError, EmbeddingPort};
 use rusqlite::{Connection, params};
 
 /// Render a statement as a searchable string: "subject predicate object".
@@ -348,6 +348,119 @@ pub fn rebuild_indexes(conn: &Connection, space: &str) -> Result<(), BrainError>
     rebuild_tfidf(conn, space, 1024)?;
     rebuild_salience(conn, space)?;
     Ok(())
+}
+
+/// Collect entity embedding texts for a space (§7.6, F17).
+/// Returns (entity_id, embedding_text) pairs. Read-only — safe on a
+/// reader connection.
+pub fn entity_embedding_texts(
+    conn: &Connection,
+    space: &str,
+) -> Result<Vec<(String, String)>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.id, e.type_name,
+                    COALESCE(ek.surface, '') AS canonical_surface
+             FROM entities e
+             LEFT JOIN entity_keys ek ON ek.id = e.canonical_key
+            WHERE e.space_id = ?1 AND e.merged_into IS NULL
+            ORDER BY e.id",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(sql_err)?;
+    let entities: Vec<(String, String, String)> =
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)?;
+    drop(stmt);
+
+    // Build alias lists per entity.
+    let ids: Vec<&str> = entities.iter().map(|(id, _, _)| id.as_str()).collect();
+    let mut alias_map: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    if !ids.is_empty() {
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let mut alias_stmt = conn
+            .prepare(&format!(
+                "SELECT entity_id, surface FROM entity_keys
+                 WHERE space_id = ?1 AND entity_id IN ({placeholders})"
+            ))
+            .map_err(sql_err)?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&space as &dyn rusqlite::ToSql];
+        for id in &ids {
+            params_vec.push(id);
+        }
+        let alias_rows = alias_stmt
+            .query_map(&params_vec[..], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(sql_err)?;
+        for row in alias_rows {
+            let (eid, surface) = row.map_err(sql_err)?;
+            alias_map.entry(eid).or_default().push(surface);
+        }
+    }
+
+    // Build embedding text: "type: canonical alias other alias ..."
+    let mut out = Vec::with_capacity(entities.len());
+    for (id, type_name, canonical) in &entities {
+        let mut t = format!("{type_name}: {canonical}");
+        if let Some(extra) = alias_map.get(id) {
+            for a in extra {
+                if a != canonical {
+                    t.push_str(" alias ");
+                    t.push_str(a);
+                }
+            }
+        }
+        out.push((id.clone(), t));
+    }
+    Ok(out)
+}
+
+/// Upsert pre-computed entity embeddings (§7.6, F17). Requires a writable
+/// connection; each upsert is an independent write (no single transaction).
+pub fn upsert_entity_embeddings(
+    conn: &Connection,
+    items: &[(String, Vec<f32>)],
+) -> Result<usize, BrainError> {
+    for (entity_id, vec) in items {
+        crate::vectors::upsert_vector(conn, entity_id, vec)?;
+    }
+    Ok(items.len())
+}
+
+/// Compute and upsert dense entity embeddings (§7.6, F17).
+///
+/// Convenience wrapper over [`entity_embedding_texts`] + [`upsert_entity_embeddings`]
+/// for callers holding a writable connection. Embeddings run OUTSIDE any
+/// transaction (P9: never embed inside a transaction). Returns the number of
+/// entities embedded.
+pub fn embed_entities(
+    conn: &Connection,
+    space: &str,
+    embedder: &dyn EmbeddingPort,
+) -> Result<usize, BrainError> {
+    let items = entity_embedding_texts(conn, space)?;
+    if items.is_empty() {
+        return Ok(0);
+    }
+    let text_refs: Vec<&str> = items.iter().map(|(_, t)| t.as_str()).collect();
+    let vectors = embedder
+        .embed(&text_refs)
+        .map_err(|e| BrainError::Config(format!("entity embedding: {e}")))?;
+    let with_vectors: Vec<(String, Vec<f32>)> = items
+        .into_iter()
+        .zip(vectors)
+        .map(|((id, _), v)| (id, v))
+        .collect();
+    upsert_entity_embeddings(conn, &with_vectors)
 }
 
 /// Load all statements for a space (for rendering/indexing).
