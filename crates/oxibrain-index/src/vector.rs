@@ -24,9 +24,7 @@ fn fnv1a(s: &str) -> u64 {
 /// no byte-length filter, no script check.
 pub fn features(text: &str) -> Vec<String> {
     let normalized = text.to_lowercase();
-    ngram::shingles(&normalized, 3)
-        .into_iter()
-        .collect()
+    ngram::shingles(&normalized, 3).into_iter().collect()
 }
 
 pub struct TfIdfModel {

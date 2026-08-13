@@ -242,7 +242,8 @@ impl BrainClient {
 
     /// `stats` — aggregate counts for a space (Read cap).
     pub async fn stats(&mut self, space: &str) -> Result<Value> {
-        self.call_tool_json("stats", json!({ "space": space })).await
+        self.call_tool_json("stats", json!({ "space": space }))
+            .await
     }
 
     /// `why` — provenance and confidence breakdown (Read cap).

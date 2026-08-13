@@ -14,8 +14,14 @@ fn setup_store() -> (tempfile::TempDir, Store) {
 fn fts_search_empty_space_returns_empty() {
     let (_dir, store) = setup_store();
     let conn = store.connection();
-    let hits =
-        oxibrain_store::query::fts_search(conn, "nonexistent", "test", 10, oxibrain_store::query::FtsIndex::Word).expect("fts_search");
+    let hits = oxibrain_store::query::fts_search(
+        conn,
+        "nonexistent",
+        "test",
+        10,
+        oxibrain_store::query::FtsIndex::Word,
+    )
+    .expect("fts_search");
     assert!(hits.is_empty());
 }
 

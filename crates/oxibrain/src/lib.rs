@@ -231,18 +231,12 @@ impl Brain {
 
     /// Aggregate counts for a space (episodes, entities, statements,
     /// contradicted statements). Used by the `stats` MCP tool and dashboards.
-    pub async fn stats(
-        &self,
-        space: &str,
-    ) -> Result<oxibrain_core::SpaceStats, BrainError> {
+    pub async fn stats(&self, space: &str) -> Result<oxibrain_core::SpaceStats, BrainError> {
         let h = self.handle.clone();
         let space = space.to_string();
-        tokio::task::spawn_blocking(move || {
-            h.readers
-                .read(|conn| query::space_stats(conn, &space))
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        tokio::task::spawn_blocking(move || h.readers.read(|conn| query::space_stats(conn, &space)))
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Hybrid (or mode-specific) query. Returns ranked results with provenance.

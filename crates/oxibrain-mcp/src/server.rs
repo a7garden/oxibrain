@@ -1779,7 +1779,10 @@ mod tests {
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         let stats: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(stats["episodes"], 1, "one ingested episode: {text}");
-        assert_eq!(stats["statements"], 0, "no extraction ran (ingest only): {text}");
+        assert_eq!(
+            stats["statements"], 0,
+            "no extraction ran (ingest only): {text}"
+        );
         assert_eq!(stats["contradictions"], 0, "no contradictions: {text}");
         assert!(
             stats["entities"].as_i64().unwrap() >= 0,

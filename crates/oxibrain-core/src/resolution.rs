@@ -166,9 +166,10 @@ pub fn score(
 
     let emb_weight = config.w_embedding.weight(mention_type);
 
-    let raw =
-        config.w_exact * exact + config.w_ngram * j + config.w_graph * graph_context
-            + emb_weight * embedding_sim;
+    let raw = config.w_exact * exact
+        + config.w_ngram * j
+        + config.w_graph * graph_context
+        + emb_weight * embedding_sim;
 
     raw.clamp(0.0, 1.0)
 }

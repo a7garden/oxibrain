@@ -145,8 +145,8 @@ fn seeded_fnv1a(s: &str, seed: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-use super::*;
-use proptest::prelude::*;
+    use super::*;
+    use proptest::prelude::*;
     use std::collections::BTreeSet;
 
     // ─── Basic correctness ────────────────────────────────────────────────
@@ -244,10 +244,10 @@ use proptest::prelude::*;
         // exactly 4 of 7 shingles in every script, giving Jaccard = 3/11.
         let n = 3;
         let cases: &[(&str, &str)] = &[
-            ("abcde", "acbde"),       // Latin
+            ("abcde", "acbde"),           // Latin
             ("가나다라마", "가다나라마"), // Hangul
             ("金木水火土", "金水木火土"), // Han
-            ("ضصثقف", "ضثصقف"),       // Arabic
+            ("ضصثقف", "ضثصقف"),           // Arabic
         ];
 
         let jaccards: Vec<f64> = cases
@@ -318,7 +318,10 @@ use proptest::prelude::*;
         let c = shingles("xyz12345", 3);
         let sig_c = minhash(&c, 128);
         let matches_c = sig_a.iter().zip(&sig_c).filter(|(x, y)| x == y).count();
-        assert!(matches_c < 128, "different sets should not match everywhere");
+        assert!(
+            matches_c < 128,
+            "different sets should not match everywhere"
+        );
     }
 
     // ─── LSH bands ────────────────────────────────────────────────────────

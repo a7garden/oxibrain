@@ -36,21 +36,21 @@ pub use fold::{StatementEntry, fold};
 pub mod confidence;
 pub mod context;
 pub mod eval;
-pub mod stats;
 pub mod extraction;
 pub mod lifecycle;
 pub mod retrieval;
 pub mod security;
+pub mod stats;
 pub use security::{
     AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
     TokenInfo,
 };
 
 pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens};
-pub use stats::SpaceStats;
 pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};
 pub use retrieval::{
     Direction, DropReason, DroppedItem, PredicateFilter, Query, QueryMode, RankedItem,
     RankingResult, SearchHit, SearchTarget, Strategy, TraversalEdge, TraversalNode,
     TraversalResult, TraversalSpec,
 };
+pub use stats::SpaceStats;

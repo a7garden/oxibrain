@@ -187,11 +187,7 @@ fn snapshot_query(
 }
 
 /// Same as `snapshot_query` but for global queries with no space parameter.
-fn snapshot_query_global(
-    conn: &Connection,
-    label: &str,
-    sql: &str,
-) -> Result<String, BrainError> {
+fn snapshot_query_global(conn: &Connection, label: &str, sql: &str) -> Result<String, BrainError> {
     snapshot_query_params(conn, label, sql, [])
 }
 
@@ -245,13 +241,34 @@ pub fn snapshot_truth(conn: &Connection, space: &str) -> Result<String, BrainErr
     // NOTE: salience / last_activity columns on entities are ranking-half —
     // excluded from this snapshot (P1, §5.1).
     for (label, sql) in [
-        ("entities", "SELECT id, type_name, canonical_key, merged_into FROM entities WHERE space_id = ?1 ORDER BY id"),
-        ("keys", "SELECT id, entity_id, type_name, normalized, surface, origin FROM entity_keys WHERE space_id = ?1 ORDER BY id"),
-        ("merges", "SELECT id, loser_id, winner_id, decided_by, score, provenance, decided_at, undone_at FROM entity_merges WHERE loser_id IN (SELECT id FROM entities WHERE space_id = ?1) ORDER BY id"),
-        ("statements", "SELECT id, subject_id, predicate, object_entity, object_literal FROM statements WHERE space_id = ?1 ORDER BY id"),
-        ("assertions", "SELECT id, statement_id, episode_id, extractor_id, polarity, claimed_from, claimed_to, confidence, recorded_at, retracted_at FROM assertions WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1) ORDER BY id"),
-        ("mentions", "SELECT id, assertion_id, role, surface, span_start, span_end, resolved_to, method FROM mentions WHERE assertion_id IN (SELECT id FROM assertions WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1)) ORDER BY id"),
-        ("beliefs", "SELECT statement_id, valid_from, valid_to, status, confidence, support_json FROM beliefs WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1) ORDER BY statement_id, valid_from"),
+        (
+            "entities",
+            "SELECT id, type_name, canonical_key, merged_into FROM entities WHERE space_id = ?1 ORDER BY id",
+        ),
+        (
+            "keys",
+            "SELECT id, entity_id, type_name, normalized, surface, origin FROM entity_keys WHERE space_id = ?1 ORDER BY id",
+        ),
+        (
+            "merges",
+            "SELECT id, loser_id, winner_id, decided_by, score, provenance, decided_at, undone_at FROM entity_merges WHERE loser_id IN (SELECT id FROM entities WHERE space_id = ?1) ORDER BY id",
+        ),
+        (
+            "statements",
+            "SELECT id, subject_id, predicate, object_entity, object_literal FROM statements WHERE space_id = ?1 ORDER BY id",
+        ),
+        (
+            "assertions",
+            "SELECT id, statement_id, episode_id, extractor_id, polarity, claimed_from, claimed_to, confidence, recorded_at, retracted_at FROM assertions WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1) ORDER BY id",
+        ),
+        (
+            "mentions",
+            "SELECT id, assertion_id, role, surface, span_start, span_end, resolved_to, method FROM mentions WHERE assertion_id IN (SELECT id FROM assertions WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1)) ORDER BY id",
+        ),
+        (
+            "beliefs",
+            "SELECT statement_id, valid_from, valid_to, status, confidence, support_json FROM beliefs WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1) ORDER BY statement_id, valid_from",
+        ),
     ] {
         out.push_str(&snapshot_query(conn, label, sql, space)?);
     }
@@ -273,11 +290,26 @@ pub fn snapshot_truth(conn: &Connection, space: &str) -> Result<String, BrainErr
 pub fn snapshot_ranking(conn: &Connection, space: &str) -> Result<String, BrainError> {
     let mut out = String::new();
     for (label, sql) in [
-        ("fts_word", "SELECT target_kind, target_id, body FROM fts_word WHERE space_id = ?1 ORDER BY target_kind, target_id"),
-        ("fts_ngram", "SELECT target_kind, target_id, body FROM fts_ngram WHERE space_id = ?1 ORDER BY target_kind, target_id"),
-        ("vectors", "SELECT target_kind, target_id, hex(vector) FROM tfidf_vectors WHERE space_id = ?1 ORDER BY target_kind, target_id"),
-        ("communities", "SELECT id, label FROM communities WHERE space_id = ?1 ORDER BY id"),
-        ("salience", "SELECT id, salience, last_activity FROM entities WHERE space_id = ?1 ORDER BY id"),
+        (
+            "fts_word",
+            "SELECT target_kind, target_id, body FROM fts_word WHERE space_id = ?1 ORDER BY target_kind, target_id",
+        ),
+        (
+            "fts_ngram",
+            "SELECT target_kind, target_id, body FROM fts_ngram WHERE space_id = ?1 ORDER BY target_kind, target_id",
+        ),
+        (
+            "vectors",
+            "SELECT target_kind, target_id, hex(vector) FROM tfidf_vectors WHERE space_id = ?1 ORDER BY target_kind, target_id",
+        ),
+        (
+            "communities",
+            "SELECT id, label FROM communities WHERE space_id = ?1 ORDER BY id",
+        ),
+        (
+            "salience",
+            "SELECT id, salience, last_activity FROM entities WHERE space_id = ?1 ORDER BY id",
+        ),
     ] {
         out.push_str(&snapshot_query(conn, label, sql, space)?);
     }

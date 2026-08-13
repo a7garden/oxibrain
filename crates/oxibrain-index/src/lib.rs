@@ -3,14 +3,14 @@
 //! functions over in-memory data structures.
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
-pub mod rrf;
-pub mod vector;
 pub mod ngram;
+pub mod rrf;
 pub mod spec;
+pub mod vector;
+pub use ngram::{jaccard, lsh_bands, minhash, shingle_entropy, shingles};
 pub use rrf::{FusedItem, fuse};
-pub use vector::{TfIdfModel, TfIdfVector, cosine_sim, features};
-pub use ngram::{jaccard, lsh_bands, minhash, shingles, shingle_entropy};
 pub use spec::{Direction, PredicateFilter};
+pub use vector::{TfIdfModel, TfIdfVector, cosine_sim, features};
 pub mod adjacency;
 pub mod knn;
 pub use adjacency::{AdjacencyGraph, BfsResult, BfsSpec};

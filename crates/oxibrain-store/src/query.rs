@@ -111,14 +111,20 @@ pub fn space_stats(
 }
 
 /// Count rows in `table` matching `where_clause` (bound with a single space param).
-fn count(conn: &Connection, table: &str, where_clause: &str, space: &str) -> Result<i64, BrainError> {
+fn count(
+    conn: &Connection,
+    table: &str,
+    where_clause: &str,
+    space: &str,
+) -> Result<i64, BrainError> {
     let sql = format!("SELECT COUNT(*) FROM {table} WHERE {where_clause}");
     conn.query_row(&sql, params![space], |r| r.get(0))
         .map_err(sql_err)
 }
 
 /// All contradicted statements in a space.
-pub fn contradictions(conn: &Connection, space: &str) -> Result<Vec<Statement>, BrainError> {    let mut stmt_q = conn
+pub fn contradictions(conn: &Connection, space: &str) -> Result<Vec<Statement>, BrainError> {
+    let mut stmt_q = conn
         .prepare(
             "SELECT DISTINCT s.id, s.space_id, s.subject_id, s.predicate,
                     s.object_entity, s.object_literal
