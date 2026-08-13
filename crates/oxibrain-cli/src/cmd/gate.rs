@@ -220,12 +220,23 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
         let as_of = q.as_of.as_deref().map(parse_iso_to_timestamp).transpose()?;
         let arm_b = run_arm(&brain, &space_id, &keyword, Arm::B, as_of, &q.answer).await?;
         let arm_c = run_arm(&brain, &space_id, &keyword, Arm::C, as_of, &q.answer).await?;
+        // M9 exit criterion: tokens per answered question must DECREASE
+        // vs M8's recall-only path (assemble_context). Measure both.
+        let recall = brain
+            .assemble_context(&space_id, &keyword, 3000)
+            .await
+            .context("assemble_context")?;
+        let recall_tokens = recall.total_tokens;
+        let brief_tokens =
+            brief_token_cost(&brain, &space_id, &keyword, &entity_surfaces).await?;
         results.push(QuestionResult {
             id: q.id,
             category: q.category,
             answer: q.answer,
             arm_b,
             arm_c,
+            recall_tokens,
+            brief_tokens,
         });
     }
 
@@ -242,6 +253,10 @@ struct QuestionResult {
     answer: String,
     arm_b: ArmResult,
     arm_c: ArmResult,
+    /// M8 recall-only context tokens (assemble_context budget=3000).
+    recall_tokens: usize,
+    /// M9 brief/navigate path tokens (brief pages for the top entities).
+    brief_tokens: usize,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -307,6 +322,52 @@ fn extract_keywords(question: &str, entity_surfaces: &[String]) -> String {
     } else {
         found.join(" ")
     }
+}
+
+/// M9 path token cost: render the brief pages for the keyword's entity
+/// surfaces and sum their chars/4 (coarse token proxy, same as the arms).
+/// An agent reading a brief page consumes its rendered text.
+async fn brief_token_cost(
+    brain: &Brain,
+    space_id: &str,
+    keyword: &str,
+    entity_surfaces: &[String],
+) -> Result<usize> {
+    // Resolve the entity surfaces named in the keyword, then brief each.
+    let mut total = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    for surface in entity_surfaces {
+        if !keyword.to_lowercase().contains(&surface.to_lowercase()) {
+            continue;
+        }
+        if !seen.insert(surface.clone()) {
+            continue;
+        }
+        if let Ok(Some(id)) = brain
+            .resolve_entity_id(space_id, &entity_type_for(brain, space_id, surface).await, surface)
+            .await
+        {
+            let page = brain.brief(space_id, &id).await.context("brief cost page")?;
+            total += page.len() / 4;
+        }
+    }
+    Ok(total)
+}
+
+/// Resolve the type of an entity surface by trying common types.
+async fn entity_type_for(brain: &Brain, space_id: &str, surface: &str) -> String {
+    for ty in ["Person", "Organization", "Project", "Place", "Concept"] {
+        if brain
+            .resolve_entity_id(space_id, ty, surface)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return ty.to_string();
+        }
+    }
+    "Concept".to_string()
 }
 
 fn entity_type<'a>(entities: &'a [EpisodeEntity], surface: &str) -> Option<&'a str> {
@@ -448,6 +509,15 @@ fn print_report(results: &[QuestionResult], ingested: usize) {
         b_tokens as f64 / n as f64,
         c_tokens as f64 / n as f64,
         (c_tokens as isize - b_tokens as isize) / n as isize,
+    );
+    // M9 exit criterion: tokens per answered question vs M8 recall-only.
+    let recall_tokens: usize = results.iter().map(|r| r.recall_tokens).sum();
+    let brief_tokens: usize = results.iter().map(|r| r.brief_tokens).sum();
+    println!(
+        "Tokens/answer:  M8 recall-only={:.0}  M9 brief/navigate={:.0}  delta = {:+} tok/q",
+        recall_tokens as f64 / n as f64,
+        brief_tokens as f64 / n as f64,
+        (brief_tokens as isize - recall_tokens as isize) / n as isize,
     );
 }
 
