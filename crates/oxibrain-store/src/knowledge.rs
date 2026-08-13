@@ -118,14 +118,15 @@ pub fn list_entities(
 
 // ── Entity keys ──────────────────────────────────────────────────────────
 
-pub fn insert_entity_key(conn: &Connection, k: &EntityKey) -> Result<(), BrainError> {
-    conn.execute(
-        "INSERT OR IGNORE INTO entity_keys (id, space_id, entity_id, type_name, normalized, surface, origin)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![k.id, k.space, k.entity, k.ty, k.normalized, k.surface, k.origin.as_db()],
-    )
-    .map_err(sql_err)?;
-    Ok(())
+pub fn insert_entity_key(conn: &Connection, k: &EntityKey) -> Result<bool, BrainError> {
+    let n = conn
+        .execute(
+            "INSERT OR IGNORE INTO entity_keys (id, space_id, entity_id, type_name, normalized, surface, origin)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![k.id, k.space, k.entity, k.ty, k.normalized, k.surface, k.origin.as_db()],
+        )
+        .map_err(sql_err)?;
+    Ok(n > 0)
 }
 
 /// Find entity keys by normalized name + type (exact match).

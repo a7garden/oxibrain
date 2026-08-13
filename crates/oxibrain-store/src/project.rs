@@ -25,21 +25,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 
 /// Per-(space, type) cache of the LSH blocking index and the entity-key set it
-/// was built over. Constructed at the start of a reproject or single-declare
-/// batch and threaded through `resolve_or_create` so the O(N) MinHash/LSH
-/// build happens once per (space, type) instead of once per mention.
-///
-/// Not `Send`: projection is serial on a single connection. The cache lives
-/// on the call stack of the projection loop.
+/// was built over. Lives as a `Mutex<ResolutionCache>` field on `Brain` so the
+/// O(N) MinHash/LSH build happens once per (space, type) for the process
+/// lifetime, not once per `declare` call. New keys are added incrementally via
+/// [`insert_key`](Self::insert_key) (O(1)), so the cache stays in sync without
+/// a full rebuild.
 pub struct ResolutionCache {
     /// `(space_id, type_name)` → (LSH index over `keys`, the keys themselves).
     entries: HashMap<(String, String), (LshIndex, Vec<EntityKey>)>,
 }
 
 impl ResolutionCache {
-    /// Empty cache. Used by single-call paths (Brain::declare) where there is
-    /// only one resolution; the cache is built lazily on first lookup and
-    /// reused for any second lookup in the same call.
+    /// Empty cache.
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
@@ -48,7 +45,8 @@ impl ResolutionCache {
 
     /// Get or build the LSH index for `(space, type)`. Building reads all keys
     /// for the type from the projection and constructs the MinHash/LSH index
-    /// over their normalized surfaces.
+    /// over their normalized surfaces. Once built, the entry persists for the
+    /// process lifetime and is updated incrementally by [`insert_key`].
     fn get_or_build(
         &mut self,
         conn: &Connection,
@@ -70,13 +68,33 @@ impl ResolutionCache {
         Ok((idx, keys.as_slice()))
     }
 
-    /// Invalidate the cache for `(space, type)`. Call after a new entity key
-    /// is inserted for that type, so the next lookup rebuilds the LSH index
-    /// over the expanded set. Reserved for callers that insert keys outside
-    /// the resolution path (none yet — placeholder for future batch imports).
-    #[allow(dead_code)]
+    /// Incrementally add a new entity key to the cached index for `(space, ty)`.
+    /// O(1): computes the key's MinHash signature and inserts band entries
+    /// pointing at the new position. If no cache entry exists for `(space, ty)`
+    /// yet, this is a no-op — the next [`get_or_build`] reads all keys from the
+    /// DB, including this new one.
+    ///
+    /// Call this after `insert_entity_key` returns `true` (row actually inserted).
+    pub fn insert_key(&mut self, space: &str, ty: &str, key: &EntityKey) {
+        let entry_key = (space.to_string(), ty.to_string());
+        if let Some((index, all_keys)) = self.entries.get_mut(&entry_key) {
+            let pos = all_keys.len();
+            let shingles = ngram::shingles(&key.normalized, 3);
+            index.insert(&shingles, pos);
+            all_keys.push(key.clone());
+        }
+    }
+
+    /// Drop the cached index for `(space, type)`, forcing a full rebuild on the
+    /// next lookup. Used by `reproject` (which starts from an empty projection)
+    /// and batch-import paths that change many keys at once.
     pub fn invalidate(&mut self, space: &str, ty: &str) {
         self.entries.remove(&(space.to_string(), ty.to_string()));
+    }
+
+    /// Clear all entries. Used by `reproject` before rebuilding the projection.
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
 }
 
@@ -187,20 +205,21 @@ pub(crate) fn resolve_or_create(
 
     match decision {
         oxibrain_core::resolution::Decision::Link { entity, method, .. } => {
-            // Add this surface as a key if it doesn't exist.
+            // Add this surface as a key if it doesn't already exist.
             let kid = entity_key_id(&entity, &normalized, &eref.ty);
-            kcrud::insert_entity_key(
-                conn,
-                &EntityKey {
-                    id: kid,
-                    space: space.into(),
-                    entity: entity.clone(),
-                    ty: eref.ty.clone(),
-                    normalized: normalized.clone(),
-                    surface: eref.surface.clone(),
-                    origin: KeyOrigin::UserDeclared,
-                },
-            )?;
+            let new_key = EntityKey {
+                id: kid,
+                space: space.into(),
+                entity: entity.clone(),
+                ty: eref.ty.clone(),
+                normalized: normalized.clone(),
+                surface: eref.surface.clone(),
+                origin: KeyOrigin::UserDeclared,
+            };
+            let inserted = kcrud::insert_entity_key(conn, &new_key)?;
+            if inserted {
+                cache.insert_key(space, &eref.ty, &new_key);
+            }
             Ok((entity, method))
         }
         oxibrain_core::resolution::Decision::New { method, .. } => {
@@ -218,22 +237,19 @@ pub(crate) fn resolve_or_create(
                 },
             )?;
             let kid = entity_key_id(&eid, &normalized, &eref.ty);
-            kcrud::insert_entity_key(
-                conn,
-                &EntityKey {
-                    id: kid,
-                    space: space.into(),
-                    entity: eid.clone(),
-                    ty: eref.ty.clone(),
-                    normalized,
-                    surface: eref.surface.clone(),
-                    origin: KeyOrigin::UserDeclared,
-                },
-            )?;
-            // Cache invalidation: a new key was added for `(space, ty)`, so
-            // the cached LSH index is stale — the next mention of the same
-            // type must rebuild it to see this key as a candidate.
-            cache.invalidate(space, &eref.ty);
+            let new_key = EntityKey {
+                id: kid,
+                space: space.into(),
+                entity: eid.clone(),
+                ty: eref.ty.clone(),
+                normalized,
+                surface: eref.surface.clone(),
+                origin: KeyOrigin::UserDeclared,
+            };
+            kcrud::insert_entity_key(conn, &new_key)?;
+            // Incremental cache update: the new key is visible to subsequent
+            // mentions of the same type without a full O(N) rebuild.
+            cache.insert_key(space, &eref.ty, &new_key);
             Ok((eid, method))
         }
         oxibrain_core::resolution::Decision::Candidate { existing, .. } => {
@@ -252,23 +268,21 @@ pub(crate) fn resolve_or_create(
             )?;
             let normalized = resolution::normalize(&eref.surface, &eref.ty);
             let kid = entity_key_id(&eid, &normalized, &eref.ty);
-            kcrud::insert_entity_key(
-                conn,
-                &EntityKey {
-                    id: kid,
-                    space: space.into(),
-                    entity: eid.clone(),
-                    ty: eref.ty.clone(),
-                    normalized,
-                    surface: eref.surface.clone(),
-                    origin: KeyOrigin::UserDeclared,
-                },
-            )?;
+            let new_key = EntityKey {
+                id: kid,
+                space: space.into(),
+                entity: eid.clone(),
+                ty: eref.ty.clone(),
+                normalized,
+                surface: eref.surface.clone(),
+                origin: KeyOrigin::UserDeclared,
+            };
+            kcrud::insert_entity_key(conn, &new_key)?;
             // Record merge candidate (not auto-merged).
             // For M1, we just create the entity; the merge candidate is visible
             // via entity_merges table queries. The new entity is returned.
             let _ = existing; // merge candidate recording is deferred to review tooling (M4)
-            cache.invalidate(space, &eref.ty);
+            cache.insert_key(space, &eref.ty, &new_key);
             Ok((eid, ResolutionMethod::New))
         }
     }
@@ -438,12 +452,10 @@ fn parse_literal(lt: &str, value: &str) -> Result<TypedValue, BrainError> {
 
 /// Project a declaration: write episode, resolve entities, create assertions,
 /// re-fold affected group, update beliefs. All in one transaction.
-///
-/// `cache` is shared with other declarations in the same projection batch so
-/// the LSH blocking index is built once per (space, type) instead of per
-/// mention. Single-call paths (`Brain::declare`) pass a fresh
-/// `ResolutionCache::new()` — the cache has no value when only one resolution
-/// happens, but the API is uniform.
+/// `cache` is the persistent `ResolutionCache` from `Brain` (or a fresh local
+/// cache during `reproject`). The LSH blocking index is built once per
+/// (space, type) and updated incrementally via `insert_key` when new keys are
+/// added, so there is no per-call O(N) rebuild.
 #[allow(clippy::too_many_arguments)]
 pub fn project_declaration(
     conn: &Connection,

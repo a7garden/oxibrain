@@ -19,8 +19,8 @@ pub use oxibrain_ports::{
 
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 pub use oxibrain_store::security::AuditRow;
-use oxibrain_store::{StoreHandle, ledger, query, reproject};
-use std::sync::Arc;
+use oxibrain_store::{StoreHandle, ledger, project::ResolutionCache, query, reproject};
+use std::sync::{Arc, Mutex};
 
 /// Discriminator for the three `brief` target kinds (M9 §14.1, `brief(entity |
 /// space | topic)`). Entity targets go through `Brain::brief(space, entity_id)`
@@ -42,8 +42,12 @@ pub struct Brain {
     tokenizer: Arc<dyn TokenizerPort>,
     /// Optional dense embedder for QueryMode::Dense / hybrid dense channel.
     embedder: Option<Arc<dyn EmbeddingPort>>,
+    /// Persistent resolution cache: amortises the O(N) LSH index build across
+    /// incremental `declare` / `extract` calls. Updated incrementally via
+    /// `insert_key` (O(1)) when a new entity key is added; cleared on `reproject`
+    /// and `redact` where the projection is rebuilt or entities are removed.
+    cache: Arc<Mutex<ResolutionCache>>,
 }
-
 impl Brain {
     pub async fn open(config: BrainConfig) -> Result<Self, BrainError> {
         let store = tokio::task::spawn_blocking(move || StoreHandle::open(&config.dir))
@@ -55,6 +59,7 @@ impl Brain {
             llm: None,
             tokenizer: Arc::new(CharTokenizer),
             embedder: None,
+            cache: Arc::new(Mutex::new(ResolutionCache::new())),
         })
     }
 
@@ -71,6 +76,7 @@ impl Brain {
             llm: None,
             tokenizer: Arc::new(CharTokenizer),
             embedder: None,
+            cache: Arc::new(Mutex::new(ResolutionCache::new())),
         })
     }
 
@@ -87,6 +93,7 @@ impl Brain {
             llm: None,
             tokenizer: Arc::new(CharTokenizer),
             embedder: None,
+            cache: Arc::new(Mutex::new(ResolutionCache::new())),
         })
     }
 
@@ -173,7 +180,7 @@ impl Brain {
     pub async fn reproject(&self) -> Result<(), BrainError> {
         let h = self.handle.clone();
         let embedder = self.embedder.clone();
-        tokio::task::spawn_blocking(move || {
+        let inner = tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
             h.writer()?.submit(Box::new(move |conn| {
                 let result = reproject::reproject(conn).map_err(|e| e.to_string());
@@ -234,7 +241,16 @@ impl Brain {
             Ok(())
         })
         .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?;
+
+        // The projection was rebuilt from scratch — cached LSH indices are stale
+        // (entity ids, keys may have changed). Clear regardless of success or
+        // failure: on failure the projection is in an unknown state.
+        self.cache
+            .lock()
+            .expect("resolution cache poisoned")
+            .clear();
+        inner
     }
 
     /// Declare a statement, merge, or retraction. Returns the episode id.
@@ -242,14 +258,14 @@ impl Brain {
         let h = self.handle.clone();
         let space = space.to_string();
         let now = self.clock.now();
+        let cache = self.cache.clone();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer()?.submit(Box::new(move |conn| {
-                // Single-declaration path: the cache has no amortisation
-                // value (one call), but the API is uniform — the same
-                // `project_declaration` signature is used for both
-                // `Brain::declare` (one call) and `reproject` (N calls).
-                let mut cache = oxibrain_store::project::ResolutionCache::new();
+                // Persistent resolution cache: the O(N) LSH index build is
+                // amortised across calls. New keys update the cache in O(1)
+                // via `insert_key`, so there is no per-call rebuild.
+                let mut cache = cache.lock().expect("resolution cache poisoned");
                 let ep_id = oxibrain_store::project::project_declaration(
                     conn, &space, &decl, now, &mut cache,
                 )?;
@@ -716,6 +732,7 @@ impl Brain {
             llm: Some(llm),
             tokenizer: Arc::new(CharTokenizer),
             embedder: None,
+            cache: Arc::new(Mutex::new(ResolutionCache::new())),
         })
     }
 
@@ -888,7 +905,7 @@ impl Brain {
         let target = target.clone();
         let reason = reason.to_string();
         let actor = actor.to_string();
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer()?.submit(Box::new(move |conn| {
                 let res = oxibrain_store::redaction::execute_redaction(
@@ -902,7 +919,17 @@ impl Brain {
                 .map_err(|_| BrainError::Storage("redact channel dropped".into()))
         })
         .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?;
+
+        // Redaction may have deleted entities — cached LSH indices are stale.
+        // Only clear on success: on failure, entities weren't changed.
+        if result.is_ok() {
+            self.cache
+                .lock()
+                .expect("resolution cache poisoned")
+                .clear();
+        }
+        result
     }
 
     /// Export all durable tables as a JSONL string.
@@ -1029,6 +1056,7 @@ impl Brain {
 
         // 6. Project [WriteOp].
         let h = self.handle.clone();
+        let cache = self.cache.clone();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer()?.submit(Box::new(move |conn| {
@@ -1040,10 +1068,8 @@ impl Brain {
                     &raw_response,
                     now,
                 )?;
-                // Project valid claims.
-                // Single-extract path: cache has no amortisation value but the
-                // API is uniform with `reproject`.
-                let mut cache = oxibrain_store::project::ResolutionCache::new();
+                // Project valid claims with the persistent resolution cache.
+                let mut cache = cache.lock().expect("resolution cache poisoned");
                 let n = oxibrain_store::extraction::project_extraction(
                     conn,
                     &space,

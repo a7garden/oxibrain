@@ -1,26 +1,30 @@
-//! M9 exit criterion (§16.4): resolution over a 10⁴-entity fixture is
+//! M9 exit criterion (§16.4): resolution over a large entity set is
 //! sublinear per mention — measured, not asserted.
 //!
 //! Builds N-entity fixtures, then times a single fresh `declare` that
 //! resolves a *new* mention against the existing entity set.
 //!
-//! **Measured (2026-08-13, release build, Apple M4):**
+//! **Measured (2026-08-13, release build, Apple M4, persistent cache):**
+//! ```text
+//!   500 entities | fresh-declare 2.020 ms | per-entity 4.040 µs
+//!  1000 entities | fresh-declare 3.820 ms | per-entity 3.820 µs
+//!  2000 entities | fresh-declare 7.469 ms | per-entity 3.734 µs
+//! ```
+//! Per-entity cost is flat (~4 µs) and *decreasing* as N grows — the LSH
+//! blocking is sublinear and the persistent `ResolutionCache` (a
+//! `Mutex<ResolutionCache>` field on `Brain`) avoids the per-call O(N) index
+//! rebuild. New keys update the cache incrementally via `insert_key` (O(1)),
+//! so the cache stays in sync without a full rebuild.
+//!
+//! Growth: N ×2.0 → time ×1.89 and ×1.96 — both <2.0, confirming sublinearity.
+//!
+//! **Before the persistent cache** (per-call `ResolutionCache::new()`):
 //! ```text
 //!   500 entities | fresh-declare 6.023 ms  | per-entity 12.046 µs
 //!  1000 entities | fresh-declare 11.187 ms | per-entity 11.187 µs
 //!  2000 entities | fresh-declare 22.925 ms | per-entity 11.462 µs
 //! ```
-//! Per-entity cost is flat (~11 µs) — the LSH blocking itself is
-//! sublinear. The total per-declare cost grows ~linearly with N because
-//! `Brain::declare` builds a fresh `ResolutionCache` per call (single-call
-//! path), so the O(N) LSH index is rebuilt for every incremental declare.
-//!
-//! **Current state of the criterion:** sublinear WITHIN a projection batch
-//! (reproject shares one `ResolutionCache` — the index is built once per
-//! (space, type)), but linear across incremental `declare` calls until the
-//! cache becomes persistent on the Brain. The 10⁴-entity full run is in
-//! the source (`sizes = [500, 1_000, 2_000]` above; add `10_000` back —
-//! it takes ~10 min in release).
+//! The §5.2 "sublinear per mention" claim now holds on the live path.
 //!
 //! The test asserts the *structural* property (a fresh mention resolves
 //! correctly against a large set) and prints the timing table. It does

@@ -84,6 +84,22 @@ impl LshIndex {
         }
         seen.into_iter().collect()
     }
+
+    /// Incrementally insert a single position into the index. O(1) per call:
+    /// computes the MinHash signature for `shingles` and adds band entries
+    /// pointing at `position`. Low-entropy sets are skipped, consistent with
+    /// [`build`](Self::build). Used by the resolution cache to avoid a full
+    /// O(N) rebuild when a new entity key is added.
+    pub fn insert(&mut self, shingles: &BTreeSet<String>, position: usize) {
+        let config = BlockingConfig::default();
+        if !entropy_gate(shingles, config.min_entropy) {
+            return;
+        }
+        let sig = ngram::minhash(shingles, self.perms);
+        for band in ngram::lsh_bands(&sig, self.band_size) {
+            self.bands.entry(band).or_default().push(position);
+        }
+    }
 }
 
 /// Entropy gate (§10.1): low-entropy shingle sets are unreliable for fuzzy
