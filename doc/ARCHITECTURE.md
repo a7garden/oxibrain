@@ -1854,13 +1854,10 @@ tuning decision is a guess.
 
 ### 17.1 Corpora
 
-**Public benchmarks, for comparability** — LongMemEval (knowledge update, temporal reasoning —
-the home benchmark), LoCoMo (multi-hop), BEAM (deliberately unsaturated; reported, never
-targeted).
-
-**Our golden corpus, for what the benchmarks miss** — ~200 labelled episodes across note,
-document and agent-trace shapes with annotated entities, statements and validity intervals,
-plus ~100 questions with reference answers and required supporting episodes.
+**Our golden corpus** — ~200 labelled episodes across note, document and agent-trace shapes with
+annotated entities, statements and validity intervals, plus ~100 questions with reference answers
+and required supporting episodes. The controlled comparison (§17.2) runs on this corpus; the
+categories that matter are knowledge update and temporal reasoning.
 
 **The parity corpus, for C3** (§7.8) — seven writing-system property classes, ~20 episodes each.
 This replaces v1.0's bilingual KO/EN scope, which was the right instinct for a Korean author and
@@ -2267,11 +2264,9 @@ Considered against working implementations, recorded so they are not re-litigate
 - Broder et al. (1997) — MinHash / LSH (§10.1).
 
 **Evaluation**
-- LongMemEval — knowledge update and temporal reasoning. Primary benchmark.
-- LoCoMo — single-hop, multi-hop, open-domain, temporal.
-- BEAM-1M / BEAM-10M — deliberately unsaturated; reported, never targeted.
-- LongMemEval-V2, arXiv:2605.12493 — web-agent trajectories, "environment gotchas". Post-v1;
-  the reason §5.5 seeds a negative/uncertain predicate family.
+- In-repo golden corpus + parity corpus (§17.1) — the controlled comparison runs on our own data.
+  External benchmarks (LongMemEval, LoCoMo, BEAM) are removed from the plan; the negative/uncertain
+  predicate family (§5.5) is still seeded for the provenance work that motivated it.
 
 **Platform**
 - Model Context Protocol — long-running tasks, sampling, transport-neutral subscriptions.

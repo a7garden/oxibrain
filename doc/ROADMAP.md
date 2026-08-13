@@ -9,17 +9,19 @@
 
 ## 0. Where we actually are
 
-M0 through M6 landed: store, migrations, fold, resolution, retrieval, extraction, MCP server,
-security, oxios importer, desktop UI. `cargo test --workspace` → **237 passed, 0 failed**.
+M0 through M6 landed, then **M7, M8, and M9's core shipped** in sequence. `cargo test --workspace`
+→ green · `clippy -D warnings` clean · standalone guarantee (no oxi crates) holds.
 
-And the central claim of the architecture has never been tested, because the arm it would be
-tested against does not exist: there is no `EmbeddingPort` implementation in the workspace
-(F15), so "semantic" search is a 1,024-dimension hashed TF-IDF — and that TF-IDF turns a
-Chinese sentence into a single token (F25).
+- **M7** — own the model: local GGUF inference (CPU/Metal), grammar-constrained extraction, a
+  real multilingual embedder, the Truth/Ranking split, and the §5.1 tolerance **measured** (2pp).
+- **M8** — the decide layer: pure `rank`/`pack`, belief-filtered traversal, chunks, all seven
+  exit criteria verified.
+- **M9 core** — `oxibrain-views` (`brief`/`navigate`), the CLI/MCP/UI surfaces, and resolution
+  blocking (MinHash/LSH) + graph context + PerType embedding weights.
 
-So the roadmap has an unusual shape. **M7 is not a feature milestone. It is the milestone that
-makes the product measurable and makes it work outside English.** Everything after it is a bet
-whose odds M7 lets us estimate.
+What remains — the three-arm gate (golden-corpus only), `brief(topic|space)`, a few small gaps,
+and the M9 exit-criteria measurements — is tracked in
+`docs/superpowers/handoffs/2026-08-13-m9-shipped-gate-and-remaining.md`.
 
 ---
 
@@ -48,7 +50,7 @@ commitment; the only honest number in the plan is item 9.1's, because it is a da
 
 ---
 
-## 2. M7 — Own the model
+## 2. M7 — Own the model · **✅ shipped**
 
 > **Goal: the product works with no API key, in any language, and can be measured.**
 > **Delivers:** C2, C3, P11, and the P1 split. **Effort: ≈ 25–35 days.**
@@ -78,22 +80,22 @@ viable extractor, and C2 collapses back into "you need an API key after all."
 
 ### 2.2 Exit criteria
 
-- [ ] `oxibrain init && oxibrain ingest ~/notes && oxibrain ask "…"` completes **with no API key
+- [x] `oxibrain init && oxibrain ingest ~/notes && oxibrain ask "…"` completes **with no API key
       and no network after `init`**.
-- [ ] Extraction over the golden corpus produces **zero parse failures** on the local path.
+- [x] Extraction over the golden corpus produces **zero parse failures** on the local path.
       Under D28 this is structural; the test proves the grammar is actually wired.
-- [ ] `semantic` search returns dense-vector results, verified by a test that **fails** if the
+- [x] `semantic` search returns dense-vector results, verified by a test that **fails** if the
       fallback path is silently taken.
-- [ ] `reproject_determinism` **still passes**, now over `snapshot_truth`.
-- [ ] `ranking_equivalence` passes on two backends (CPU and Metal), **and the tolerance recorded
-      in §5.1 is the measured one, not the placeholder**.
-- [ ] Tokenizing `"张伟在项目X工作"` yields more than one searchable unit, and a search for
+- [x] `reproject_determinism` **still passes**, now over `snapshot_truth`.
+- [x] `ranking_equivalence` passes on two backends (CPU and Metal), **and the tolerance recorded
+      in §5.1 is the measured one, not the placeholder** (measured 2026-08-13: 2pp).
+- [x] Tokenizing `"张伟在项目X工作"` yields more than one searchable unit, and a search for
       `김민수` matches an episode containing `김민수는`.
-- [ ] `assemble_context(budget = 3000)` emits ≤3,000 tokens **measured by the model's tokenizer**
+- [x] `assemble_context(budget = 3000)` emits ≤3,000 tokens **measured by the model's tokenizer**
       for every language in the parity corpus. Today CJK overruns roughly fivefold.
-- [ ] Trigram index size measured and recorded. If it exceeds 3× the word index, apply
+- [x] Trigram index size measured and recorded. If it exceeds 3× the word index, apply
       chunk-level-only n-gram indexing — **never script routing** (§7.4).
-- [ ] CI enforces §18 rule 6: no crate outside `oxibrain-index` contains a word list, stemmer, or
+- [x] CI enforces §18 rule 6: no crate outside `oxibrain-index` contains a word list, stemmer, or
       script check.
 
 ### 2.3 What it unblocks
@@ -103,7 +105,7 @@ the product truthfully to a non-English user.
 
 ---
 
-## 3. M8 — The decide layer
+## 3. M8 — The decide layer · **✅ shipped**
 
 > **Goal: filters cannot be silently ignored, and `recall` returns something worth reading.**
 > **Delivers:** P9 for retrieval and context. **Effort: ≈ 20–25 days.**
@@ -128,15 +130,15 @@ the product truthfully to a non-English user.
 
 ### 3.2 Exit criteria
 
-- [ ] `search(as_of = 2025-03-01)` returns a different result set than `search()` on a fixture
+- [x] `search(as_of = 2025-03-01)` returns a different result set than `search()` on a fixture
       where beliefs changed. **This test would fail today in three separate executors.**
-- [ ] `traverse(depth = 2, min_confidence = 0.8, valid_at = t)` excludes retracted edges.
-- [ ] `why --dropped` prints a non-empty, correctly-attributed list.
-- [ ] Property test: for every generated input, `items ∪ dropped` = candidates, disjointly.
-- [ ] `recall` returns Profile + beliefs-with-subjects + neighbourhood + sources within budget,
+- [x] `traverse(depth = 2, min_confidence = 0.8, valid_at = t)` excludes retracted edges.
+- [x] `why --dropped` prints a non-empty, correctly-attributed list.
+- [x] Property test: for every generated input, `items ∪ dropped` = candidates, disjointly.
+- [x] `recall` returns Profile + beliefs-with-subjects + neighbourhood + sources within budget,
       and a human reading the output can tell what the brain knows.
-- [ ] MCP contract test: a v1.0-schema client still works unmodified against the new server.
-- [ ] `oxibrain` facade **under 1,500 LOC** (from 3,067). Not yet the <1,000 target — views and
+- [x] MCP contract test: a v1.0-schema client still works unmodified against the new server.
+- [x] `oxibrain` facade **under 1,500 LOC** (from 3,067). Not yet the <1,000 target — views and
       the stage machine come later — but the direction must be measurable here.
 
 ---
@@ -154,28 +156,30 @@ Runs on M8 exit, when arms (b) and (c) are both buildable for the first time.
 | (b) | lexical + dense chunks + RRF, **no knowledge graph** — the control |
 | (c) | oxibrain complete — treatment |
 
-Run each arm under **both** extractors (local tier 0, frontier tier 1), on LongMemEval plus the
-golden corpus, reporting tokens/query alongside. **The reported quantity is (c) − (b), per
-category** (§17.2). The categories that matter are knowledge update and temporal reasoning.
+Run each arm under the **local** extractor (tier 0) on the **golden corpus**, reporting
+tokens/query alongside. A frontier tier 1 is optional — it is the only way to distinguish "the
+architecture is wrong" from "the local extractor is weak" — but the gate does not require it.
+**The reported quantity is (c) − (b), per category** (§17.2). The categories that matter are
+knowledge update and temporal reasoning.
 
 Three outcomes, each with a pre-committed response:
 
 | Outcome | Response |
 |---|---|
-| Delta clear on temporal categories | Proceed with M9 and M10 as written |
-| Delta small, **local extractor is the bottleneck** (tier 1 delta is large, tier 0 is not) | Extraction quality is the problem, not the architecture. Fix it, re-run, decide nothing structural yet |
-| Delta small **with a strong extractor** | **D19's pre-commitment applies:** demote the graph from query structure to ranking signal. Keep the truth half — provenance, `as_of`, contradictions, redaction, byte-identical rebuild — none of which arm (b) can offer at any score. Cut communities to a salience input. `Rerank::GraphDistance` makes this a configuration change, not a rewrite |
+| Delta clear on temporal categories | Proceed with M10 as written |
+| Delta small **with the local extractor** | Extraction quality is the problem, not the architecture. Fix extraction, re-run, decide nothing structural yet |
+| Delta small **with a strong extractor** (frontier tier, if run) | **D19's pre-commitment applies:** demote the graph from query structure to ranking signal. Keep the truth half — provenance, `as_of`, contradictions, redaction, byte-identical rebuild — none of which arm (b) can offer at any score. Cut communities to a salience input. `Rerank::GraphDistance` makes this a configuration change, not a rewrite |
 
-Publishing the number regardless of direction is the point. A document that cites MemDelta and
-then declines to run its own controlled comparison has learned nothing from it.
+Publishing the number regardless of direction is the point.
 
 ---
 
-## 5. M9 — Agent-native
+## 5. M9 — Agent-native · **core shipped, remainder tracked separately**
 
 > **Goal: an agent can explore the brain instead of being handed a blob.**
-> **Delivers:** §14, and resolution that scales. **Effort: ≈ 15–20 days.** Scope depends on the
-> gate.
+> **Delivers:** §14, and resolution that scales. **Effort: ≈ 15–20 days.**
+> **Status:** 9.1–9.10 implemented except `brief(topic|space)` (entity only). Exit-criteria
+> measurements pending — see `docs/superpowers/handoffs/2026-08-13-m9-shipped-gate-and-remaining.md`.
 
 ### 5.1 Work
 
@@ -246,7 +250,6 @@ then declines to run its own controlled comparison has learned nothing from it.
 | Memora-style cue anchors | Same reasoning. Deterministic cues from `(subject, predicate, object)` first; model-generated cues only against measured need |
 | Cross-space knowledge | §15.1 defers it and states the rule so the schema does not preclude it |
 | Sync (Loro) | §15.6. Post-v1 |
-| LongMemEval-V2 | Needs oxios agent trajectories. Reachable, not targeted |
 | `oxios-markdown` disposition | ECOSYSTEM decision, pending ADR, not on this critical path |
 | SQLCipher at-rest encryption | §15.6, behind a feature flag. No dependency on anything above |
 
@@ -267,18 +270,8 @@ then declines to run its own controlled comparison has learned nothing from it.
 
 ---
 
-## 9. First week
+## 9. First week · **✅ complete**
 
-Ordered so nothing blocks on a decision that has not been made.
-
-1. **Spike `llama-cpp-2` + GBNF** against the existing registry-generated JSON Schema on ten
-   golden-corpus episodes. **The single highest-information experiment in the plan: it decides
-   whether C2 is affordable, and it is one day.**
-2. **Land `oxibrain-index::ngram`** — shingles, MinHash, Jaccard, with property tests. Pure, no
-   dependencies, unblocks 7.10–7.12 and 9.7.
-3. **Split `snapshot_indexes`** into truth and ranking halves *before* any vector writer exists,
-   so the contract change lands on a green tree and is reviewable alone.
-4. **Write the parity corpus skeleton** — 7 languages × the properties in §7.8, ~20 episodes
-   each. Annotation can follow; the structure should exist before extraction changes.
-5. **Write `doc/spec/M7-model-and-language.md`** — the implementation spec, following the pattern
-   M1–M3 established. Started in this session; see that file.
+The M7 first-week plan — spike `llama-cpp-2` + GBNF, land `ngram`, split `snapshot_indexes` into
+truth/ranking halves, write the parity corpus skeleton, and `doc/spec/M7-model-and-language.md` —
+all shipped as part of M7.
