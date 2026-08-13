@@ -185,6 +185,47 @@ fn migrates_from_v2_with_data() {
     assert!(has_column(&conn, "episodes", "compacted_at"));
 }
 
+// ── v7 → current (v8 chunks) ─────────────────────────────────────────────────
+
+#[test]
+fn migrates_from_v7_with_data() {
+    migration::ensure_vec_extension();
+    let conn = Connection::open_in_memory().unwrap();
+    // Apply v1..v7 in sequence.
+    conn.execute_batch(V1_SQL).unwrap();
+    conn.execute_batch(V2_SQL).unwrap();
+    registry::seed_core_v1(&conn).unwrap();
+    conn.pragma_update(None, "user_version", 2i64).unwrap();
+    for sql in [
+        include_str!("../src/migrations/v3.sql"),
+        include_str!("../src/migrations/v4.sql"),
+        include_str!("../src/migrations/v5.sql"),
+        include_str!("../src/migrations/v6.sql"),
+        include_str!("../src/migrations/v7.sql"),
+    ] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 7i64).unwrap();
+    insert_test_data(&conn);
+
+    // Migrate (only v8 applies).
+    let v = migration::run(&conn).unwrap();
+    assert_eq!(v, LEDGER_SCHEMA_VERSION);
+
+    // ── Data integrity. ──
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // ── v8 effect: chunks table exists. ──
+    assert!(has_table(&conn, "chunks"));
+    let chunk_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(chunk_count, 0, "migration creates the table, not data");
+}
+
 // ── Idempotency ──────────────────────────────────────────────────────────────
 
 #[test]

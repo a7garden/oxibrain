@@ -70,10 +70,15 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
             .map_err(sql_err)?;
     }
     if current < 7 {
-        ensure_vec_extension();
         let sql = include_str!("migrations/v7.sql");
         conn.execute_batch(sql).map_err(sql_err)?;
         conn.pragma_update(None, "user_version", 7i64)
+            .map_err(sql_err)?;
+    }
+    if current < 8 {
+        let sql = include_str!("migrations/v8.sql");
+        conn.execute_batch(sql).map_err(sql_err)?;
+        conn.pragma_update(None, "user_version", 8i64)
             .map_err(sql_err)?;
     }
     let now: i64 = conn
@@ -121,7 +126,7 @@ mod tests {
             err,
             BrainError::Migration {
                 found: 999,
-                expected: 7
+                expected: LEDGER_SCHEMA_VERSION
             }
         ));
     }

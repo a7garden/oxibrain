@@ -51,6 +51,8 @@ pub use pack::{
     BeliefForm, ContextInput, EpisodeExcerpt, PackPolicy, ProfileFact, RenderedBelief,
     RenderedEdge, Reserve, SummaryWithUncertainty, pack,
 };
+pub mod chunking;
+pub use chunking::{Chunk, ChunkPolicy, render_context_prefix, short_ts, split_into_chunks};
 pub mod stats;
 pub use security::{
     AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
