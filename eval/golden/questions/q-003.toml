@@ -1,0 +1,8 @@
+# Temporal reasoning: Alice's pre-Acme job.
+
+id = "q-003"
+category = "temporal_reasoning"
+question = "Where did Alice work in 2022?"
+as_of = "2022-09-01"
+answer = "Initrode"
+supporting_episodes = ["note-002"]

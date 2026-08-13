@@ -93,8 +93,14 @@ pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
     conn.execute("DELETE FROM fts_ngram WHERE space_id = ?1", params![space])
         .map_err(sql_err)?;
     // Index episodes.
+    // Declaration episodes carry machine-readable canonical JSON, not
+    // human text — they must not pollute the retrieval index. Only
+    // primary episodes (real source text) are searchable here.
     let mut stmt = conn
-        .prepare("SELECT id, content FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL")
+        .prepare(
+            "SELECT id, content FROM episodes
+              WHERE space_id = ?1 AND redacted_at IS NULL AND kind != 'declaration'",
+        )
         .map_err(sql_err)?;
     let episodes: Vec<(String, String)> = stmt
         .query_map(params![space], |r| {
@@ -145,7 +151,10 @@ pub fn rebuild_tfidf(conn: &Connection, space: &str, dim: usize) -> Result<(), B
     let mut targets: Vec<(&str, String)> = Vec::new(); // (kind, id)
 
     let mut stmt = conn
-        .prepare("SELECT id, content FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL")
+        .prepare(
+            "SELECT id, content FROM episodes
+              WHERE space_id = ?1 AND redacted_at IS NULL AND kind != 'declaration'",
+        )
         .map_err(sql_err)?;
     let episodes: Vec<(String, String)> = stmt
         .query_map(params![space], |r| {

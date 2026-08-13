@@ -1475,6 +1475,24 @@ impl Brain {
         Ok(count)
     }
 
+    /// Render statements by id as `id | subject predicate object` text.
+    /// Used by the gate runner to score ranked items against answers.
+    pub async fn render_statements(
+        &self,
+        space: &str,
+        ids: &[String],
+    ) -> Result<Vec<String>, BrainError> {
+        let h = self.handle.clone();
+        let space = space.to_string();
+        let ids = ids.to_vec();
+        tokio::task::spawn_blocking(move || {
+            h.readers
+                .read(|conn| oxibrain_store::query::render_statements(conn, &space, &ids))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
     /// Extract all (predicate, subject_surface, object_surface) triples from a
     /// space's current projection. Used by the eval suite and CLI `eval` command.
     pub async fn debug_triples(

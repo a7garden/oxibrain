@@ -10,6 +10,11 @@
 #   (b) lexical + dense chunks + RRF, no knowledge graph — control
 #   (c) oxibrain complete            — treatment
 # Reported quantity: (c) − (b) per category, with tokens/query alongside.
+#
+# Note: this is a STARTER corpus (10 episodes, 10 questions across en/ko/zh)
+# sufficient to exercise the gate runner end-to-end. The full ~200/~100
+# corpus is human-curated content and is added incrementally; the gate
+# runner itself is the code under `oxibrain eval --suite gate`.
 
 version = "0.1"
 
@@ -28,10 +33,58 @@ lang = "en"
 file = "episodes/note-001.toml"
 
 [[episodes]]
+id = "note-002"
+shape = "note"
+lang = "en"
+file = "episodes/note-002.toml"
+
+[[episodes]]
+id = "note-003"
+shape = "note"
+lang = "ko"
+file = "episodes/note-003.toml"
+
+[[episodes]]
+id = "note-004"
+shape = "note"
+lang = "zh"
+file = "episodes/note-004.toml"
+
+[[episodes]]
+id = "note-005"
+shape = "note"
+lang = "en"
+file = "episodes/note-005.toml"
+
+[[episodes]]
+id = "note-006"
+shape = "note"
+lang = "ko"
+file = "episodes/note-006.toml"
+
+[[episodes]]
+id = "note-007"
+shape = "note"
+lang = "zh"
+file = "episodes/note-007.toml"
+
+[[episodes]]
 id = "document-001"
 shape = "document"
 lang = "en"
 file = "episodes/document-001.toml"
+
+[[episodes]]
+id = "document-002"
+shape = "document"
+lang = "en"
+file = "episodes/document-002.toml"
+
+[[episodes]]
+id = "document-003"
+shape = "document"
+lang = "en"
+file = "episodes/document-003.toml"
 
 [[questions]]
 id = "q-001"
@@ -42,3 +95,43 @@ file = "questions/q-001.toml"
 id = "q-002"
 category = "knowledge_update"
 file = "questions/q-002.toml"
+
+[[questions]]
+id = "q-003"
+category = "temporal_reasoning"
+file = "questions/q-003.toml"
+
+[[questions]]
+id = "q-004"
+category = "knowledge_update"
+file = "questions/q-004.toml"
+
+[[questions]]
+id = "q-005"
+category = "knowledge_update"
+file = "questions/q-005.toml"
+
+[[questions]]
+id = "q-006"
+category = "temporal_reasoning"
+file = "questions/q-006.toml"
+
+[[questions]]
+id = "q-007"
+category = "knowledge_update"
+file = "questions/q-007.toml"
+
+[[questions]]
+id = "q-008"
+category = "knowledge_update"
+file = "questions/q-008.toml"
+
+[[questions]]
+id = "q-009"
+category = "knowledge_update"
+file = "questions/q-009.toml"
+
+[[questions]]
+id = "q-010"
+category = "temporal_reasoning"
+file = "questions/q-010.toml"

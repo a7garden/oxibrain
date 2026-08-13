@@ -1124,9 +1124,12 @@ dependencies = [
  "oxibrain-llm-http",
  "oxibrain-mcp",
  "oxibrain-ports",
+ "oxibrain-store",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

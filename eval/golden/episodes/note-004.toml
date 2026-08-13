@@ -1,0 +1,21 @@
+# Chinese-language note: 张伟's role.
+
+shape = "note"
+lang = "zh"
+occurred_at = "2024-02-10"
+
+content = "张伟在项目X工作。他是后端工程师。"
+
+[[entities]]
+surface = "张伟"
+type = "Person"
+
+[[entities]]
+surface = "项目X"
+type = "Project"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "张伟"
+object_surface = "项目X"
+valid_from = "2024-02-10"

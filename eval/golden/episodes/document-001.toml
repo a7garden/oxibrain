@@ -23,4 +23,3 @@ predicate = "employed_by"
 subject_surface = "Alice"
 object_surface = "Globex"
 valid_from = "2023-07-01"
-valid_to = null

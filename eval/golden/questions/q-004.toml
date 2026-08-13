@@ -1,0 +1,7 @@
+# Knowledge update: Alice's current project.
+
+id = "q-004"
+category = "knowledge_update"
+question = "What project does Alice lead now?"
+answer = "Project Sydney"
+supporting_episodes = ["note-003", "document-003"]

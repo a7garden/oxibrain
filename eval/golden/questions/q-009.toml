@@ -1,0 +1,7 @@
+# Chinese-language: 张伟's manager.
+
+id = "q-009"
+category = "knowledge_update"
+question = "张伟向谁汇报工作?"
+answer = "李雷"
+supporting_episodes = ["note-007"]

@@ -1,0 +1,7 @@
+# Knowledge update: Carol's city.
+
+id = "q-007"
+category = "knowledge_update"
+question = "Where does Carol live?"
+answer = "Berlin"
+supporting_episodes = ["note-005"]

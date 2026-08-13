@@ -1,0 +1,8 @@
+# Temporal reasoning: Bob's title at a specific time.
+
+id = "q-006"
+category = "temporal_reasoning"
+question = "What was Bob's job title in October 2022?"
+as_of = "2022-10-01"
+answer = "software engineer"
+supporting_episodes = ["document-002"]

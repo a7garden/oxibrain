@@ -1,0 +1,7 @@
+# Korean-language: 김민수's project.
+
+id = "q-008"
+category = "knowledge_update"
+question = "김민수는 어느 프로젝트에서 일하나요?"
+answer = "Project K"
+supporting_episodes = ["note-006"]

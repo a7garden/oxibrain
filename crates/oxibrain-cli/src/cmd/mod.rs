@@ -6,6 +6,7 @@ pub mod entity_show;
 pub mod eval;
 pub mod export_cmd;
 pub mod extract;
+pub mod gate;
 pub mod import_cmd;
 pub mod import_oxios;
 pub mod ingest;

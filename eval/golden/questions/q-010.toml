@@ -1,0 +1,8 @@
+# Temporal reasoning: Alice's project at a specific time.
+
+id = "q-010"
+category = "temporal_reasoning"
+question = "What project did Alice lead on 2023-10-01?"
+as_of = "2023-10-01"
+answer = "Project Seoul"
+supporting_episodes = ["note-003", "document-003"]

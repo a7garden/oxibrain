@@ -1,0 +1,32 @@
+# Knowledge update: Alice's project changes.
+
+shape = "document"
+lang = "en"
+occurred_at = "2023-12-01"
+
+content = "Alice moved off Project Seoul to lead Project Sydney, a new initiative in Australia."
+
+[[entities]]
+surface = "Alice"
+type = "Person"
+
+[[entities]]
+surface = "Project Seoul"
+type = "Project"
+
+[[entities]]
+surface = "Project Sydney"
+type = "Project"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "Alice"
+object_surface = "Project Seoul"
+valid_from = "2023-09-15"
+valid_to = "2023-12-01"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "Alice"
+object_surface = "Project Sydney"
+valid_from = "2023-12-01"

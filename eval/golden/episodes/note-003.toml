@@ -1,0 +1,31 @@
+# Korean-language note: Alice's Korean project.
+
+shape = "note"
+lang = "ko"
+occurred_at = "2023-09-15"
+
+content = "Alice는 서울 팀과 함께 Project Seoul을 이끌고 있다. 프로젝트 책임자다."
+
+[[entities]]
+surface = "Alice"
+type = "Person"
+
+[[entities]]
+surface = "Project Seoul"
+type = "Project"
+
+[[entities]]
+surface = "서울"
+type = "Place"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "Alice"
+object_surface = "Project Seoul"
+valid_from = "2023-09-15"
+
+[[statements]]
+predicate = "located_in"
+subject_surface = "Project Seoul"
+object_surface = "서울"
+valid_from = "2023-09-15"

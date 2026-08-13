@@ -74,7 +74,8 @@ pub async fn run(suite: &str) -> anyhow::Result<()> {
         "full" => {
             anyhow::bail!("full suite requires a live provider — run via CI nightly, not locally")
         }
-        other => anyhow::bail!("unknown suite '{other}': use 'fast' or 'full'"),
+        "gate" => super::gate::run_with_dir(suite, None).await,
+        other => anyhow::bail!("unknown suite '{other}': use 'fast', 'full', or 'gate'"),
     }
 }
 

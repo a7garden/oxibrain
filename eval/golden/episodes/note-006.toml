@@ -1,0 +1,21 @@
+# Korean: 김민수's first project.
+
+shape = "note"
+lang = "ko"
+occurred_at = "2023-03-10"
+
+content = "김민수는 Project K에서 백엔드 엔지니어로 일하고 있다."
+
+[[entities]]
+surface = "김민수"
+type = "Person"
+
+[[entities]]
+surface = "Project K"
+type = "Project"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "김민수"
+object_surface = "Project K"
+valid_from = "2023-03-10"

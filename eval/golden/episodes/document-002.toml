@@ -1,0 +1,36 @@
+# Document with multiple updates: Bob's career path.
+
+shape = "document"
+lang = "en"
+occurred_at = "2023-04-01"
+
+content = "Bob joined Initech in March 2022 as a software engineer. In April 2023 he was promoted to senior engineer on the platform team."
+
+[[entities]]
+surface = "Bob"
+type = "Person"
+
+[[entities]]
+surface = "Initech"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Bob"
+object_surface = "Initech"
+valid_from = "2022-03-01"
+
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Bob"
+object_literal_type = "text"
+object_literal_value = "software engineer"
+valid_from = "2022-03-01"
+valid_to = "2023-04-01"
+
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Bob"
+object_literal_type = "text"
+object_literal_value = "senior engineer"
+valid_from = "2023-04-01"

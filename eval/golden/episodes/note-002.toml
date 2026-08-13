@@ -1,0 +1,23 @@
+# Temporal-reasoning corpus: Alice's employer changes.
+# Note written earlier than note-001 for the temporal_reasoning family.
+
+shape = "note"
+lang = "en"
+occurred_at = "2022-06-01"
+
+content = "Alice started her first job at Initrode as a junior engineer, on the data team."
+
+[[entities]]
+surface = "Alice"
+type = "Person"
+
+[[entities]]
+surface = "Initrode"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Alice"
+object_surface = "Initrode"
+valid_from = "2022-06-01"
+valid_to = "2023-01-15"

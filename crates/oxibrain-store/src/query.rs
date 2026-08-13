@@ -968,6 +968,58 @@ pub fn resolve_entity_id(
 /// space's current projection. Used by the eval suite and CLI `eval` command.
 ///
 /// For entity objects, the surface comes from the object mention. For literal
+/// Render specific statements by id as `subject predicate object` text.
+/// Used by the gate runner to score ranked items against reference answers.
+pub fn render_statements(
+    conn: &Connection,
+    space: &str,
+    ids: &[String],
+) -> Result<Vec<String>, BrainError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let mut stmt_q = conn
+        .prepare(&format!(
+            "SELECT s.id, s.predicate,
+                    COALESCE(
+                        (SELECT surface FROM entity_keys
+                          WHERE entity_id = s.subject_id ORDER BY surface LIMIT 1),
+                        s.subject_id) AS subj,
+                    COALESCE(
+                        (SELECT surface FROM entity_keys
+                          WHERE entity_id = s.object_entity ORDER BY surface LIMIT 1),
+                        s.object_entity) AS obj_entity,
+                    s.object_literal
+             FROM statements s
+            WHERE s.space_id = ?1 AND s.id IN ({placeholders})"
+        ))
+        .map_err(sql_err)?;
+    let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&space];
+    for id in ids {
+        params_vec.push(id);
+    }
+    let rows = stmt_q
+        .query_map(params_vec.as_slice(), |r| {
+            let id: String = r.get(0)?;
+            let predicate: String = r.get(1)?;
+            let subject: String = r.get(2)?;
+            let obj_entity: Option<String> = r.get(3)?;
+            let object_literal: Option<String> = r.get(4)?;
+            let object = match obj_entity {
+                Some(s) => s,
+                None => object_literal
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                    .and_then(|v| v.get("value").and_then(|v| v.as_str()).map(String::from))
+                    .unwrap_or_default(),
+            };
+            Ok(format!("{id} | {subject} {predicate} {object}"))
+        })
+        .map_err(sql_err)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
+}
+
 /// objects, it is parsed from the statement's `object_literal` JSON `value`.
 pub fn debug_triples(
     conn: &Connection,

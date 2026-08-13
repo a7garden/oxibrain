@@ -1,0 +1,7 @@
+# Knowledge update: Bob's current employer.
+
+id = "q-005"
+category = "knowledge_update"
+question = "Where does Bob work?"
+answer = "Initech"
+supporting_episodes = ["document-002"]

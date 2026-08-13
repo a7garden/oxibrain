@@ -1,0 +1,31 @@
+# Knowledge update: Carol's city changes.
+
+shape = "note"
+lang = "en"
+occurred_at = "2022-01-15"
+
+content = "Carol moved to Berlin for a new role at Hooli, working on the search team."
+
+[[entities]]
+surface = "Carol"
+type = "Person"
+
+[[entities]]
+surface = "Berlin"
+type = "Place"
+
+[[entities]]
+surface = "Hooli"
+type = "Organization"
+
+[[statements]]
+predicate = "located_in"
+subject_surface = "Carol"
+object_surface = "Berlin"
+valid_from = "2022-01-15"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Carol"
+object_surface = "Hooli"
+valid_from = "2022-01-15"

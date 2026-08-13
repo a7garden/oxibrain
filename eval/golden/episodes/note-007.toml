@@ -1,0 +1,21 @@
+# Chinese: 张伟's manager.
+
+shape = "note"
+lang = "zh"
+occurred_at = "2024-05-20"
+
+content = "张伟现在向李雷汇报工作。"
+
+[[entities]]
+surface = "张伟"
+type = "Person"
+
+[[entities]]
+surface = "李雷"
+type = "Person"
+
+[[statements]]
+predicate = "knows"
+subject_surface = "张伟"
+object_surface = "李雷"
+valid_from = "2024-05-20"

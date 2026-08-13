@@ -13,6 +13,8 @@ path = "src/main.rs"
 oxibrain.workspace = true
 oxibrain-core.workspace = true
 oxibrain-mcp.workspace = true
+oxibrain-store.workspace = true
+serde.workspace = true
 oxibrain-llm-http.workspace = true
 oxibrain-ports.workspace = true
 oxibrain-connectors.workspace = true
@@ -23,3 +25,4 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 anyhow.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+toml = "0.8"
