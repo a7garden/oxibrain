@@ -1,0 +1,27 @@
+# Golden corpus episode (shape: note) — temporal-reasoning example.
+#
+# A note written at two different times: Alice works at Acme, then moves to
+# Globex. The same predicate (works_at) holds for the same subject at different
+# intervals. A temporal-reasoning question must return the value valid at the
+# asked instant, not the latest one.
+
+shape = "note"
+lang = "en"
+occurred_at = "2023-01-15"
+
+content = "Alice started at Acme Corp today as a backend engineer. She is excited about the platform team."
+
+[[entities]]
+surface = "Alice"
+type = "Person"
+
+[[entities]]
+surface = "Acme Corp"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Alice"
+object_surface = "Acme Corp"
+valid_from = "2023-01-15"
+valid_to = "2023-06-30"

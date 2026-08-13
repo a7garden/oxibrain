@@ -1,0 +1,10 @@
+# Golden corpus question — knowledge update.
+#
+# The answer must reflect the updated belief (Globex), not the superseded one.
+# This is the category the assertion log + fold exist for.
+
+id = "q-002"
+category = "knowledge_update"
+question = "Where does Alice work now?"
+answer = "Globex"
+supporting_episodes = ["note-001", "document-001"]

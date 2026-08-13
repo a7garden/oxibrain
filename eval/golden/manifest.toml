@@ -1,0 +1,44 @@
+# Golden corpus manifest (ARCHITECTURE.md §17.1).
+#
+# The corpus that the three-arm gate (§17.2) runs on. Target is ~200 labelled
+# episodes across note / document / agent-trace shapes and ~100 questions with
+# reference answers + required supporting episodes. This manifest lists what
+# exists; the categories are the two the gate reports (c) − (b) on.
+#
+# The three gate arms:
+#   (a) full context, no retrieval   — ceiling
+#   (b) lexical + dense chunks + RRF, no knowledge graph — control
+#   (c) oxibrain complete            — treatment
+# Reported quantity: (c) − (b) per category, with tokens/query alongside.
+
+version = "0.1"
+
+[[categories]]
+name = "knowledge_update"
+description = "A later episode changes a belief; the brain must answer with the updated value."
+
+[[categories]]
+name = "temporal_reasoning"
+description = "The brain must answer what was true at a specific past instant, not now."
+
+[[episodes]]
+id = "note-001"
+shape = "note"
+lang = "en"
+file = "episodes/note-001.toml"
+
+[[episodes]]
+id = "document-001"
+shape = "document"
+lang = "en"
+file = "episodes/document-001.toml"
+
+[[questions]]
+id = "q-001"
+category = "temporal_reasoning"
+file = "questions/q-001.toml"
+
+[[questions]]
+id = "q-002"
+category = "knowledge_update"
+file = "questions/q-002.toml"

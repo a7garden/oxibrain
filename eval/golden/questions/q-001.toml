@@ -1,0 +1,11 @@
+# Golden corpus question — temporal reasoning.
+#
+# The answer must be the value valid at 2023-03-01 (Acme Corp), NOT the latest
+# value (Globex). This is the category the bi-temporal fold exists for.
+
+id = "q-001"
+category = "temporal_reasoning"
+question = "Where did Alice work on 2023-03-01?"
+as_of = "2023-03-01"
+answer = "Acme Corp"
+supporting_episodes = ["note-001"]

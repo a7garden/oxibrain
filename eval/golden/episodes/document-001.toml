@@ -1,0 +1,26 @@
+# Golden corpus episode (shape: document) — knowledge-update example.
+#
+# A later document supersedes the earlier note: Alice no longer works at Acme,
+# she works at Globex. This is the knowledge-update case: the brain must answer
+# with the updated value, and retain the superseded one only as history.
+
+shape = "document"
+lang = "en"
+occurred_at = "2023-07-01"
+
+content = "Alice's new role: she left Acme Corp and joined Globex as a staff engineer on the data platform."
+
+[[entities]]
+surface = "Alice"
+type = "Person"
+
+[[entities]]
+surface = "Globex"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Alice"
+object_surface = "Globex"
+valid_from = "2023-07-01"
+valid_to = null
