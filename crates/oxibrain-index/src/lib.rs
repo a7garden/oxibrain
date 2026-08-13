@@ -5,8 +5,10 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 pub mod rrf;
 pub mod vector;
+pub mod ngram;
 pub use rrf::{FusedItem, fuse};
 pub use vector::{TfIdfModel, TfIdfVector, cosine_sim, tokenize};
+pub use ngram::{jaccard, lsh_bands, minhash, shingles, shingle_entropy};
 pub mod adjacency;
 pub mod knn;
 pub use adjacency::{AdjacencyGraph, BfsResult, BfsSpec};
