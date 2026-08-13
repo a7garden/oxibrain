@@ -59,8 +59,7 @@ fn entity_surface(conn: &Connection, entity_id: &str) -> Result<String, BrainErr
 
 /// Drop and rebuild all FTS5 content for a space — both word and trigram
 /// indexes (§7.4). Both are always populated; no script detection, no routing.
-pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
-    conn.execute("DELETE FROM fts_word WHERE space_id = ?1", params![space])
+pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {    conn.execute("DELETE FROM fts_word WHERE space_id = ?1", params![space])
         .map_err(sql_err)?;
     conn.execute("DELETE FROM fts_ngram WHERE space_id = ?1", params![space])
         .map_err(sql_err)?;
