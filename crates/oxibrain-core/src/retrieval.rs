@@ -109,32 +109,10 @@ impl Default for TraversalSpec {
         }
     }
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PredicateFilter {
-    AllowAll,
-    Allow(Vec<String>),
-    Deny(Vec<String>),
-}
-
-impl PredicateFilter {
-    pub fn allows(&self, predicate: &str) -> bool {
-        match self {
-            PredicateFilter::AllowAll => true,
-            PredicateFilter::Allow(list) => list.iter().any(|p| p == predicate),
-            PredicateFilter::Deny(list) => !list.iter().any(|p| p == predicate),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Direction {
-    Out,
-    In,
-    Both,
-}
+// Direction and PredicateFilter now live in oxibrain-index (spec.rs) per §18
+// rule 1 (core depends on index, not the reverse). Re-exported here so
+// existing `oxibrain_core::retrieval::Direction` paths continue to work.
+pub use oxibrain_index::{Direction, PredicateFilter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

@@ -1,5 +1,5 @@
 //! Adjacency graph view over statements (subject→object edges). Pure data structure for BFS traversal.
-use oxibrain_core::retrieval::{Direction, PredicateFilter};
+use crate::spec::{Direction, PredicateFilter};
 use std::collections::{BTreeMap, BTreeSet};
 pub struct AdjacencyGraph {
     nodes: BTreeSet<String>,

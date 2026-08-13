@@ -949,11 +949,11 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "hex",
+ "oxibrain-index",
  "oxibrain-ports",
  "proptest",
  "serde",
  "serde_json",
- "strsim",
  "thiserror 1.0.69",
  "unicode-normalization",
 ]
@@ -962,8 +962,6 @@ dependencies = [
 name = "oxibrain-index"
 version = "0.1.0"
 dependencies = [
- "oxibrain-core",
- "oxibrain-ports",
  "proptest",
  "serde",
 ]

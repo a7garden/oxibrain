@@ -6,8 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-oxibrain-core.workspace = true
-oxibrain-ports.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

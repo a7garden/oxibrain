@@ -102,7 +102,8 @@ pub(crate) fn resolve_or_create(
         &normalized,
         &eref.ty,
         &candidates,
-        |_| 0.0, // M1: no graph context yet; queries handle adjacency
+        |_| 0.0, // graph context: wired, zero until M9 (F13)
+        |_| 0.0, // embedding sim: wired, zero until M7.3/M9
         &ResolutionConfig::default(),
     );
 

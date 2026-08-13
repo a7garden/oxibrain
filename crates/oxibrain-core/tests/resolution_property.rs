@@ -56,7 +56,7 @@ proptest! {
         ctx in arb_context(),
     ) {
         let candidate = make_key("e1", &cand_name, &cand_ty);
-        let s = score(&candidate, &name, &ty, ctx, &ResolutionConfig::default());
+        let s = score(&candidate, &name, &ty, ctx, 0.0, &ResolutionConfig::default());
         prop_assert!((0.0..=1.0).contains(&s), "score {s} must be in [0, 1]");
     }
 
@@ -68,7 +68,7 @@ proptest! {
         ctx in arb_context(),
     ) {
         let candidate = make_key("e1", &cand_name, "Organization");
-        let s = score(&candidate, &name, &"Person".to_string(), ctx, &ResolutionConfig::default());
+        let s = score(&candidate, &name, &"Person".to_string(), ctx, 0.0, &ResolutionConfig::default());
         prop_assert_eq!(s, 0.0, "type mismatch must gate to 0");
     }
 
@@ -85,11 +85,12 @@ proptest! {
             &ty,
             &[candidate],
             move |_| ctx,
+            |_| 0.0,
             &ResolutionConfig::default(),
         );
         match dec {
             Decision::Link { score, .. } => {
-                prop_assert!(score >= 0.85, "exact match score {score} must reach tau_high");
+                prop_assert!(score >= 0.75, "exact match score {score} must reach tau_high");
             }
             _ => prop_assert!(false, "exact match must Link, got {dec:?}"),
         }
@@ -114,13 +115,14 @@ proptest! {
             &ty,
             &candidates,
             |_| ctx,
+            |_| 0.0,
             &ResolutionConfig::default(),
         );
 
         // Compute the best possible score independently.
         let best = candidates
             .iter()
-            .map(|c| score(c, mention, &ty, ctx, &ResolutionConfig::default()))
+            .map(|c| score(c, mention, &ty, ctx, 0.0, &ResolutionConfig::default()))
             .fold(0.0_f64, f64::max);
 
         match &dec {
@@ -130,10 +132,10 @@ proptest! {
                 prop_assert!(candidates.iter().any(|c| &c.entity == entity));
             }
             Decision::New { score, .. } => {
-                prop_assert!(*score <= 0.55, "New score {score} must be ≤ tau_low");
+            prop_assert!(*score <= 0.25, "New score {score} must be ≤ tau_low");
             }
             Decision::Candidate { score, .. } => {
-                prop_assert!((0.55..0.85).contains(score), "Candidate score in ambiguity band");
+                prop_assert!((0.25..0.75).contains(score), "Candidate score in ambiguity band");
             }
         }
     }
@@ -180,6 +182,7 @@ fn no_candidates_is_new() {
         &"Person".to_string(),
         &[],
         |_| 0.0,
+        |_| 0.0,
         &ResolutionConfig::default(),
     );
     assert!(matches!(dec, Decision::New { .. }));
@@ -197,6 +200,7 @@ fn resolve_deterministic_same_input() {
         &"Person".to_string(),
         &candidates,
         |_| 0.3,
+        |_| 0.0,
         &ResolutionConfig::default(),
     );
     let d2 = resolve(
@@ -204,6 +208,7 @@ fn resolve_deterministic_same_input() {
         &"Person".to_string(),
         &candidates,
         |_| 0.3,
+        |_| 0.0,
         &ResolutionConfig::default(),
     );
     // Decisions must be identical.

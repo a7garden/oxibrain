@@ -7,13 +7,13 @@ rust-version.workspace = true
 
 [dependencies]
 oxibrain-ports.workspace = true
+oxibrain-index.workspace = true
 blake3.workspace = true
 hex.workspace = true
 unicode-normalization.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-strsim.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
