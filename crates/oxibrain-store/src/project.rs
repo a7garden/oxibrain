@@ -424,11 +424,16 @@ pub fn project_declaration(
             let obj_resolved = resolve_object(conn, space, object, &ep_id, 100, now)?;
             let stmt_id = statement_id(space, &subj_id, predicate, &obj_resolved.object);
 
-            // Set retracted_at on matching assertions.
+            // Set retracted_at on ALL matching assertions (the retract is a
+            // universal "this statement is no longer believed", not a per-
+            // episode retraction). The episode_id filter in the original
+            // M4 path caused retractions to silently no-op when the
+            // retraction episode differed from the original assertion
+            // episode (which is the common case).
             conn.execute(
                 "UPDATE assertions SET retracted_at = ?1
-                 WHERE statement_id = ?2 AND episode_id = ?3 AND retracted_at IS NULL",
-                rusqlite::params![now.millis(), stmt_id, target_ep],
+                 WHERE statement_id = ?2 AND retracted_at IS NULL",
+                rusqlite::params![now.millis(), stmt_id],
             )
             .map_err(sql_err)?;
 

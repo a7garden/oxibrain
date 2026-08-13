@@ -506,7 +506,7 @@ pub fn hybrid_query(
             })
             .collect();
         if !seeds.is_empty() {
-            let graph = load_adjacency(conn, &space)?;
+            let graph = load_adjacency(conn, &space, None, 0.0)?;
             let bfs_spec = BfsSpec {
                 start: seeds.clone(),
                 max_depth: 2,
@@ -787,29 +787,64 @@ fn fetch_facts_for_candidates(
     Ok(())
 }
 
-/// Load the entity→entity adjacency graph for a space from the statements table.
-/// Only entity-typed objects produce edges; literal-valued statements are skipped.
-pub fn load_adjacency(conn: &Connection, space: &str) -> Result<AdjacencyGraph, BrainError> {
+/// Load the entity→entity adjacency graph for a space, joined to current
+/// beliefs so retracted and contradicted edges are excluded (F11, DESIGN §11.5).
+/// Honors `valid_at` (sentinel-safe) and `min_confidence` from the spec.
+/// A statement with no belief row is treated as `Active` at confidence 1.0
+/// (the "declaration" path always produces a belief; legacy data may not).
+pub fn load_adjacency(
+    conn: &Connection,
+    space: &str,
+    valid_at: Option<Timestamp>,
+    min_confidence: f32,
+) -> Result<AdjacencyGraph, BrainError> {
     let mut graph = AdjacencyGraph::new();
-    let mut stmt = conn
-        .prepare(
-            "SELECT subject_id, object_entity, predicate, id
-             FROM statements
-             WHERE space_id = ?1 AND object_entity IS NOT NULL",
-        )
-        .map_err(sql_err)?;
-    let rows = stmt
-        .query_map(params![space], |r| {
+    // Build the WHERE clause dynamically so we only bind the parameters
+    let mut sql = String::from(
+        "SELECT s.subject_id, s.object_entity, s.predicate, s.id, b.confidence
+         FROM statements s
+         INNER JOIN beliefs b ON b.statement_id = s.id
+         WHERE s.space_id = ?1
+           AND s.object_entity IS NOT NULL
+           AND b.status IN ('active', 'superseded')
+           AND b.confidence >= ?2",
+    );
+    if valid_at.is_some() {
+
+        sql.push_str(" AND (b.valid_from IS NULL OR b.valid_from <= ?3) AND (b.valid_to IS NULL OR b.valid_to >= ?3)");
+    }
+    let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+    let rows = if let Some(t) = valid_at {
+        stmt.query_map(params![space, min_confidence, t.0], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
+                r.get::<_, f64>(4).unwrap_or(1.0),
             ))
         })
-        .map_err(sql_err)?;
+        .map_err(sql_err)?
+        .collect::<Vec<_>>()
+    } else {
+        stmt.query_map(params![space, min_confidence], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, f64>(4).unwrap_or(1.0),
+            ))
+        })
+        .map_err(sql_err)?
+        .collect::<Vec<_>>()
+    };
     for row in rows {
-        let (subj, obj, pred, id) = row.map_err(sql_err)?;
+        let r = row.map_err(sql_err)?;
+        let subj = r.0;
+        let obj = r.1;
+        let pred = r.2;
+        let id = r.3;
         graph.add_edge(&subj, &obj, &pred, &id);
     }
     Ok(graph)
@@ -822,7 +857,7 @@ pub fn traverse(
     space: &str,
     spec: &TraversalSpec,
 ) -> Result<TraversalResult, BrainError> {
-    let graph = load_adjacency(conn, space)?;
+    let graph = load_adjacency(conn, space, spec.valid_at, spec.min_confidence)?;
     let bfs_spec = BfsSpec {
         start: spec.start.clone(),
         max_depth: spec.max_depth,

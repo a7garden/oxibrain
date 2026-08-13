@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 /// Rebuild community assignments for a space. Deterministic.
 pub fn rebuild_communities(conn: &Connection, space: &str) -> Result<(), BrainError> {
-    let graph = load_adjacency(conn, space)?;
+    let graph = load_adjacency(conn, space, None, 0.0)?;
     let map = label_propagation(&graph, 10);
     // Clear and repopulate the communities table.
     conn.execute(
