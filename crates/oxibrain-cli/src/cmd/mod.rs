@@ -11,6 +11,7 @@ pub mod import_oxios;
 pub mod ingest;
 pub mod init;
 pub mod llm;
+pub mod model;
 pub mod predicate;
 pub mod redact;
 pub mod reextract;

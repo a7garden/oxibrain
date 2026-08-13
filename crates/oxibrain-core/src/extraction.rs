@@ -26,6 +26,11 @@ pub struct ExtractorConfig {
     pub registry_major: u32,
     pub mechanism: ExtractMechanism,
     pub max_tokens: u32,
+    /// blake3 hex digest of the model weights. Changing weights must change
+    /// the extractor id (§9.5) — a silent quality change would poison the
+    /// extraction cache.
+    #[serde(default)]
+    pub model_digest: Option<String>,
 }
 
 /// How structured output is enforced (§7.4). Recorded in the ExtractorId hash.
@@ -41,14 +46,18 @@ pub enum ExtractMechanism {
 }
 
 impl ExtractorConfig {
-    /// ExtractorId = blake3(model_id, prompt_version, registry_major, mechanism).
+    /// ExtractorId = blake3(model_id, prompt_version, registry_major, mechanism[, model_digest]).
     /// Only the MAJOR registry version invalidates the cache (D8).
+    /// The model digest — when present — invalidates it on weight changes (§9.5).
     pub fn id(&self) -> String {
         let mut hasher = blake3::Hasher::new();
         hasher.update(self.model_id.as_bytes());
         hasher.update(&self.prompt_version.to_le_bytes());
         hasher.update(&self.registry_major.to_le_bytes());
         hasher.update(&[self.mechanism as u8]);
+        if let Some(digest) = &self.model_digest {
+            hasher.update(digest.as_bytes());
+        }
         hex::encode(hasher.finalize().as_bytes())
     }
 }
@@ -564,6 +573,7 @@ mod tests {
             registry_major: 1,
             mechanism: ExtractMechanism::ToolCall,
             max_tokens: 8192,
+            model_digest: None,
         };
         assert_eq!(c.id(), c.id());
     }
@@ -576,6 +586,7 @@ mod tests {
             registry_major: 1,
             mechanism: ExtractMechanism::JsonSchema,
             max_tokens: 4096,
+            model_digest: None,
         };
         let diff = ExtractorConfig {
             model_id: "b".into(),
@@ -592,6 +603,7 @@ mod tests {
             registry_major: 1,
             mechanism: ExtractMechanism::JsonSchema,
             max_tokens: 4096,
+            model_digest: None,
         };
         let diff = ExtractorConfig {
             mechanism: ExtractMechanism::ToolCall,
@@ -608,12 +620,43 @@ mod tests {
             registry_major: 1,
             mechanism: ExtractMechanism::JsonSchema,
             max_tokens: 4096,
+            model_digest: None,
         };
         let diff = ExtractorConfig {
             registry_major: 2,
             ..base.clone()
         };
         assert_ne!(base.id(), diff.id());
+    }
+
+    #[test]
+    fn extractor_id_changes_with_digest() {
+        // §9.5: changing model weights must change the extractor id, or a
+        // silent quality change would poison the extraction cache.
+        let base = ExtractorConfig {
+            model_id: "qwen2.5-1.5b".into(),
+            prompt_version: 1,
+            registry_major: 1,
+            mechanism: ExtractMechanism::JsonSchema,
+            max_tokens: 8192,
+            model_digest: Some("abc123".into()),
+        };
+        let diff = ExtractorConfig {
+            model_digest: Some("def456".into()),
+            ..base.clone()
+        };
+        assert_ne!(
+            base.id(),
+            diff.id(),
+            "weight change must invalidate ExtractorId"
+        );
+
+        // A missing digest must also differ (opt-in digest changes the id).
+        let nodigest = ExtractorConfig {
+            model_digest: None,
+            ..base.clone()
+        };
+        assert_ne!(base.id(), nodigest.id());
     }
 
     #[test]

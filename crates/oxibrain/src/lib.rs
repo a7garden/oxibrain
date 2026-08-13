@@ -4,6 +4,7 @@
 
 mod compat;
 pub mod config;
+pub mod models;
 
 pub use config::BrainConfig;
 pub use oxibrain_core::security::{

@@ -15,8 +15,14 @@ oxibrain-store.workspace = true
 oxibrain-ports.workspace = true
 oxibrain-llm-http = { workspace = true, optional = true }
 tokio.workspace = true
+tokio-stream = "0.1"
 thiserror.workspace = true
 serde_json.workspace = true
+blake3.workspace = true
+hex.workspace = true
+serde.workspace = true
+toml = "0.8"
+reqwest.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

@@ -79,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
             cmd::extract::run(&dir, &episode_id, &space).await
         }
         Command::Reextract { space } => cmd::reextract::run(&dir, &space).await,
+        Command::Model { command } => cmd::model::run(&command).await,
         Command::Eval { suite } => cmd::eval::run(&suite).await,
     }
 }

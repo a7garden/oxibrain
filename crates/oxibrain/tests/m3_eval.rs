@@ -63,6 +63,7 @@ fn test_extractor() -> ExtractorConfig {
         registry_major: 1,
         mechanism: ExtractMechanism::JsonSchema,
         max_tokens: 4096,
+        model_digest: None,
     }
 }
 

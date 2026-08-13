@@ -63,5 +63,6 @@ pub fn config(
         registry_major: CORE_V1_MAJOR,
         mechanism,
         max_tokens: 8192,
+        model_digest: None,
     }
 }

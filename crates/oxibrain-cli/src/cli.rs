@@ -140,6 +140,11 @@ pub enum Command {
         #[arg(long, default_value = "personal")]
         space: String,
     },
+    /// Model artifact management (§8.4: `model list|pull|verify|use`).
+    Model {
+        #[command(subcommand)]
+        command: ModelCmd,
+    },
 
     /// Run the extraction evaluation suite (DESIGN §14.2).
     Eval {
@@ -150,6 +155,24 @@ pub enum Command {
 }
 
 // ── Nested subcommand groups (DESIGN §12.4) ────────────────────────────────
+
+#[derive(Subcommand, Debug)]
+pub enum ModelCmd {
+    /// List installed models and their verification status.
+    List,
+    /// Download the default model set (or a named model).
+    Pull {
+        /// Model name or file. Omit to pull the whole default set.
+        name: Option<String>,
+    },
+    /// Re-hash installed models against the manifest.
+    Verify {
+        /// Model name. Omit to verify all.
+        name: Option<String>,
+    },
+    /// Resolve the active model for extraction (prints path + digest).
+    Use { name: String },
+}
 
 #[derive(Subcommand, Debug)]
 pub enum TokenCmd {

@@ -343,6 +343,7 @@ impl BrainServer {
             registry_major: oxibrain_core::registry::CORE_V1_MAJOR,
             mechanism: oxibrain_core::extraction::ExtractMechanism::ToolCall,
             max_tokens: 8192,
+            model_digest: None,
         };
         match self
             .brain
