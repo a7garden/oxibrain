@@ -17,9 +17,12 @@ use oxibrain_core::knowledge::{
 };
 use oxibrain_core::resolution::{self, ResolutionConfig};
 use oxibrain_core::{EpisodeKind, SourceRef};
+use oxibrain_index::ngram;
+use oxibrain_index::{BlockingConfig, LshIndex};
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// A reference to an entity by surface form + type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,8 +88,6 @@ pub fn parse_declaration(content: &str) -> Result<Declaration, BrainError> {
         .map_err(|e| BrainError::Invalid(format!("declaration parse: {e}")))
 }
 
-/// Resolve or create an entity from a surface form + type.
-/// Returns (entity_id, mention_method).
 pub(crate) fn resolve_or_create(
     conn: &Connection,
     space: &str,
@@ -94,16 +95,26 @@ pub(crate) fn resolve_or_create(
     episode_id: &str,
     span_start: u32,
     now: Timestamp,
+    context: &[String],
 ) -> Result<(String, ResolutionMethod), BrainError> {
     let normalized = resolution::normalize(&eref.surface, &eref.ty);
-    let candidates = kcrud::find_keys_for_type(conn, space, &eref.ty)?;
+    let all_keys = kcrud::find_keys_for_type(conn, space, &eref.ty)?;
+    // M9 §10.1: block via MinHash/LSH over 3-gram shingles + entropy gate, plus
+    // exact key hits. Sublinear candidate generation instead of a full scan.
+    let candidates = block_candidates(&all_keys, &normalized);
+
+    // Precompute context neighbours once, outside the per-candidate closure.
+    let context_neighbors: Vec<BTreeSet<String>> = context
+        .iter()
+        .map(|c| neighbor_set(conn, space, c))
+        .collect();
 
     let decision = resolution::resolve(
         &normalized,
         &eref.ty,
         &candidates,
-        |_| 0.0, // graph context: wired, zero until M9 (F13)
-        |_| 0.0, // embedding sim: wired, zero until M7.3/M9
+        |candidate| graph_context(conn, space, candidate, &context_neighbors),
+        |candidate| embedding_sim(conn, candidate),
         &ResolutionConfig::default(),
     );
 
@@ -191,6 +202,90 @@ pub(crate) fn resolve_or_create(
     }
 }
 
+/// M9 §10.1 candidate blocking: exact key hits plus MinHash/LSH candidates over
+/// 3-gram shingles, gated on shingle entropy. Low-entropy surfaces (short or
+/// repetitive) skip the fuzzy path — they only match exactly.
+fn block_candidates(all_keys: &[EntityKey], normalized: &str) -> Vec<EntityKey> {
+    let config = BlockingConfig::default();
+    let mention_shingles = ngram::shingles(normalized, 3);
+    let shingle_sets: Vec<BTreeSet<String>> = all_keys
+        .iter()
+        .map(|k| ngram::shingles(&k.normalized, 3))
+        .collect();
+    let index = LshIndex::build(&shingle_sets, &config);
+    let mut idxs: BTreeSet<usize> = index
+        .candidates(&mention_shingles, config.min_entropy)
+        .into_iter()
+        .collect();
+    // Exact hits always pass the block, regardless of entropy.
+    for (i, k) in all_keys.iter().enumerate() {
+        if k.normalized == normalized {
+            idxs.insert(i);
+        }
+    }
+    idxs.into_iter().map(|i| all_keys[i].clone()).collect()
+}
+
+/// The set of entities sharing a statement with `entity_id` (as subject or
+/// object) — the adjacency used for graph-context overlap (§10.2).
+fn neighbor_set(conn: &Connection, space: &str, entity_id: &str) -> BTreeSet<String> {
+    let mut set = BTreeSet::new();
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT subject_id, object_entity FROM statements
+          WHERE space_id = ?1 AND (subject_id = ?2 OR object_entity = ?2)",
+    ) else {
+        return set;
+    };
+    let Ok(rows) = stmt.query_map(rusqlite::params![space, entity_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+    }) else {
+        return set;
+    };
+    for row in rows.flatten() {
+        let (subject, object) = row;
+        if subject == entity_id {
+            if let Some(obj) = object {
+                set.insert(obj);
+            }
+        } else if object.as_deref() == Some(entity_id) {
+            set.insert(subject);
+        }
+    }
+    set
+}
+
+/// Graph-context overlap (§10.2): mean Jaccard similarity between the
+/// candidate's neighbours and each context entity's neighbours. Non-zero when
+/// a co-occurring entity shares neighbours with the candidate.
+fn graph_context(
+    conn: &Connection,
+    space: &str,
+    candidate: &str,
+    context_neighbors: &[BTreeSet<String>],
+) -> f64 {
+    if context_neighbors.is_empty() {
+        return 0.0;
+    }
+    let cn = neighbor_set(conn, space, candidate);
+    let mut sum = 0.0;
+    for ctx in context_neighbors {
+        let intersection = cn.intersection(ctx).count();
+        let union = cn.len() + ctx.len() - intersection;
+        if union > 0 {
+            sum += intersection as f64 / union as f64;
+        }
+    }
+    sum / context_neighbors.len() as f64
+}
+
+/// Embedding similarity (§10.3) for a candidate entity. Resolution runs during
+/// projection, before dense embeddings are computed (they are applied
+/// post-projection via `embed_entities`), so this is zero here — but the caller
+/// passes a real value rather than hardcoding it (that is how F13 happened).
+fn embedding_sim(_conn: &Connection, _candidate: &str) -> f64 {
+    0.0
+}
+
 /// Convert a DeclObject to an Object, resolving entity refs.
 /// Result of resolving a declaration object: the Object plus the surface/method
 /// needed to capture the object mention (entity objects only).
@@ -209,6 +304,7 @@ fn resolve_object(
     episode_id: &str,
     span_start: u32,
     now: Timestamp,
+    context: &[String],
 ) -> Result<ResolvedObject, BrainError> {
     match obj {
         DeclObject::Entity { surface, ty } => {
@@ -216,7 +312,8 @@ fn resolve_object(
                 surface: surface.clone(),
                 ty: ty.clone(),
             };
-            let (eid, method) = resolve_or_create(conn, space, &eref, episode_id, span_start, now)?;
+            let (eid, method) =
+                resolve_or_create(conn, space, &eref, episode_id, span_start, now, context)?;
             Ok(ResolvedObject {
                 object: Object::Entity(eid.clone()),
                 entity: Some((eid, method)),
@@ -313,10 +410,12 @@ pub fn project_declaration(
             };
 
             // Resolve subject entity.
-            let (subj_id, subj_method) = resolve_or_create(conn, space, subject, &ep_id, 0, now)?;
+            let (subj_id, subj_method) =
+                resolve_or_create(conn, space, subject, &ep_id, 0, now, &[])?;
 
-            // Resolve object.
-            let obj_resolved = resolve_object(conn, space, object, &ep_id, 100, now)?;
+            // Resolve object with the subject as graph context (§10.2).
+            let obj_resolved =
+                resolve_object(conn, space, object, &ep_id, 100, now, &[subj_id.clone()])?;
 
             // Create statement (idempotent).
             let subj_for_hash = &subj_id;
@@ -394,8 +493,9 @@ pub fn project_declaration(
             kcrud::replace_beliefs(conn, &group_stmt_ids, &beliefs)?;
         }
         Declaration::Merge { loser, winner } => {
-            let (loser_id, _) = resolve_or_create(conn, space, loser, &ep_id, 0, now)?;
-            let (winner_id, _) = resolve_or_create(conn, space, winner, &ep_id, 200, now)?;
+            let (loser_id, _) = resolve_or_create(conn, space, loser, &ep_id, 0, now, &[])?;
+            let (winner_id, _) =
+                resolve_or_create(conn, space, winner, &ep_id, 200, now, &[loser_id.clone()])?;
 
             let merge_id = oxibrain_core::id::entity_merge_id(&loser_id, &winner_id, &ep_id);
             kcrud::insert_merge(
@@ -420,8 +520,9 @@ pub fn project_declaration(
             episode: _target_ep,
         } => {
             // Resolve the statement to retract.
-            let (subj_id, _) = resolve_or_create(conn, space, subject, &ep_id, 0, now)?;
-            let obj_resolved = resolve_object(conn, space, object, &ep_id, 100, now)?;
+            let (subj_id, _) = resolve_or_create(conn, space, subject, &ep_id, 0, now, &[])?;
+            let obj_resolved =
+                resolve_object(conn, space, object, &ep_id, 100, now, &[subj_id.clone()])?;
             let stmt_id = statement_id(space, &subj_id, predicate, &obj_resolved.object);
 
             // Set retracted_at on ALL matching assertions (the retract is a

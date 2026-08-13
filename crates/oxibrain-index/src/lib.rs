@@ -4,6 +4,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 pub mod adjacency;
+pub mod blocking;
 pub mod community;
 pub mod knn;
 pub mod ngram;
@@ -12,6 +13,7 @@ pub mod rrf;
 pub mod spec;
 pub mod vector;
 pub use adjacency::{AdjacencyGraph, BfsResult, BfsSpec};
+pub use blocking::{BlockingConfig, LshIndex, entropy_gate};
 pub use community::{CommunityMap, label_propagation};
 pub use knn::KnnIndex;
 pub use ngram::{jaccard, lsh_bands, minhash, shingle_entropy, shingles};

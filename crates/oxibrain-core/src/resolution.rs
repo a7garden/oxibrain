@@ -78,8 +78,17 @@ impl Default for ResolutionConfig {
             w_exact: 1.0,
             w_ngram: 1.0,
             w_graph: 0.4,
-            // Embeddings unavailable until M7.3; default zero.
-            w_embedding: PerType::new(0.0),
+            // Embeddings are a secondary signal for names (§10.3): low for
+            // Person/Organization (names are literal), higher for Concept
+            // (paraphrase is normal). The signal itself comes from the caller
+            // and is zero until embeddings are available at resolution time.
+            w_embedding: {
+                let mut w = PerType::new(0.3);
+                w.set("Person", 0.1);
+                w.set("Organization", 0.1);
+                w.set("Concept", 0.6);
+                w
+            },
         }
     }
 }

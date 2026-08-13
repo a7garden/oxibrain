@@ -316,6 +316,7 @@ pub fn project_extraction(
             episode_id,
             claim.subject.span.0,
             now,
+            &[],
         )?;
 
         // Resolve object.
@@ -432,7 +433,7 @@ fn resolve_claim_object(
                 ty: mention.entity_type.clone(),
             };
             let (eid, method) =
-                resolve_or_create(conn, space, &eref, episode_id, mention.span.0, now)?;
+                resolve_or_create(conn, space, &eref, episode_id, mention.span.0, now, &[])?;
             Ok(ResolvedClaimObject {
                 object: Object::Entity(eid.clone()),
                 entity: Some((eid, method, mention.surface.clone(), mention.span)),
