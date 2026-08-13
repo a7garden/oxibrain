@@ -55,7 +55,8 @@ fn _check_methods(_brain: &Brain) {
     let _ = Brain::apply_decay;
     let _ = Brain::compact;
     let _ = Brain::community_members;
-    let _ = Brain::snapshot_indexes;
+    let _ = Brain::snapshot_truth;
+    let _ = Brain::snapshot_ranking;
 
     // Extraction
     let _ = Brain::extract_one;

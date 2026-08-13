@@ -87,30 +87,37 @@ async fn index_rebuild_is_deterministic() {
         .await
         .expect("rebuild_communities");
 
-    // Snapshot index tables after incremental projection.
-    let snapshot1 = brain.snapshot_indexes(&space).await.expect("snapshot1");
+    // Snapshot the truth half after incremental projection (P1: byte-identical).
+    let truth1 = brain.snapshot_truth(&space).await.expect("truth1");
     assert!(
-        !snapshot1.is_empty(),
-        "index snapshot must be non-empty after declares — projection or rebuild is broken"
+        !truth1.is_empty(),
+        "truth snapshot must be non-empty after declares"
     );
     assert!(
-        snapshot1.contains("---fts_word---"),
-        "snapshot missing word-fts section: {snapshot1}"
+        truth1.contains("---entities---"),
+        "truth snapshot missing entities section"
     );
     assert!(
-        snapshot1.contains("---fts_ngram---"),
-        "snapshot missing ngram-fts section: {snapshot1}"
+        truth1.contains("---statements---"),
+        "truth snapshot missing statements section"
     );
     assert!(
-        snapshot1.contains("---vec---"),
-        "snapshot missing vec section: {snapshot1}"
-    );
-    assert!(
-        snapshot1.contains("---com---"),
-        "snapshot missing com section: {snapshot1}"
+        truth1.contains("---beliefs---"),
+        "truth snapshot missing beliefs section"
     );
 
-    // Reproject — must rebuild the same index state byte-for-byte.
+    // Snapshot the ranking half (equivalent contract, currently deterministic).
+    let ranking1 = brain.snapshot_ranking(&space).await.expect("ranking1");
+    assert!(
+        ranking1.contains("---fts_word---"),
+        "ranking snapshot missing fts_word section"
+    );
+    assert!(
+        ranking1.contains("---vectors---"),
+        "ranking snapshot missing vectors section"
+    );
+
+    // Reproject — must rebuild the same state byte-for-byte.
     brain.reproject().await.expect("reproject");
 
     // Confirm the projection is still consistent (Alice still resolves).
@@ -124,9 +131,14 @@ async fn index_rebuild_is_deterministic() {
         "entity ids must survive reproject"
     );
 
-    let snapshot2 = brain.snapshot_indexes(&space).await.expect("snapshot2");
+    let truth2 = brain.snapshot_truth(&space).await.expect("truth2");
     assert_eq!(
-        snapshot1, snapshot2,
-        "index tables must be byte-identical after reproject"
+        truth1, truth2,
+        "truth half must be byte-identical after reproject"
+    );
+    let ranking2 = brain.snapshot_ranking(&space).await.expect("ranking2");
+    assert_eq!(
+        ranking1, ranking2,
+        "ranking half must be equivalent after reproject"
     );
 }
