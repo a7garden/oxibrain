@@ -1666,6 +1666,63 @@ mod tests {
         assert_eq!(resp["error"]["code"], INVALID_PARAMS);
     }
 
+    /// M8 §3.2: a v1.0-schema client works unmodified. The search schema
+    /// gained as_of/known_at/min_confidence (F29) — all additive. A client
+    /// that sends ONLY the original fields (query, mode, limit) must get a
+    /// success, not a schema error.
+    #[tokio::test]
+    async fn v1_0_schema_client_search_still_works() {
+        let (_dir, server) = fresh_server().await;
+
+        // Declare so the query has something to index, then index it.
+        let decl = json!({
+            "op": "add_statement",
+            "subject": { "surface": "Alice", "type": "Person" },
+            "predicate": "employed_by",
+            "object": { "kind": "entity", "surface": "Acme Corp", "type": "Organization" },
+            "polarity": "affirm",
+            "valid_from": 1_000,
+            "valid_to": TIME_MAX.0
+        });
+        let _resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({"name":"declare","arguments":{"declaration_json": decl}})),
+            ))
+            .await
+            .unwrap();
+
+        // v1.0 client: search with ONLY the original fields.
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "search",
+                    "arguments": { "query": "Alice" }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            resp.get("error").is_none(),
+            "v1.0 client search must succeed, got {:?}",
+            resp.get("error")
+        );
+        // The result is the MCP text-content shape; the JSON ranking result
+        // is the text payload.
+        let result = resp["result"]["content"][0]["text"]
+            .as_str()
+            .expect("result text payload");
+        let parsed: serde_json::Value = serde_json::from_str(result).unwrap();
+        assert!(
+            parsed["items"].is_array(),
+            "items must be an array, got {:?}",
+            parsed
+        );
+    }
+
     #[tokio::test]
     async fn declare_then_get_entity_round_trip() {
         let (_dir, server) = fresh_server().await;
