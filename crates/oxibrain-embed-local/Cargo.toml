@@ -14,3 +14,5 @@ tracing.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio.workspace = true
+toml = "0.8"
+serde = { workspace = true, features = ["derive"] }

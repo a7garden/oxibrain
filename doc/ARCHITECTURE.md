@@ -384,10 +384,24 @@ The distinction that matters is **what it costs to lose each one**.
 | **Truth** | **byte-identical** | `reproject_determinism` over `snapshot_truth` — the highest-value test in the suite, never disabled |
 | **Ranking** | **equivalent**: identical membership, and retrieval recall@10 within tolerance on a fixed probe set across backends | `ranking_equivalence` over `snapshot_ranking` |
 
-**The tolerance is calibrated, not guessed.** It is set in M7 from the measured cross-backend
-variance of the shipped quantized encoder (CPU vs. Metal on the probe set), as
-`max(2pp, 2 × observed_variance)`, and recorded here with its measurement. A number invented
+**The tolerance is calibrated, not guessed.** It is set from the measured cross-backend variance
+of the shipped quantized encoder (CPU vs. Metal on the probe set), as
+`max(2pp, 2 × observed_max_delta)`, and recorded here with its measurement. A number invented
 before measurement is a guess; the same mistake §17.2 calls out for quality targets.
+
+| Field | Value |
+|---|---|
+| Measured | 2026-08-13, Apple M4 · `bge-m3-Q4_K_M.gguf` |
+| Probe set | `eval/probes/probes.toml` — 39 entities × 20 queries across Latin, Hangul, Han, Kana, Arabic, Thai (§7.8) |
+| Recall@10, CPU (`n_gpu_layers=0`) | **1.0000** (10 runs) |
+| Recall@10, Metal (`n_gpu_layers=all`) | **1.0000** (10 runs) |
+| Observed max delta | **0.00pp** |
+| **Tolerance** | `max(2pp, 2 × 0.00pp)` = **2pp** |
+
+Runner: `crates/oxibrain-embed-local/tests/ranking_equivalence.rs`
+(`cargo test -p oxibrain-embed-local --test ranking_equivalence -- --ignored`). The floor of 2pp
+applies because the two backends are indistinguishable on this probe set — the delta is exactly
+zero, so the tolerance is the `2pp` floor, not a multiple of a nonzero variance.
 
 Model weights are Cache-zone (§8.4): expensive to reproduce, cheap to re-fetch, never
 irreplaceable.

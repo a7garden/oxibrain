@@ -1,0 +1,246 @@
+# §5.1 ranking-tolerance probe set (ARCHITECTURE.md §5.1, §7.8).
+#
+# A fixed probe set used to CALIBRATE the ranking-half tolerance from the
+# measured cross-backend variance of the shipped quantized encoder
+# (CPU vs. Metal, recall@10). The tolerance is `max(2pp, 2 × observed_max_delta)`.
+#
+# IMPORTANT: this file is the measurement fixture. Do not edit it after the
+# tolerance is recorded — editing changes the measurement. The entities span
+# the writing-system property classes of §7.8 (Latin, Hangul, Han, Kana, Arabic,
+# Thai) so the encoder is exercised across scripts, not just English.
+#
+# Entities are retrieved by embedding their `text`; queries are embedded and
+# ranked against the entities by cosine similarity. Each query declares the
+# entity ids that are ground-truth relevant, so recall@10 is well-defined.
+
+[[entities]]
+id = "ent_paris"
+text = "Paris is the capital city of France, famous for the Eiffel Tower and the Louvre."
+
+[[entities]]
+id = "ent_tokyo"
+text = "Tokyo is the capital of Japan and the most populous metropolitan area in the world."
+
+[[entities]]
+id = "ent_berlin"
+text = "Berlin is the capital of Germany, divided by a wall for much of the twentieth century."
+
+[[entities]]
+id = "ent_ada"
+text = "Ada Lovelace wrote the first algorithm intended for a programmable machine."
+
+[[entities]]
+id = "ent_turing"
+text = "Alan Turing formalized computation with the Turing machine and helped break Enigma."
+
+[[entities]]
+id = "ent_newton"
+text = "Isaac Newton formulated the laws of motion and universal gravitation."
+
+[[entities]]
+id = "ent_coffee"
+text = "Coffee is a brewed beverage made from roasted coffee beans, popular worldwide."
+
+[[entities]]
+id = "ent_quantum"
+text = "Quantum entanglement is a physical phenomenon where particles share correlated states."
+
+[[entities]]
+id = "ent_madrid"
+text = "Madrid es la capital de España y sede del museo del Prado."
+
+[[entities]]
+id = "ent_barcelona"
+text = "Barcelona es una ciudad de Cataluña famosa por la arquitectura de Gaudí."
+
+[[entities]]
+id = "ent_paella"
+text = "La paella es un plato de arroz tradicional de la región de Valencia."
+
+[[entities]]
+id = "ent_marquez"
+text = "Gabriel García Márquez escribió Cien años de soledad, novela del realismo mágico."
+
+[[entities]]
+id = "ent_seoul"
+text = "서울은 대한민국의 수도이며 한강이 도시를 가로지른다."
+
+[[entities]]
+id = "ent_kimchi"
+text = "김치는 배추와 고춧가루로 만드는 한국의 발효 음식이다."
+
+[[entities]]
+id = "ent_sejong"
+text = "세종대왕은 한글을 창제한 조선의 임금이다."
+
+[[entities]]
+id = "ent_samsung"
+text = "삼성전자는 반도체와 전자제품을 만드는 한국의 기업이다."
+
+[[entities]]
+id = "ent_tokyo_ja"
+text = "東京は日本の首都であり、世界最大級の都市圏を持つ。"
+
+[[entities]]
+id = "ent_sushi"
+text = "寿司は酢飯と魚介類を組み合わせた日本料理である。"
+
+[[entities]]
+id = "ent_kyoto"
+text = "京都は日本のかつての都で、多くの寺社と古い街並みで知られる。"
+
+[[entities]]
+id = "ent_fuji"
+text = "富士山は日本で最も高い山であり、象徴的な成層火山である。"
+
+[[entities]]
+id = "ent_beijing"
+text = "北京是中国的首都，拥有故宫和长城等历史遗迹。"
+
+[[entities]]
+id = "ent_shanghai"
+text = "上海是中国最大的城市之一，是重要的金融和贸易中心。"
+
+[[entities]]
+id = "ent_great_wall"
+text = "长城是中国古代的军事防御建筑，绵延数千公里。"
+
+[[entities]]
+id = "ent_tea"
+text = "茶是中国传统饮料，由茶叶冲泡而成。"
+
+[[entities]]
+id = "ent_cairo"
+text = "القاهرة هي عاصمة مصر وأكبر مدينة في العالم العربي."
+
+[[entities]]
+id = "ent_riyadh"
+text = "الرياض هي عاصمة المملكة العربية السعودية."
+
+[[entities]]
+id = "ent_falafel"
+text = "الفلافل طعام شرق أوسطي مصنوع من الحمص المطحون."
+
+[[entities]]
+id = "ent_sina"
+text = "ابن سينا طبيب وفيلسوف فارسي كتب القانون في الطب."
+
+[[entities]]
+id = "ent_bangkok"
+text = "กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทยและมีประชากรมากที่สุด."
+
+[[entities]]
+id = "ent_tomyum"
+text = "ต้มยำกุ้งเป็นอาหารไทยรสเปรี้ยวเผ็ดที่ทำจากกุ้งและสมุนไพร."
+
+[[entities]]
+id = "ent_phuket"
+text = "ภูเก็ตเป็นเกาะทางตอนใต้ของประเทศไทยและเป็นแหล่งท่องเที่ยว."
+
+[[entities]]
+id = "ent_thai_lang"
+text = "ภาษาไทยเป็นภาษาราชการของประเทศไทยและมีวรรณยุกต์ห้าเสียง."
+
+[[entities]]
+id = "ent_photosynthesis"
+text = "Photosynthesis is the process by which plants convert sunlight into chemical energy."
+
+[[entities]]
+id = "ent_dna"
+text = "DNA is the molecule that carries genetic instructions in living organisms."
+
+[[entities]]
+id = "ent_beethoven"
+text = "Ludwig van Beethoven composed nine symphonies and lost his hearing."
+
+[[entities]]
+id = "ent_picasso"
+text = "Pablo Picasso co-founded Cubism and painted Guernica."
+
+[[entities]]
+id = "ent_amazon"
+text = "The Amazon rainforest is the largest tropical rainforest, spanning several countries."
+
+[[entities]]
+id = "ent_sahara"
+text = "The Sahara is the largest hot desert in the world, located in North Africa."
+
+[[queries]]
+text = "What is the capital of France?"
+relevant = ["ent_paris"]
+
+[[queries]]
+text = "Which city is the capital of Japan?"
+relevant = ["ent_tokyo"]
+
+[[queries]]
+text = "Who wrote the first algorithm for a computer?"
+relevant = ["ent_ada"]
+
+[[queries]]
+text = "Who is famous for the law of gravity?"
+relevant = ["ent_newton"]
+
+[[queries]]
+text = "한국의 발효 음식은 무엇인가요?"
+relevant = ["ent_kimchi"]
+
+[[queries]]
+text = "한글을 만든 사람은 누구인가요?"
+relevant = ["ent_sejong"]
+
+[[queries]]
+text = "대한민국의 수도는 어디인가요?"
+relevant = ["ent_seoul"]
+
+[[queries]]
+text = "반도체를 만드는 한국 기업은 어디인가요?"
+relevant = ["ent_samsung"]
+
+[[queries]]
+text = "¿Cuál es la capital de España?"
+relevant = ["ent_madrid"]
+
+[[queries]]
+text = "¿Quién escribió Cien años de soledad?"
+relevant = ["ent_marquez"]
+
+[[queries]]
+text = "ما هي عاصمة مصر؟"
+relevant = ["ent_cairo"]
+
+[[queries]]
+text = "ما هي عاصمة المملكة العربية السعودية؟"
+relevant = ["ent_riyadh"]
+
+[[queries]]
+text = "เมืองหลวงของประเทศไทยคือเมืองใด"
+relevant = ["ent_bangkok"]
+
+[[queries]]
+text = "อาหารไทยที่ทำจากกุ้งคืออะไร"
+relevant = ["ent_tomyum"]
+
+[[queries]]
+text = "中国的首都是哪里？"
+relevant = ["ent_beijing"]
+
+[[queries]]
+text = "长城位于哪个国家？"
+relevant = ["ent_great_wall"]
+
+[[queries]]
+text = "富士山はどこにありますか？"
+relevant = ["ent_fuji"]
+
+[[queries]]
+text = "日本の古都として有名な都市はどこですか？"
+relevant = ["ent_kyoto"]
+
+[[queries]]
+text = "What process do plants use to make energy from sunlight?"
+relevant = ["ent_photosynthesis"]
+
+[[queries]]
+text = "Who composed nine symphonies and went deaf?"
+relevant = ["ent_beethoven"]
