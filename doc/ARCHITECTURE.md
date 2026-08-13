@@ -2045,21 +2045,21 @@ verified by file and line; F22–F26 by compiling and running the code, the rest
 | F11 | traversal filters ignored; adjacency from `statements`, not `beliefs` | `store/query.rs` | M8 |
 | F12 | no blocking; full type scan per mention | `store/knowledge.rs:165` | M9 |
 | F13 | `graph_context` hardcoded `0.0` | `store/project.rs:105` | M9 |
-| F14 | `w_alias` dead field | `core/resolution.rs` | M7 |
+| ~~F14~~ | ~~`w_alias` dead field~~ — removed, replaced by `w_ngram` | `core/resolution.rs` | ✅ M7 |
 | F15 | **no `EmbeddingPort` implementation exists** | workspace-wide | M7 |
 | F16 | dense search branch is a comment | `store/query.rs:278` | M7 |
 | F17 | `upsert_vector` has no production caller | `store/vectors.rs` | M7 |
-| F18 | vectors inside the byte-identical snapshot | `store/index_ops.rs` | M7 |
+| ~~F18~~ | ~~vectors inside the byte-identical snapshot~~ — split into truth/ranking | `store/index_ops.rs` | ✅ M7 (structural; tolerance pending 7.3) |
 | F19 | `fabricated_entity_rate` hardcoded to `0.0` | `core/eval.rs` | M10 |
 | F20 | label propagation ignores belief confidence | `index/community.rs` | M10 |
 | F21 | facade holds ≈370 LOC of pipeline logic | `oxibrain/src/lib.rs:751,1033,1153` | M8–M10 |
-| F22 | FTS configured `porter unicode61` — an English stemmer | `migrations/v3.sql:7` | M7 |
-| F23 | hardcoded English stopword list | `index/vector.rs` | M7 |
-| F24 | `s.len() > 1` filters on **bytes** | `index/vector.rs` | M7 |
+| ~~F22~~ | ~~FTS configured `porter unicode61`~~ — replaced by `unicode61` + `trigram` (v6) | `migrations/v3.sql:7` | ✅ M7 |
+| ~~F23~~ | ~~hardcoded English stopword list~~ — deleted, n-gram features | `index/vector.rs` | ✅ M7 |
+| ~~F24~~ | ~~`s.len() > 1` filters on **bytes**~~ — deleted, n-gram features | `index/vector.rs` | ✅ M7 |
 | F25 | **Chinese/Japanese sentence → 1 token**; Thai loses a combining mark | measured, §7.1 | M7 |
 | F26 | **Korean tokens carry agglutinated particles** | measured, §7.1 | M7 |
 | F27 | `estimate_tokens = chars/4`; CJK context-window overflow | `core/context.rs` | M7 |
-| F28 | `jaro_winkler` prefix bonus boosts shared surnames | `core/resolution.rs:91` | M7 |
+| ~~F28~~ | ~~`jaro_winkler` prefix bonus boosts shared surnames~~ — replaced by n-gram Jaccard | `core/resolution.rs` | ✅ M7 |
 | F29 | MCP `search`/`traverse` never exposed `as_of` / `min_confidence` — so adding them is additive | `mcp/server.rs::tool_list` | M8 |
 | F30 | `recall`'s advertised description promises layers that are never populated | `mcp/server.rs::tool_list` | M8 |
 

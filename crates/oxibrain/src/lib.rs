@@ -116,6 +116,12 @@ impl Brain {
                     redacted_at: None,
                 };
                 ledger::insert_episode(conn, &mut ep)?;
+                oxibrain_store::index_ops::index_episode_fts(
+                    conn,
+                    &ep.space,
+                    &ep.id,
+                    &ep.content,
+                )?;
                 let _ = tx.send(ep.id);
                 Ok(())
             }))?;

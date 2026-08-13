@@ -59,6 +59,32 @@ fn entity_surface(conn: &Connection, entity_id: &str) -> Result<String, BrainErr
 
 /// Drop and rebuild all FTS5 content for a space — both word and trigram
 /// indexes (§7.4). Both are always populated; no script detection, no routing.
+/// Incrementally index a single episode body into both FTS tables.
+///
+/// Keeps the lexical index in sync at ingest time — the full
+/// [`rebuild_fts`] pass only runs on `rebuild_indexes`/`reextract`, which
+/// would otherwise leave freshly ingested episodes unsearchable until then.
+pub fn index_episode_fts(
+    conn: &Connection,
+    space: &str,
+    episode_id: &str,
+    content: &str,
+) -> Result<(), BrainError> {
+    conn.execute(
+        "INSERT INTO fts_word (body, space_id, target_kind, target_id)
+         VALUES (?1, ?2, 'episode', ?3)",
+        params![content, space, episode_id],
+    )
+    .map_err(sql_err)?;
+    conn.execute(
+        "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
+         VALUES (?1, ?2, 'episode', ?3)",
+        params![content, space, episode_id],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
 pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {    conn.execute("DELETE FROM fts_word WHERE space_id = ?1", params![space])
         .map_err(sql_err)?;
     conn.execute("DELETE FROM fts_ngram WHERE space_id = ?1", params![space])

@@ -547,6 +547,8 @@ pub fn ingest_and_enqueue(
     ledger::insert_episode(conn, &mut episode)?;
     let ep_id = episode.id.clone();
 
+    crate::index_ops::index_episode_fts(conn, &episode.space, &ep_id, &episode.content)?;
+
     enqueue_job(conn, &ep_id, extractor_id, now)?;
     Ok(ep_id)
 }
