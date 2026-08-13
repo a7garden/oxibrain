@@ -46,6 +46,11 @@ pub use rank::{
     LexIndex, RankedItem, RankingResult, Rerank, Retrieval, RetrievalInput, SeedPolicy,
     TargetFacts, TargetId, TargetSet, TrustPolicy, VecSpace, explain_item, rank,
 };
+pub mod pack;
+pub use pack::{
+    BeliefForm, ContextInput, EpisodeExcerpt, PackPolicy, ProfileFact, RenderedBelief,
+    RenderedEdge, Reserve, SummaryWithUncertainty, pack,
+};
 pub mod stats;
 pub use security::{
     AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
