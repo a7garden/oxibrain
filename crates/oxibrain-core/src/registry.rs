@@ -112,11 +112,17 @@ pub struct PredicateDef {
     pub description: String,
     pub examples: Vec<String>,
     pub deprecated_by: Option<PredicateRef>,
+    /// §12.2 — predicate is "what the user wants in every answer". A predicate
+    /// marked here is queried on every Profile render. Defaults to false.
+    /// Bumping this on existing predicates is a minor-version event: existing
+    /// cached extractions are unaffected (D21).
+    #[serde(default)]
+    pub profile_relevant: bool,
 }
 
 /// Registry version for this ontology.
 pub const CORE_V1_MAJOR: u32 = 1;
-pub const CORE_V1_MINOR: u32 = 0;
+pub const CORE_V1_MINOR: u32 = 1;
 
 static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::new(|| {
     vec![
@@ -132,6 +138,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "The organization that employs this person.".into(),
             examples: vec!["Alice is employed by Acme Corp".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "works_on".into(),
@@ -145,6 +152,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "A project this person is currently working on.".into(),
             examples: vec!["Bob works on ProjectX".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "born_in".into(),
@@ -158,6 +166,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "Where this person was born. A second value is a contradiction.".into(),
             examples: vec!["Alice was born in Seoul".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "full_name".into(),
@@ -171,6 +180,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "The person's full legal name. A new value supersedes the old.".into(),
             examples: vec!["Alice's full name is Alice Smith".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "died_at".into(),
@@ -184,6 +194,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "When this person died. A second value is a contradiction.".into(),
             examples: vec!["Alice died at 2024-03-01T00:00:00Z".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "knows".into(),
@@ -197,6 +208,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "This person knows another person. Symmetric.".into(),
             examples: vec!["Alice knows Bob".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "member_of".into(),
@@ -210,6 +222,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "Organizations this person is a member of.".into(),
             examples: vec!["Alice is a member of the Engineering Guild".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "part_of".into(),
@@ -223,6 +236,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "This organization is part of a parent organization.".into(),
             examples: vec!["Acme subsidiary is part of Acme Corp".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "located_in".into(),
@@ -236,6 +250,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "This place is located within another place.".into(),
             examples: vec!["Seoul is located in South Korea".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "has_skill".into(),
@@ -249,6 +264,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "A skill or competency this person has.".into(),
             examples: vec!["Alice has skill Rust programming".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "created_by".into(),
@@ -262,6 +278,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "Who created this artifact or document.".into(),
             examples: vec!["The report was created by Alice".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
         PredicateDef {
             name: "aliases".into(),
@@ -275,6 +292,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "Alternative names for this person. Multiple values coexist.".into(),
             examples: vec!["Alice's alias is A. Smith".into()],
             deprecated_by: None,
+            profile_relevant: true,
         },
     ]
 });

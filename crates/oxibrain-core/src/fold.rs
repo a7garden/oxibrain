@@ -453,6 +453,7 @@ mod tests {
             description: "".into(),
             examples: vec![],
             deprecated_by: None,
+            profile_relevant: false,
         }
     }
 
@@ -469,6 +470,7 @@ mod tests {
             description: "".into(),
             examples: vec![],
             deprecated_by: None,
+            profile_relevant: false,
         }
     }
 
@@ -485,6 +487,7 @@ mod tests {
             description: "".into(),
             examples: vec![],
             deprecated_by: None,
+            profile_relevant: false,
         }
     }
 

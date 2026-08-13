@@ -127,8 +127,19 @@ pub fn assemble_context(
         truncated,
     })
 }
-
+/// Rendered belief used by `assemble_context`. The legacy struct dropped
+/// the subject (F6); the rewritten version includes subject, canonical key,
+/// validity interval, status, confidence, support, and sources.
 struct RenderedBelief {
+    subject: String,
+    canonical_key: String,
+    predicate: String,
+    object: String,
+    valid_from: i64,
+    valid_to: i64,
+    status: String,
+    confidence: f64,
+    distinct_episodes: u32,
     text: String,
 }
 
@@ -137,30 +148,68 @@ fn render_belief(
     space: &str,
     statement_id: &str,
 ) -> Result<RenderedBelief, BrainError> {
-    let row: (String, Option<String>, Option<String>, String, i64, f64) = conn
+    let row = conn
         .query_row(
-            "SELECT s.predicate, s.object_entity, s.object_literal,
-                    b.status, b.valid_from, b.confidence
-             FROM statements s
-             LEFT JOIN beliefs b ON b.statement_id = s.id
-             WHERE s.id = ?1 AND s.space_id = ?2
-             ORDER BY b.valid_from DESC LIMIT 1",
+            "SELECT s.subject_id, ek.surface, s.predicate,
+                COALESCE(s.object_entity, s.object_literal, ''),
+                b.status, b.valid_from, b.valid_to,
+                b.confidence, b.support_json
+         FROM statements s
+         LEFT JOIN entity_keys ek
+                ON ek.entity_id = s.subject_id
+                AND ek.type_name = (SELECT type_name FROM entities WHERE id = s.subject_id)
+                AND ek.origin = 'canonical'
+         LEFT JOIN beliefs b ON b.statement_id = s.id
+         WHERE s.id = ?1 AND s.space_id = ?2
+         ORDER BY b.valid_from DESC LIMIT 1",
             params![statement_id, space],
+
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, Option<String>>(1)?,
-                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
-                    r.get::<_, i64>(4)?,
-                    r.get::<_, f64>(5)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
+                    r.get::<_, Option<f64>>(7)?,
+                    r.get::<_, Option<String>>(8)?,
                 ))
             },
         )
         .map_err(sql_err)?;
-    let (predicate, obj_entity, obj_literal, status, _valid_from, confidence) = row;
-    let object_repr = obj_entity.or(obj_literal).unwrap_or_default();
-    let text =
-        format!("... {predicate} {object_repr} (status={status}, confidence={confidence:.2})");
-    Ok(RenderedBelief { text })
+    let (subject, canonical_key, predicate, object_repr, status, valid_from, valid_to, confidence, support_json) = row;
+    let canonical_key = canonical_key.unwrap_or_else(|| subject.clone());
+    let status = status.unwrap_or_else(|| "active".into());
+    let valid_from = valid_from.unwrap_or(0);
+    let valid_to = valid_to.unwrap_or(oxibrain_ports::TIME_MAX.0);
+    let confidence = confidence.unwrap_or(1.0);
+    let distinct_episodes = support_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.get("distinct_episodes").and_then(|n| n.as_u64()))
+        .unwrap_or(0) as u32;
+    let validity = if valid_to == oxibrain_ports::TIME_MAX.0 {
+        format!("from {valid_from} (open)")
+    } else if valid_from == 0 {
+        format!("until {valid_to}")
+    } else {
+        format!("{valid_from}..{valid_to}")
+    };
+    let text = format!(
+        "{canonical_key} {predicate} {object_repr} ({status}, conf={confidence:.2}, {validity})"
+    );
+    Ok(RenderedBelief {
+        subject,
+        canonical_key,
+        predicate,
+        object: object_repr,
+        valid_from,
+        valid_to,
+        status,
+        confidence,
+        distinct_episodes,
+        text,
+    })
 }

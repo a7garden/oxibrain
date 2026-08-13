@@ -56,6 +56,7 @@ fn def_supersede() -> PredicateDef {
         description: "".into(),
         examples: vec![],
         deprecated_by: None,
+            profile_relevant: false,
     }
 }
 
@@ -72,6 +73,7 @@ fn def_static() -> PredicateDef {
         description: "".into(),
         examples: vec![],
         deprecated_by: None,
+            profile_relevant: false,
     }
 }
 
@@ -88,6 +90,7 @@ fn def_multivalued() -> PredicateDef {
         description: "".into(),
         examples: vec![],
         deprecated_by: None,
+            profile_relevant: false,
     }
 }
 
