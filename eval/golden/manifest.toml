@@ -11,12 +11,10 @@
 #   (c) oxibrain complete            — treatment
 # Reported quantity: (c) − (b) per category, with tokens/query alongside.
 #
-# Note: this is a STARTER corpus (10 episodes, 10 questions across en/ko/zh)
-# sufficient to exercise the gate runner end-to-end. The full ~200/~100
-# corpus is human-curated content and is added incrementally; the gate
-# runner itself is the code under `oxibrain eval --suite gate`.
+# Current corpus: 25 episodes (en/ko/zh), 25 questions, 52 declarations.
+# The full ~200/~100 corpus is human-curated content added incrementally.
 
-version = "0.1"
+version = "0.2"
 
 [[categories]]
 name = "knowledge_update"
@@ -25,6 +23,8 @@ description = "A later episode changes a belief; the brain must answer with the 
 [[categories]]
 name = "temporal_reasoning"
 description = "The brain must answer what was true at a specific past instant, not now."
+
+# ── Episodes (original 10) ────────────────────────────────────────────────
 
 [[episodes]]
 id = "note-001"
@@ -86,6 +86,100 @@ shape = "document"
 lang = "en"
 file = "episodes/document-003.toml"
 
+# ── Episodes (expansion: Dave, Eve, 박지은, 王芳 narratives) ──────────────
+
+[[episodes]]
+id = "note-008"
+shape = "note"
+lang = "en"
+file = "episodes/note-008.toml"
+
+[[episodes]]
+id = "note-009"
+shape = "note"
+lang = "en"
+file = "episodes/note-009.toml"
+
+[[episodes]]
+id = "note-011"
+shape = "note"
+lang = "en"
+file = "episodes/note-011.toml"
+
+[[episodes]]
+id = "note-012"
+shape = "note"
+lang = "en"
+file = "episodes/note-012.toml"
+
+[[episodes]]
+id = "note-013"
+shape = "note"
+lang = "en"
+file = "episodes/note-013.toml"
+
+[[episodes]]
+id = "note-014"
+shape = "note"
+lang = "ko"
+file = "episodes/note-014.toml"
+
+[[episodes]]
+id = "note-015"
+shape = "note"
+lang = "ko"
+file = "episodes/note-015.toml"
+
+[[episodes]]
+id = "note-016"
+shape = "note"
+lang = "zh"
+file = "episodes/note-016.toml"
+
+[[episodes]]
+id = "note-017"
+shape = "note"
+lang = "zh"
+file = "episodes/note-017.toml"
+
+[[episodes]]
+id = "note-018"
+shape = "note"
+lang = "en"
+file = "episodes/note-018.toml"
+
+[[episodes]]
+id = "note-019"
+shape = "note"
+lang = "en"
+file = "episodes/note-019.toml"
+
+[[episodes]]
+id = "note-020"
+shape = "note"
+lang = "ko"
+file = "episodes/note-020.toml"
+
+[[episodes]]
+id = "note-021"
+shape = "note"
+lang = "zh"
+file = "episodes/note-021.toml"
+
+[[episodes]]
+id = "document-004"
+shape = "document"
+lang = "en"
+file = "episodes/document-004.toml"
+
+[[episodes]]
+id = "document-005"
+shape = "document"
+lang = "en"
+file = "episodes/document-005.toml"
+
+# ── Questions (original 10) ───────────────────────────────────────────────
+
 [[questions]]
 id = "q-001"
 category = "temporal_reasoning"
@@ -135,3 +229,80 @@ file = "questions/q-009.toml"
 id = "q-010"
 category = "temporal_reasoning"
 file = "questions/q-010.toml"
+
+# ── Questions (expansion: 15 new) ─────────────────────────────────────────
+
+[[questions]]
+id = "q-011"
+category = "knowledge_update"
+file = "questions/q-011.toml"
+
+[[questions]]
+id = "q-012"
+category = "temporal_reasoning"
+file = "questions/q-012.toml"
+
+[[questions]]
+id = "q-013"
+category = "knowledge_update"
+file = "questions/q-013.toml"
+
+[[questions]]
+id = "q-014"
+category = "temporal_reasoning"
+file = "questions/q-014.toml"
+
+[[questions]]
+id = "q-015"
+category = "knowledge_update"
+file = "questions/q-015.toml"
+
+[[questions]]
+id = "q-016"
+category = "knowledge_update"
+file = "questions/q-016.toml"
+
+[[questions]]
+id = "q-017"
+category = "knowledge_update"
+file = "questions/q-017.toml"
+
+[[questions]]
+id = "q-018"
+category = "knowledge_update"
+file = "questions/q-018.toml"
+
+[[questions]]
+id = "q-019"
+category = "temporal_reasoning"
+file = "questions/q-019.toml"
+
+[[questions]]
+id = "q-020"
+category = "knowledge_update"
+file = "questions/q-020.toml"
+
+[[questions]]
+id = "q-021"
+category = "temporal_reasoning"
+file = "questions/q-021.toml"
+
+[[questions]]
+id = "q-022"
+category = "knowledge_update"
+file = "questions/q-022.toml"
+
+[[questions]]
+id = "q-023"
+category = "temporal_reasoning"
+file = "questions/q-023.toml"
+
+[[questions]]
+id = "q-024"
+category = "knowledge_update"
+file = "questions/q-024.toml"
+
+[[questions]]
+id = "q-025"
+category = "knowledge_update"
+file = "questions/q-025.toml"

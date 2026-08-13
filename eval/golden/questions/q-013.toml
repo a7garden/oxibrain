@@ -1,0 +1,7 @@
+# Knowledge update: Eve's current project (Project K, not Phoenix).
+
+id = "q-013"
+category = "knowledge_update"
+question = "What project does Eve work on?"
+answer = "Project K"
+supporting_episodes = ["note-011", "note-012"]

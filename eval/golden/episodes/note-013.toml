@@ -1,0 +1,21 @@
+# Social network: Dave and Carol know each other.
+
+shape = "note"
+lang = "en"
+occurred_at = "2022-06-01"
+
+content = "Dave and Carol met at a conference and have been collaborating since."
+
+[[entities]]
+surface = "Dave"
+type = "Person"
+
+[[entities]]
+surface = "Carol"
+type = "Person"
+
+[[statements]]
+predicate = "knows"
+subject_surface = "Dave"
+object_surface = "Carol"
+valid_from = "2022-06-01"

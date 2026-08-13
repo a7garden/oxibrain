@@ -1,0 +1,8 @@
+# Temporal reasoning: Eve's project at a past time.
+
+id = "q-014"
+category = "temporal_reasoning"
+question = "What project did Eve work on in 2022?"
+as_of = "2022-06-01"
+answer = "Project Phoenix"
+supporting_episodes = ["note-011"]

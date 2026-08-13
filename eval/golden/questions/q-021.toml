@@ -1,0 +1,8 @@
+# Temporal reasoning: 박지은's employer in the past.
+
+id = "q-021"
+category = "temporal_reasoning"
+question = "박지은은 2023년에 어느 회사에서 일했나요?"
+as_of = "2023-06-01"
+answer = "네이버"
+supporting_episodes = ["note-014"]

@@ -1,0 +1,21 @@
+# Eve switches projects. Coexists with Phoenix (multi-valued), but Phoenix ends.
+
+shape = "note"
+lang = "en"
+occurred_at = "2023-09-01"
+
+content = "Eve moved from Project Phoenix to Project K to lead the backend rewrite."
+
+[[entities]]
+surface = "Eve"
+type = "Person"
+
+[[entities]]
+surface = "Project K"
+type = "Project"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "Eve"
+object_surface = "Project K"
+valid_from = "2023-09-01"

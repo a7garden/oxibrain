@@ -1,0 +1,22 @@
+# Eve's first project. Superseded by note-012.
+
+shape = "note"
+lang = "en"
+occurred_at = "2022-01-15"
+
+content = "Eve started working on Project Phoenix, a cloud migration effort."
+
+[[entities]]
+surface = "Eve"
+type = "Person"
+
+[[entities]]
+surface = "Project Phoenix"
+type = "Project"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "Eve"
+object_surface = "Project Phoenix"
+valid_from = "2022-01-15"
+valid_to = "2023-08-31"

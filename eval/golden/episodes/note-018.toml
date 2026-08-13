@@ -1,0 +1,21 @@
+# Carol was born in Seoul. Then moved to Berlin (note-005), then back to Seoul.
+
+shape = "note"
+lang = "en"
+occurred_at = "2021-01-01"
+
+content = "Carol was born and raised in Seoul before moving abroad."
+
+[[entities]]
+surface = "Carol"
+type = "Person"
+
+[[entities]]
+surface = "Seoul"
+type = "Place"
+
+[[statements]]
+predicate = "born_in"
+subject_surface = "Carol"
+object_surface = "Seoul"
+valid_from = "1990-01-01"

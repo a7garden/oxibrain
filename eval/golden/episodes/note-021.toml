@@ -1,0 +1,21 @@
+# 王芳 knows 张伟 — Chinese social network.
+
+shape = "note"
+lang = "zh"
+occurred_at = "2023-06-20"
+
+content = "王芳和张伟在同一栋楼工作，他们经常一起吃午饭。"
+
+[[entities]]
+surface = "王芳"
+type = "Person"
+
+[[entities]]
+surface = "张伟"
+type = "Person"
+
+[[statements]]
+predicate = "knows"
+subject_surface = "王芳"
+object_surface = "张伟"
+valid_from = "2023-06-20"

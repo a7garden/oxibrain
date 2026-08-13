@@ -1,0 +1,7 @@
+# Knowledge update: Eve's current employer.
+
+id = "q-025"
+category = "knowledge_update"
+question = "Where does Eve work?"
+answer = "Stark Industries"
+supporting_episodes = ["document-005"]

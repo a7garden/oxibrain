@@ -1,0 +1,7 @@
+# Knowledge update: Alice's legal name.
+
+id = "q-015"
+category = "knowledge_update"
+question = "What is Alice's full name?"
+answer = "Alice Wonder"
+supporting_episodes = ["document-004"]

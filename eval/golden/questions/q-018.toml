@@ -1,0 +1,7 @@
+# Knowledge update: Dave's current skill (Rust, not Python).
+
+id = "q-018"
+category = "knowledge_update"
+question = "What skill does Dave have?"
+answer = "Rust"
+supporting_episodes = ["note-008", "note-009"]

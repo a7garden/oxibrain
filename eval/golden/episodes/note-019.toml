@@ -1,0 +1,21 @@
+# Carol moves from Berlin back to Seoul. Supersedes note-005's located_in.
+
+shape = "note"
+lang = "en"
+occurred_at = "2024-01-15"
+
+content = "Carol moved back to Seoul to be closer to family."
+
+[[entities]]
+surface = "Carol"
+type = "Person"
+
+[[entities]]
+surface = "Seoul"
+type = "Place"
+
+[[statements]]
+predicate = "located_in"
+subject_surface = "Carol"
+object_surface = "Seoul"
+valid_from = "2024-01-15"

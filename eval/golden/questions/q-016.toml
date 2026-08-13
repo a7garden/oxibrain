@@ -1,0 +1,7 @@
+# Knowledge update: Carol's birthplace.
+
+id = "q-016"
+category = "knowledge_update"
+question = "Where was Carol born?"
+answer = "Seoul"
+supporting_episodes = ["note-018"]

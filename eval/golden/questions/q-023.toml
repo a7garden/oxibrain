@@ -1,0 +1,8 @@
+# Temporal reasoning: Carol's city before the move back to Seoul.
+
+id = "q-023"
+category = "temporal_reasoning"
+question = "Where did Carol live in 2023?"
+as_of = "2023-06-01"
+answer = "Berlin"
+supporting_episodes = ["note-005"]

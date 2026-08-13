@@ -1,0 +1,7 @@
+# Knowledge update: Dave's current employer (Stark Industries, not Umbrella).
+
+id = "q-011"
+category = "knowledge_update"
+question = "Where does Dave work?"
+answer = "Stark Industries"
+supporting_episodes = ["note-008", "note-009"]

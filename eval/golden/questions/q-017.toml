@@ -1,0 +1,7 @@
+# Knowledge update: Carol's current city (Seoul after move, not Berlin).
+
+id = "q-017"
+category = "knowledge_update"
+question = "Where does Carol live?"
+answer = "Seoul"
+supporting_episodes = ["note-005", "note-019"]

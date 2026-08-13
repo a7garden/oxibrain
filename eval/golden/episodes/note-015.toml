@@ -1,0 +1,21 @@
+# 박지은 moves to Kakao. Supersedes note-014.
+
+shape = "note"
+lang = "ko"
+occurred_at = "2024-02-01"
+
+content = "박지은은 카카오로 이직했다. 이제 검색 플랫폼 팀에서 일한다."
+
+[[entities]]
+surface = "박지은"
+type = "Person"
+
+[[entities]]
+surface = "카카오"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "박지은"
+object_surface = "카카오"
+valid_from = "2024-02-01"

@@ -1,0 +1,21 @@
+# 박지은 knows 김민수 — Korean social network.
+
+shape = "note"
+lang = "ko"
+occurred_at = "2023-05-01"
+
+content = "박지은은 김민수와 같은 팀에서 일하며 친분이 있다."
+
+[[entities]]
+surface = "박지은"
+type = "Person"
+
+[[entities]]
+surface = "김민수"
+type = "Person"
+
+[[statements]]
+predicate = "knows"
+subject_surface = "박지은"
+object_surface = "김민수"
+valid_from = "2023-05-01"

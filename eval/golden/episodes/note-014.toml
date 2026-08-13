@@ -1,0 +1,22 @@
+# 박지은's career at a Korean company.
+
+shape = "note"
+lang = "ko"
+occurred_at = "2022-09-01"
+
+content = "박지은은 네이버에서 프론트엔드 엔지니어로 입사했다."
+
+[[entities]]
+surface = "박지은"
+type = "Person"
+
+[[entities]]
+surface = "네이버"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "박지은"
+object_surface = "네이버"
+valid_from = "2022-09-01"
+valid_to = "2024-01-31"

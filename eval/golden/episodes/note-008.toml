@@ -1,0 +1,30 @@
+# Dave's first job at Umbrella. Superseded by note-009.
+
+shape = "note"
+lang = "en"
+occurred_at = "2021-03-01"
+
+content = "Dave joined Umbrella as a junior developer on the infrastructure team."
+
+[[entities]]
+surface = "Dave"
+type = "Person"
+
+[[entities]]
+surface = "Umbrella"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Dave"
+object_surface = "Umbrella"
+valid_from = "2021-03-01"
+valid_to = "2023-06-30"
+
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Dave"
+object_literal_type = "text"
+object_literal_value = "Python"
+valid_from = "2021-03-01"
+valid_to = "2023-06-30"

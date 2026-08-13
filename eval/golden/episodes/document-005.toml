@@ -1,0 +1,21 @@
+# Eve's employer: Stark Industries (same as Dave).
+
+shape = "document"
+lang = "en"
+occurred_at = "2022-06-01"
+
+content = "Eve accepted a position at Stark Industries on the platform team."
+
+[[entities]]
+surface = "Eve"
+type = "Person"
+
+[[entities]]
+surface = "Stark Industries"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Eve"
+object_surface = "Stark Industries"
+valid_from = "2022-06-01"

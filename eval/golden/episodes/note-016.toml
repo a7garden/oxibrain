@@ -1,0 +1,21 @@
+# 王芳's job at a Shanghai company.
+
+shape = "note"
+lang = "zh"
+occurred_at = "2023-01-10"
+
+content = "王芳在上海的阿里巴巴工作。她是数据工程师。"
+
+[[entities]]
+surface = "王芳"
+type = "Person"
+
+[[entities]]
+surface = "阿里巴巴"
+type = "Organization"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "王芳"
+object_surface = "阿里巴巴"
+valid_from = "2023-01-10"

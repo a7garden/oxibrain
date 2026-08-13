@@ -1,0 +1,25 @@
+# 王芳's reporting line changes from 李雷 to a new manager.
+
+shape = "note"
+lang = "zh"
+occurred_at = "2024-03-15"
+
+content = "王芳现在向王明汇报工作。李雷已经调走了。"
+
+[[entities]]
+surface = "王芳"
+type = "Person"
+
+[[entities]]
+surface = "王明"
+type = "Person"
+
+[[entities]]
+surface = "李雷"
+type = "Person"
+
+[[statements]]
+predicate = "knows"
+subject_surface = "王芳"
+object_surface = "王明"
+valid_from = "2024-03-15"

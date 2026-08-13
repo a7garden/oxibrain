@@ -1,0 +1,18 @@
+# Alice's legal name update (full_name, supersede).
+
+shape = "document"
+lang = "en"
+occurred_at = "2023-08-01"
+
+content = "Alice updated her legal name to Alice Wonder after getting married."
+
+[[entities]]
+surface = "Alice"
+type = "Person"
+
+[[statements]]
+predicate = "full_name"
+subject_surface = "Alice"
+object_literal_type = "text"
+object_literal_value = "Alice Wonder"
+valid_from = "2023-08-01"

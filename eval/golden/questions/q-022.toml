@@ -1,0 +1,7 @@
+# Chinese knowledge update: 王芳's employer.
+
+id = "q-022"
+category = "knowledge_update"
+question = "王芳在哪里工作?"
+answer = "阿里巴巴"
+supporting_episodes = ["note-016"]
