@@ -10,88 +10,70 @@
 
 ## State right now (verified)
 
-Seven commits landed this session (`88ca289` → `7cf4f1f`):
+**All five remaining-work items shipped this session** (`29a4c08` → `52e472c`, on top of the
+seven M9 commits `88ca289` → `7cf4f1f`):
 
 | Commit | Scope |
 |---|---|
-| `88ca289` | §5.1 ranking-tolerance calibration — measured CPU vs Metal, tolerance **2pp** (the floor) |
-| `7e6092d` | chunks table populated during projection (gate arm (b) prerequisite) |
-| `9610833` | `oxibrain-views` crate + `Brain::brief`/`navigate` (zero-dep renderer, `entity://` links) |
-| `55734c8` | CLI `oxibrain page <entity>` + MCP `brief`/`navigate` (fifteen-tool cap held) |
-| `eaf45e1` | resolution scaling: `index::blocking` (MinHash/LSH + entropy gate), graph context, PerType weights |
-| `6d89a2f` | desktop UI: `brief` view + clickable links; api.ts `brief`/`navigate` |
-| `7cf4f1f` | `eval/golden/` skeleton — manifest + format + 2 episodes + 2 questions |
+| `29a4c08` | small gaps 4a/4b: brief timeline surfaces + `ResolutionCache` (per (space,type) LSH index, threaded through project/reproject/extraction) |
+| `17c6da4` | ADR-004 — `embedding_sim` = 0.0 during projection (documented decision + re-evaluation triggers) |
+| `c2bc7fa` | `brief(space|topic)`: `BriefTarget` enum, `Brain::brief_target`, space/topic view renderers, MCP `target_kind` discriminator, CLI `--kind` |
+| `e4a9221` | gate runner `oxibrain eval --suite gate` + starter corpus (10 ep / 10 q, en/ko/zh) + FTS/TF-IDF exclude Declaration episodes (JSON pollution fix) |
+| `c92a399` | gate measures M8 recall-only vs M9 brief/navigate tokens/answer |
+| `95f8b7f` | M9 exit: 3-hop MCP navigation test + brief p95 bench + resolution scaling test |
+| `850610c` | M9 exit: resolution F1 ≤10pp across 7 writing systems (parity_corpus) |
+| `52e472c` | resolution scaling marked `#[ignore]` (measurement, not CI gate) + bench clippy fix |
 
-`cargo test --workspace` → 0 failed · `clippy -D warnings` clean · `fmt --check` clean ·
+`cargo test --workspace` → 62 targets green · `clippy -D warnings` clean · `fmt --check` clean ·
 standalone guarantee (`--no-default-features --features http-llm`, no oxi crates) holds.
 
 ---
 
 ## What's next, in dependency order
 
-### 1. Golden corpus population (data, ~2 days)
+### 1. Golden corpus population (data, the only remaining ~2-day item)
 
-`eval/golden/` is a **skeleton** (format + 2 episodes + 2 questions). The gate needs the real
-corpus (~200 episodes across note/document/agent-trace, ~100 questions). The format is fixed in
-`manifest.toml` + the two episode/question examples — populate it, don't redesign it.
+`eval/golden/` has a **starter corpus** (10 episodes, 10 questions across en/ko/zh, both
+categories). The gate runs end-to-end on it; the full ~200-episode / ~100-question corpus for a
+*statistically meaningful* delta is human-curated content, added incrementally. Format is fixed
+in `manifest.toml` + the episode/question examples — populate, don't redesign.
 
 - Categories that matter: `knowledge_update`, `temporal_reasoning` (§17.2).
 - Each question carries `answer` + `supporting_episodes` (the corpus is self-grading).
+- Predicates must exist in the core/v1 registry (`leads`/`reports_to`/`job_title`/`lives_in`
+  were renamed to `works_on`/`knows`/`has_skill`/`located_in` to keep the corpus ingestible).
 
-### 2. The gate runner — three-arm, golden-corpus only (code, ~3–4 days)
+### 2. Persist the resolution cache on Brain (code, ~1 day) — **the measured gap**
 
-The three arms, all **buildable today**:
-- (a) full context, no retrieval — ceiling.
-- (b) lexical + dense chunks + RRF, **no graph** — `Retrieval::lexical` + the now-populated
-  `chunks` table; the control.
-- (c) oxibrain complete — `Retrieval::hybrid`; the treatment.
+The resolution-scaling measurement (in `m9_resolution_scaling.rs`) shows per-entity cost is
+flat (~11 µs — LSH blocking sublinear), but per-declare total grows ~linearly with N because
+`Brain::declare` builds a fresh `ResolutionCache` per call. Sublinear **within** a reproject
+batch (shared cache), linear **across** incremental declares. Making the cache a field on Brain
+(Mutex<ResolutionCache>) closes it — the `invalidate` hook already handles staleness on New/
+Candidate. The §5.2 "sublinear per mention" claim then holds on the live path, measured.
 
-Report **(c) − (b) per category**, with tokens/query alongside. Pre-commit the three outcomes
-(already in `ROADMAP.md` §4): delta on temporal categories → proceed; delta small with a weak
-local extractor → fix extraction, decide nothing structural; delta small with a strong extractor
-→ D19's demote (graph → ranking signal; `Rerank::GraphDistance` is a config change).
+### 3. Gate outcome decision (verification, ~1 day)
 
-Concrete shape: extend `oxibrain eval` with a `--suite gate` that loads `eval/golden/`, runs the
-three arms against each question, evaluates answers (exact-match against `answer` first; an LLM
-judge only if exact-match proves too brittle), and prints the per-category delta table.
+Starter-corpus numbers: **b=10/10, c=10/10, delta 0 pp both categories** (the graph adds no
+accuracy at 15 statements — expected), tokens/query b=56 c=117 (+60 for the graph arm),
+tokens/answer M8=736 vs M9=482 (−254, the brief path is cheaper). Once the full corpus lands,
+re-run and apply ROADMAP §4's pre-committed outcomes: clear delta on temporal → proceed with
+M10; small delta with weak local extractor → fix extraction; small delta with strong extractor
+→ D19's demote (graph → ranking signal, `Rerank::GraphDistance` config change). Arm (a) ceiling
+and the frontier tier remain out of scope for the golden-only gate.
 
-### 3. `brief(topic | space)` (code, ~1–2 days)
+### 4. M9 exit criteria — status
 
-Only `brief(entity)` is implemented (the M9 exit criteria are all entity-based). §14.1's
-`brief(entity | topic | space)` signature still has two arms to fill:
-
-- **space** → `Brain::brief` dispatch for a `space://` target: `stats()` + `list_entities()` as
-  followable links. Cheap.
-- **topic** → a keyword target: lexical `query()` over entities, rendered as a list of links.
-
-The MCP `brief` tool takes `entity_id` today; add a `target_kind` discriminator (`entity | space
-| topic`) — purely additive, still inside the fifteen-tool cap.
-
-### 4. Known gaps (small, not gate-blocking)
-
-- **brief timeline section renders raw entity ids.** `timeline::TimelineEntry.object_repr` is
-  `object_entity` (raw id) for entity objects. `store::brief` resolves surfaces for beliefs/
-  neighbours/contradictions but reuses `timeline()` verbatim for the timeline section. Resolve
-  the surface there too (either post-process in `entity_brief`, or extend the timeline module).
-- **Resolution LSH index is built per call.** `block_candidates` builds the `LshIndex` from
-  `find_keys_for_type` every resolution — correct candidate generation, but the build is O(N) so
-  it is not yet *amortized* sublinear per mention. Cache the index (per space+type) across the
-  projection batch, or persist band→key buckets, to make the §5.2 "sublinear per mention" claim
-  measured rather than structural.
-- **`embedding_sim` is zero during projection.** Resolution runs before `embed_entities` applies
-  dense vectors post-projection, so the wired closure returns 0.0 (documented in code). PerType
-  weights are set (Person/Org 0.1, Concept 0.6, default 0.3); making the signal non-zero needs a
-  decision on resolution-time embedding vs the deterministic-truth contract (P1).
-
-### 5. M9 exit criteria not yet measured (verification, ~1 day)
-
-The code is there; the *measurements* are not:
-- 3-hop navigation from one `brief` with only `navigate`, no `search` (needs a running MCP server
-  + a client driving it).
-- tokens/answer **decrease** vs the `recall`-only path.
-- sublinear resolution over a 10⁴-entity fixture (measured, not asserted).
-- ≤10pp resolution F1 across writing-system property classes (`eval/parity` suite exists).
-- `brief` p95 < 100 ms on the standard fixture.
+All five are now **measured** (the code shipped in M9; this session produced the numbers):
+- 3-hop navigation: `navigate_three_hops_reaches_deep_entity` MCP test passes (brief(Alice) →
+  navigate → navigate reaches Bob, no search).
+- tokens/answer: **M8 recall-only 736 vs M9 brief/navigate 482 tok/q (−254, −34%)** — decrease
+  holds, measured in the gate report.
+- sublinear resolution: per-entity ~11 µs flat; **per-declare linear until the cache persists
+  on Brain** (item 2) — the honest partial state.
+- F1 parity: **F1 = 1.00 on all 7 writing systems, spread 0.0 pp ≤ 10 pp** (parity_corpus).
+- brief p95: **~2.5 ms/brief on a 1000-entity fixture**, far under the 100 ms criterion
+  (`cargo bench -p oxibrain --bench m9_exit`).
 
 ---
 

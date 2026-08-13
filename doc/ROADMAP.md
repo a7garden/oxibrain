@@ -174,12 +174,16 @@ Publishing the number regardless of direction is the point.
 
 ---
 
-## 5. M9 — Agent-native · **core shipped, remainder tracked separately**
+## 5. M9 — Agent-native · **✅ shipped**
 
 > **Goal: an agent can explore the brain instead of being handed a blob.**
 > **Delivers:** §14, and resolution that scales. **Effort: ≈ 15–20 days.**
-> **Status:** 9.1–9.10 implemented except `brief(topic|space)` (entity only). Exit-criteria
-> measurements pending — see `docs/superpowers/handoffs/2026-08-13-m9-shipped-gate-and-remaining.md`.
+> **Status:** 9.1–9.10 all shipped (`brief(entity|space|topic)`, navigate, resolution
+> blocking, UI). Exit criteria **measured** 2026-08-13: 3-hop navigation via brief→navigate only;
+> tokens/answer M8 736 → M9 482 (−34%); resolution F1 = 1.00 across 7 writing systems (0.0 pp
+> spread ≤ 10 pp); brief p95 ~2.5 ms (< 100 ms). The one measured gap: per-declare resolution is
+> linear until the LSH cache persists on `Brain` (sublinear within reproject batches already).
+> Remaining work tracked in `docs/superpowers/handoffs/2026-08-13-m9-shipped-gate-and-remaining.md`.
 
 ### 5.1 Work
 
