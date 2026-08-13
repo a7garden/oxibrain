@@ -451,9 +451,14 @@ pub fn hybrid_query(
 
     let mut channels_used: Vec<RankChannel> = Vec::new();
 
+    // Per-channel fetch cap: 4× the requested limit so `rank` can apply
+    // the real `limit` (and report TruncatedByBudget drops) instead of
+    // truncating upstream where it would be silent. §11.3: the store is
+    // mechanical; rank decides.
+    let fetch_cap = limit.saturating_mul(4).max(limit);
     if run_lexical {
-        let word = fts_search(conn, &space, &q.text, limit, FtsIndex::Word)?;
-        let ngram = fts_search(conn, &space, &q.text, limit, FtsIndex::Ngram)?;
+        let word = fts_search(conn, &space, &q.text, fetch_cap, FtsIndex::Word)?;
+        let ngram = fts_search(conn, &space, &q.text, fetch_cap, FtsIndex::Ngram)?;
         input.channels.push(ChannelResult {
             channel: next_channel,
             hits: word.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
@@ -468,7 +473,7 @@ pub fn hybrid_query(
         next_channel += 1;
     }
     if matches!(q.mode, QueryMode::Hybrid | QueryMode::LexicalVector) {
-        let hits = lexical_vector_search(conn, &space, &q.text, limit)?;
+        let hits = lexical_vector_search(conn, &space, &q.text, fetch_cap)?;
         input.channels.push(ChannelResult {
             channel: next_channel,
             hits: hits.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),
@@ -484,7 +489,7 @@ pub fn hybrid_query(
                     .into(),
             )
         })?;
-        let hits = dense_search(conn, embedder, &q.text, limit)?;
+        let hits = dense_search(conn, embedder, &q.text, fetch_cap)?;
         input.channels.push(ChannelResult {
             channel: next_channel,
             hits: hits.iter().map(|h| (search_target_to_target_id(&h.target), h.score)).collect(),

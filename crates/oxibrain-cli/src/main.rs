@@ -46,7 +46,15 @@ async fn main() -> anyhow::Result<()> {
         Command::Why {
             statement_id,
             space,
-        } => cmd::why::run(&dir, &statement_id, &space).await,
+            dropped,
+            min_confidence,
+        } => {
+            if dropped {
+                cmd::why::run_dropped(&dir, &statement_id, &space, min_confidence).await
+            } else {
+                cmd::why::run(&dir, &statement_id, &space).await
+            }
+        }
         Command::Contradictions { space } => cmd::contradictions::run(&dir, &space).await,
         Command::Reproject => cmd::reproject::run(&dir).await,
         Command::Redact {

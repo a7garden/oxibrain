@@ -65,6 +65,14 @@ pub enum Command {
         statement_id: String,
         #[arg(long, default_value = "personal")]
         space: String,
+        /// Print what `rank` discarded for a query instead of provenance.
+        /// `statement_id` is then the query text (DESIGN §11.8).
+        #[arg(long)]
+        dropped: bool,
+        /// Confidence floor for --dropped (default 0). Raises it to see
+        /// BelowConfidenceFloor drops.
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f32,
     },
     /// List contradicted statements.
     Contradictions {
