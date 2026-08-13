@@ -249,9 +249,9 @@ impl BrainServer {
             text: query.to_string(),
             mode,
             space: space_id,
-            as_of: None,
+            as_of: i64_arg_opt(args, "as_of").map(oxibrain_ports::Timestamp),
             limit,
-            min_confidence: 0.0,
+            min_confidence: f32_arg_or(args, "min_confidence", 0.0),
         };
         let result = self.brain.query(q).await.map_err(ToolErr::run)?;
         to_json(&result)
@@ -433,8 +433,8 @@ impl BrainServer {
             max_nodes,
             predicates: PredicateFilter::AllowAll,
             direction,
-            valid_at: None,
-            min_confidence: 0.0,
+            valid_at: i64_arg_opt(args, "valid_at").map(oxibrain_ports::Timestamp),
+            min_confidence: f32_arg_or(args, "min_confidence", 0.0),
             strategy: Strategy::Bfs,
         };
         let result = self
@@ -775,6 +775,20 @@ fn u_arg_or(args: &Value, key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// Optional i64 argument (milliseconds since epoch). `None` when absent.
+fn i64_arg_opt(args: &Value, key: &str) -> Option<i64> {
+    args.get(key)
+        .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)))
+}
+
+/// Optional f32 argument. `default` when absent.
+fn f32_arg_or(args: &Value, key: &str, default: f32) -> f32 {
+    args.get(key)
+        .and_then(|v| v.as_f64())
+        .map(|f| f as f32)
+        .unwrap_or(default)
+}
+
 fn parse_mode(s: &str) -> QueryMode {
     match s {
         "lexical" => QueryMode::Lexical,
@@ -797,19 +811,22 @@ fn tool_list() -> Value {
     json!({
         "tools": [
             tool("search",
-                "Search the brain via hybrid/lexical/lexical-vector/graph/community retrieval. Returns ranked results with scores, targets, and provenance.",
+                "Search the brain via hybrid/lexical/lexical-vector/graph/community retrieval. Returns ranked results with scores, targets, and provenance. as_of (valid time) and min_confidence filter beliefs; a belief that is retracted or contradicted at as_of is excluded.",
                 json!({
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "The search query text." },
                         "space": { "type": "string", "description": "Space name (default: personal)." },
                         "mode": { "type": "string", "enum": ["hybrid","lexical","lexical-vector","graph","community"], "description": "Retrieval mode (default: hybrid)." },
-                        "limit": { "type": "integer", "minimum": 1, "description": "Maximum results (default: 20)." }
+                        "limit": { "type": "integer", "minimum": 1, "description": "Maximum results (default: 20)." },
+                        "as_of": { "type": "integer", "description": "Valid-time instant (millis since epoch). Only beliefs true at this instant are returned (default: now)." },
+                        "known_at": { "type": "integer", "description": "Transaction-time instant (millis since epoch). Only beliefs recorded by this instant are returned (default: now)." },
+                        "min_confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Confidence floor (default: 0)." }
                     },
                     "required": ["query"]
                 })),
             tool("recall",
-                "Assemble context for a query within a token budget — the per-turn call for agents. Returns layered context (pinned facts, high-salience beliefs, query neighborhood, recent episodes).",
+                "Assemble context for a query within a token budget — the per-turn call for agents. Returns layered context: profile, high-salience beliefs (with subjects, validity, support), query neighborhood, summaries with their sources, and recent episodes.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -878,7 +895,7 @@ fn tool_list() -> Value {
                     }
                 })),
             tool("traverse",
-                "Bounded subgraph traversal from a set of start entities. Returns nodes and edges within the depth/node budget. Useful for multi-hop recall (ToG driver).",
+                "Bounded subgraph traversal from a set of start entities. Returns nodes and edges within the depth/node budget. The graph is belief-filtered: retracted and contradicted edges are excluded (valid_at filters valid time). Useful for multi-hop recall (ToG driver).",
                 json!({
                     "type": "object",
                     "properties": {
@@ -886,7 +903,9 @@ fn tool_list() -> Value {
                         "space": { "type": "string", "description": "Space name (default: personal)." },
                         "depth": { "type": "integer", "minimum": 1, "description": "Max traversal depth (default: 3)." },
                         "max_nodes": { "type": "integer", "minimum": 1, "description": "Max nodes to return (default: 256)." },
-                        "direction": { "type": "string", "enum": ["out","in","both"], "description": "Edge direction (default: both)." }
+                        "direction": { "type": "string", "enum": ["out","in","both"], "description": "Edge direction (default: both)." },
+                        "valid_at": { "type": "integer", "description": "Valid-time instant (millis since epoch). Walk the graph as believed at this instant (default: now)." },
+                        "min_confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Confidence floor for edges (default: 0)." }
                     },
                     "required": ["start"]
                 })),
@@ -1916,7 +1935,7 @@ mod tests {
     async fn run_session_round_trips_over_a_byte_stream() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
         // client=a, server=b: a writes → b reads, b writes → a reads.
-        let (mut client, server_side) = duplex(8 * 1024);
+        let (mut client, server_side) = duplex(64 * 1024);
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let server = Arc::new(BrainServer::from_brain(brain));
@@ -1929,7 +1948,7 @@ mod tests {
             .await
             .unwrap();
         client.flush().await.unwrap();
-        let mut buf = vec![0u8; 8192];
+        let mut buf = vec![0u8; 65536];
         let n = client.read(&mut buf).await.unwrap();
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert_eq!(resp["result"]["serverInfo"]["name"], "oxibrain");
