@@ -353,6 +353,12 @@ fn graph_context(
 /// projection, before dense embeddings are computed (they are applied
 /// post-projection via `embed_entities`), so this is zero here — but the caller
 /// passes a real value rather than hardcoding it (that is how F13 happened).
+///
+/// **Architectural decision:** see `doc/adr/ADR-004-embedding-sim-zero-during-projection.md`.
+/// The PerType weights in `ResolutionConfig` (Person/Org 0.1, Concept 0.6,
+/// default 0.3) are set but inert until the decision is revisited. The
+/// projection path stays deterministic (P1) and the embedder cannot poison
+/// resolution through a stale or empty vector.
 fn embedding_sim(_conn: &Connection, _candidate: &str) -> f64 {
     0.0
 }
