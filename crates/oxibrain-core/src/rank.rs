@@ -468,8 +468,12 @@ pub fn rank(input: &RetrievalInput, spec: &Retrieval) -> RankingResult {
     //    the only place Filters can be forgotten, and it has a property test.
     let mut items: Vec<RankedItem> = Vec::with_capacity(candidate_facts.len());
     let mut dropped: Vec<DroppedItem> = Vec::new();
+    // Determinism post-condition: iterate candidates in sorted key order.
+    let mut ordered_keys: Vec<&String> = candidate_facts.keys().collect();
+    ordered_keys.sort();
 
-    for (key, facts) in &candidate_facts {
+    for key in &ordered_keys {
+        let facts = &candidate_facts[*key];
         if let Some(reason) = check_filters(facts, &spec.filters) {
             dropped.push(DroppedItem {
                 target: facts.target.clone(),
@@ -478,9 +482,8 @@ pub fn rank(input: &RetrievalInput, spec: &Retrieval) -> RankingResult {
             });
             continue;
         }
-        // 3. Fuse scores for surviving candidates.
-        let fused = fuse(channel_scores.get(key), &spec.fusion);
-        let channels = channel_ranks.get(key).cloned().unwrap_or_default();
+        let fused = fuse(channel_scores.get(*key), &spec.fusion);
+        let channels = channel_ranks.get(*key).cloned().unwrap_or_default();
         items.push(RankedItem {
             target: facts.target.clone(),
             fused_score: fused,
@@ -510,22 +513,24 @@ pub fn rank(input: &RetrievalInput, spec: &Retrieval) -> RankingResult {
     }
     let kept_keys: std::collections::HashSet<String> =
         items.iter().map(|i| i.target.rrf_key()).collect();
-
-    // Anything in the original candidate set that didn't make it past the
-    // limit becomes a TruncatedByBudget drop with its pre-truncation position.
-    // Targets already dropped by a filter (above) must not appear here too —
-    // conservation requires exactly one drop per candidate.
     let already_dropped: std::collections::HashSet<String> =
         dropped.iter().map(|d| d.target.rrf_key()).collect();
-    let mut post_truncate_drops: Vec<DroppedItem> = candidate_facts
-        .iter()
-        .filter(|(k, _)| !kept_keys.contains(*k) && !already_dropped.contains(*k))
-        .map(|(k, facts)| DroppedItem {
-            target: facts.target.clone(),
-            reason: DropReason::TruncatedByBudget {
-                position: candidate_facts.keys().position(|x| x == k).unwrap_or(0),
-            },
-            score: None,
+    let mut post_truncate_keys: Vec<&String> = candidate_facts
+        .keys()
+        .filter(|k| !kept_keys.contains(*k) && !already_dropped.contains(*k))
+        .collect();
+    post_truncate_keys.sort();
+    let mut post_truncate_drops: Vec<DroppedItem> = post_truncate_keys
+        .into_iter()
+        .map(|k| {
+            let facts = &candidate_facts[k];
+            DroppedItem {
+                target: facts.target.clone(),
+                reason: DropReason::TruncatedByBudget {
+                    position: ordered_keys.iter().position(|x| *x == k).unwrap_or(0),
+                },
+                score: None,
+            }
         })
         .collect();
 
@@ -925,5 +930,157 @@ mod tests {
         let keys1: Vec<_> = r1.items.iter().map(|i| (i.target.rrf_key(), i.fused_score, i.rank)).collect();
         let keys2: Vec<_> = r2.items.iter().map(|i| (i.target.rrf_key(), i.fused_score, i.rank)).collect();
         assert_eq!(keys1, keys2);
+    }
+
+    // ── Property tests (M8 §8.4) ────────────────────────────────────────
+    // Each property runs 64 cases by default. The post-conditions of `rank`
+    // — conservation, filter totality, determinism — must hold over the
+    // generated input space, not just the curated examples above.
+
+    use proptest::prelude::*;
+
+    prop_compose! {
+        fn arb_target_id()(i in any::<u8>()) -> TargetId {
+            let id = format!("t{i:03}");
+            match i % 3 {
+                0 => TargetId::Statement { id },
+                1 => TargetId::Entity { id },
+                _ => TargetId::Episode { id },
+            }
+        }
+    }
+
+    prop_compose! {
+        fn arb_facts()(
+            target in arb_target_id(),
+            confidence in 0.0f32..1.0f32,
+            vf in 0i64..10_000,
+            vt in 0i64..10_000,
+            recorded_at in 0i64..10_000,
+            retracted_at in prop::option::of(0i64..10_000),
+            trust in prop::sample::select(vec![
+                TrustTier::Trusted, TrustTier::SemiTrusted, TrustTier::Untrusted,
+            ]),
+            status in prop::sample::select(vec![
+                BeliefStatus::Active,
+                BeliefStatus::Superseded,
+                BeliefStatus::Contradicted,
+                BeliefStatus::Retracted,
+            ]),
+            predicate in prop::sample::select(vec![
+                "works_on".to_string(), "knows".to_string(), "likes".to_string(),
+            ]),
+            salience in 0.0f64..1.0f64,
+            distinct in 0u32..10,
+        ) -> TargetFacts {
+            TargetFacts {
+                target,
+                confidence,
+                valid_from: Timestamp(vf),
+                valid_to: Timestamp(vt),
+                recorded_at: Timestamp(recorded_at),
+                retracted_at: retracted_at.map(Timestamp),
+                trust,
+                status,
+                predicate,
+                salience,
+                distinct_episodes: distinct,
+                channels: vec![],
+                channel_scores: vec![],
+            }
+        }
+    }
+
+    prop_compose! {
+        fn arb_filters()(
+            as_of in prop::option::of(0i64..10_000),
+            known_at in prop::option::of(0i64..10_000),
+            min_confidence in 0.0f32..1.0f32,
+        ) -> Filters {
+            Filters {
+                space: "default".into(),
+                as_of: as_of.map(Timestamp),
+                known_at: known_at.map(Timestamp),
+                min_confidence,
+                trust: TrustPolicy::All,
+                predicates: PredicateFilter::AllowAll,
+                entity_types: None,
+            }
+        }
+    }
+
+    prop_compose! {
+        fn arb_input()(entries in prop::collection::vec((arb_facts(), 0.0f64..1.0f64), 1..16)) -> RetrievalInput {
+            let mut input = RetrievalInput::default();
+            let mut hits: Vec<(TargetId, f64)> = Vec::new();
+            for (f, score) in entries {
+                let target = f.target.clone();
+                input.facts.insert(target.clone(), f);
+                hits.push((target, score));
+            }
+            input.channels.push(ChannelResult { channel: 0, hits });
+            input
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Conservation: items ∪ dropped = candidates, disjointly.
+        #[test]
+        fn prop_conservation(input in arb_input(), filters in arb_filters()) {
+            let mut spec = Retrieval::hybrid("default");
+            spec.filters = filters;
+            let total_candidates = input.facts.len();
+            let r = rank(&input, &spec);
+            prop_assert_eq!(r.items.len() + r.dropped.len(), total_candidates);
+            let item_keys: std::collections::HashSet<_> =
+                r.items.iter().map(|i| i.target.rrf_key()).collect();
+            let drop_keys: std::collections::HashSet<_> =
+                r.dropped.iter().map(|d| d.target.rrf_key()).collect();
+            prop_assert!(item_keys.is_disjoint(&drop_keys));
+            prop_assert_eq!(r.total_candidates, total_candidates);
+        }
+
+        /// Filter totality: no item in `items` violates `spec.filters`.
+        #[test]
+        fn prop_filter_totality(input in arb_input(), filters in arb_filters()) {
+            let mut spec = Retrieval::hybrid("default");
+            spec.filters = filters.clone();
+            let r = rank(&input, &spec);
+            for item in &r.items {
+                let f = &item.facts;
+                prop_assert!(f.confidence >= filters.min_confidence,
+                    "item {} violates min_confidence: {} < {}",
+                    item.target.rrf_key(), f.confidence, filters.min_confidence);
+                if let Some(t) = filters.as_of {
+                    prop_assert!(t >= f.valid_from && t <= f.valid_to,
+                        "item {} violates as_of {}", item.target.rrf_key(), t.0);
+                }
+                if let Some(t) = filters.known_at {
+                    prop_assert!(f.recorded_at <= t,
+                        "item {} violates known_at {}", item.target.rrf_key(), t.0);
+                    if let Some(r_at) = f.retracted_at {
+                        prop_assert!(r_at > t,
+                            "item {} violates known_at (retracted)", item.target.rrf_key());
+                    }
+                }
+                if let TrustPolicy::Exclude(excluded) = &filters.trust {
+                    prop_assert!(!excluded.contains(&f.trust),
+                        "item {} has excluded trust tier", item.target.rrf_key());
+                }
+            }
+        }
+
+        /// Determinism: equal inputs produce byte-equal JSON output.
+        #[test]
+        fn prop_determinism(input in arb_input(), filters in arb_filters()) {
+            let mut spec = Retrieval::hybrid("default");
+            spec.filters = filters;
+            let r1 = rank(&input, &spec);
+            let r2 = rank(&input, &spec);
+            let j = |r: &RankingResult| serde_json::to_string(r).expect("serialize");
+            prop_assert_eq!(j(&r1), j(&r2));
+        }
     }
 }
