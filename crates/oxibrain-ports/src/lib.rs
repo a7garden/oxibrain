@@ -11,6 +11,7 @@ pub mod time;
 pub mod tokenizer;
 
 pub use clock::{ClockPort, FakeClock, SystemClock};
+pub use embedding::EmbeddingPort;
 pub use error::BrainError;
 pub use llm::{LlmCapabilities, LlmPort, LlmRequest, LlmResponse};
 pub use llm_fake::FakeLlmPort;

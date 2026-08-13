@@ -12,6 +12,7 @@ members = [
     "crates/oxibrain-mcp",
     "crates/oxibrain-client",
     "crates/oxibrain-connectors",
+    "crates/oxibrain-embed-local",
 ]
 
 [workspace.package]
@@ -31,6 +32,7 @@ oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.1.0" }
 oxibrain-client = { path = "crates/oxibrain-client", version = "0.1.0" }
 oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.1.0" }
 oxibrain-store = { path = "crates/oxibrain-store", version = "0.1.0" }
+oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.1.0" }
 blake3 = "1.5"
 hex = "0.4"
 unicode-normalization = "0.1"

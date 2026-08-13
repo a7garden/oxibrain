@@ -1,0 +1,16 @@
+[package]
+name = "oxibrain-embed-local"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxibrain-ports.workspace = true
+llama-cpp-2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
