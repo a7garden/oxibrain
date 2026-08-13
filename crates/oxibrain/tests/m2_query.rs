@@ -460,4 +460,34 @@ async fn assemble_context_packs_within_budget() {
         "expected a recent-episodes layer, got layers: {:?}",
         result.layers
     );
+
+    // M8 §3.2: recall returns Profile + beliefs-with-subjects + neighbourhood
+    // + sources within budget; a human reading the output can tell what the
+    // brain knows.
+    let layer_kinds: Vec<oxibrain_core::context::LayerKind> =
+        result.layers.iter().map(|l| l.kind).collect();
+    // `employed_by` is profile_relevant → the Profile layer must exist.
+    assert!(
+        layer_kinds.contains(&oxibrain_core::context::LayerKind::Profile),
+        "expected a Profile layer (employed_by is profile_relevant), got {layer_kinds:?}"
+    );
+    // The profile text must name the subject + predicate + object (F6).
+    let profile_layer = result
+        .layers
+        .iter()
+        .find(|l| l.kind == oxibrain_core::context::LayerKind::Profile)
+        .unwrap();
+    assert!(
+        profile_layer.text.contains("employed_by") && profile_layer.text.contains("Acme"),
+        "Profile layer must render subject + predicate + object, got: {}",
+        profile_layer.text
+    );
+    // Every layer carries provenance (sources).
+    for l in &result.layers {
+        assert!(
+            !l.provenance.is_empty(),
+            "layer {:?} must carry provenance (P10 sources)",
+            l.kind
+        );
+    }
 }

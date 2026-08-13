@@ -152,7 +152,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "A project this person is currently working on.".into(),
             examples: vec!["Bob works on ProjectX".into()],
             deprecated_by: None,
-            profile_relevant: true,
+            profile_relevant: false,
         },
         PredicateDef {
             name: "born_in".into(),
@@ -208,7 +208,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "This person knows another person. Symmetric.".into(),
             examples: vec!["Alice knows Bob".into()],
             deprecated_by: None,
-            profile_relevant: true,
+            profile_relevant: false,
         },
         PredicateDef {
             name: "member_of".into(),
@@ -236,7 +236,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "This organization is part of a parent organization.".into(),
             examples: vec!["Acme subsidiary is part of Acme Corp".into()],
             deprecated_by: None,
-            profile_relevant: true,
+            profile_relevant: false,
         },
         PredicateDef {
             name: "located_in".into(),
@@ -250,7 +250,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "This place is located within another place.".into(),
             examples: vec!["Seoul is located in South Korea".into()],
             deprecated_by: None,
-            profile_relevant: true,
+            profile_relevant: false,
         },
         PredicateDef {
             name: "has_skill".into(),
@@ -278,7 +278,7 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             description: "Who created this artifact or document.".into(),
             examples: vec!["The report was created by Alice".into()],
             deprecated_by: None,
-            profile_relevant: true,
+            profile_relevant: false,
         },
         PredicateDef {
             name: "aliases".into(),
