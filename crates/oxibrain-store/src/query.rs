@@ -208,32 +208,48 @@ fn statement_ids_for_subject(
     Ok(result)
 }
 
-/// FTS5/BM25 lexical search over the indexed body texts. Returns hits
-/// sorted by BM25 score descending (FTS5 rank is negated so higher = better).
+/// Which FTS5 index to search (§7.4).
+#[derive(Clone, Copy)]
+pub enum FtsIndex {
+    Word,
+    Ngram,
+}
+
+/// FTS5/BM25 lexical search over one index. Returns hits sorted by BM25 score
+/// descending (FTS5 rank is negated so higher = better). Call twice — once per
+/// index — so both lists enter RRF as separate channels (§7.4).
 pub fn fts_search(
     conn: &Connection,
     space: &str,
     query_text: &str,
     limit: usize,
+    index: FtsIndex,
 ) -> Result<Vec<SearchHit>, BrainError> {
-    // FTS5 implicit-AND query: space-separated tokens.
+    let table = match index {
+        FtsIndex::Word => "fts_word",
+        FtsIndex::Ngram => "fts_ngram",
+    };
+    // FTS5 implicit-AND query: space-separated tokens. Each token is quoted
+    // so FTS5 treats it as a literal phrase — punctuation in the query
+    // (`?`, `(`, `:`, `*`, `-`, …) cannot break the MATCH expression with a
+    // syntax error. A literal `"` inside a token is escaped by doubling.
     let fts_query: String = query_text
         .split_whitespace()
         .filter(|s| !s.is_empty())
+        .map(|tok| format!("\"{}\"", tok.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(" ");
     if fts_query.is_empty() {
         return Ok(Vec::new());
     }
-    let mut stmt = conn
-        .prepare(
-            "SELECT target_kind, target_id, rank
-             FROM episodes_fts
-             WHERE episodes_fts MATCH ?1 AND space_id = ?2
-             ORDER BY rank
-             LIMIT ?3",
-        )
-        .map_err(sql_err)?;
+    let sql = format!(
+        "SELECT target_kind, target_id, rank
+         FROM {table}
+         WHERE {table} MATCH ?1 AND space_id = ?2
+         ORDER BY rank
+         LIMIT ?3"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
     let hits = stmt
         .query_map(params![&fts_query, space, limit as i64], |r| {
             let kind: String = r.get(0)?;
@@ -380,8 +396,10 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
     let dropped: Vec<DroppedItem> = Vec::new();
 
     if run_lexical {
-        let hits = fts_search(conn, &q.space, &q.text, limit)?;
-        mode_lists.push(hits);
+        let word_hits = fts_search(conn, &q.space, &q.text, limit, FtsIndex::Word)?;
+        let ngram_hits = fts_search(conn, &q.space, &q.text, limit, FtsIndex::Ngram)?;
+        mode_lists.push(word_hits);
+        mode_lists.push(ngram_hits);
     }
     if run_lexical_vector {
         let hits = lexical_vector_search(conn, &q.space, &q.text, limit)?;
@@ -389,7 +407,7 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
     }
     if run_graph {
         // Graph mode: seed from lexical entity hits, then BFS-expand to neighbors.
-        let seed_hits = fts_search(conn, &q.space, &q.text, limit / 2)?
+        let seed_hits = fts_search(conn, &q.space, &q.text, limit / 2, FtsIndex::Word)?
             .into_iter()
             .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
             .collect::<Vec<_>>();
@@ -443,7 +461,7 @@ pub fn hybrid_query(conn: &Connection, q: &Query) -> Result<RankingResult, Brain
     }
     if run_community {
         // Community mode: seed from lexical hits, expand to community members.
-        let seed_hits = fts_search(conn, &q.space, &q.text, limit / 2)?
+        let seed_hits = fts_search(conn, &q.space, &q.text, limit / 2, FtsIndex::Word)?
             .into_iter()
             .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
             .collect::<Vec<_>>();

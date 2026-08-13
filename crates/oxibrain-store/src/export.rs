@@ -180,6 +180,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn fresh_db_with_data() -> Connection {
+        migration::ensure_vec_extension();
         let conn = Connection::open_in_memory().expect("open");
         migration::run(&conn).expect("migrate");
         let sid = crate::ledger::create_space(&conn, "personal", Timestamp::from_millis(0))

@@ -97,10 +97,18 @@ fn migrates_from_v1_with_data() {
     // The v2 migration drops and recreates mentions without the spurious FK.
     assert!(has_table(&conn, "mentions"));
 
-    // ── v3 effects: FTS5 virtual table. ──
+    // ── v6 effects: dual FTS tables replace v3's episodes_fts (§7.4). ──
     assert!(
-        has_table(&conn, "episodes_fts"),
-        "v3 migration must create FTS5 table"
+        has_table(&conn, "fts_word"),
+        "v6 migration must create fts_word table"
+    );
+    assert!(
+        has_table(&conn, "fts_ngram"),
+        "v6 migration must create fts_ngram table"
+    );
+    assert!(
+        !has_table(&conn, "episodes_fts"),
+        "v6 migration must drop the old episodes_fts table"
     );
 
     // ── v3 effects: TF-IDF vectors table. ──
@@ -169,7 +177,8 @@ fn migrates_from_v2_with_data() {
     );
 
     // ── v3 effects: all new structures. ──
-    assert!(has_table(&conn, "episodes_fts"));
+    assert!(has_table(&conn, "fts_word"));
+    assert!(has_table(&conn, "fts_ngram"));
     assert!(has_table(&conn, "tfidf_vectors"));
     assert!(has_column(&conn, "entities", "salience"));
     assert!(has_column(&conn, "episodes", "content_compacted"));

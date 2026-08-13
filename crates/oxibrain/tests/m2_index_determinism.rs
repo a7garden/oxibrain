@@ -94,8 +94,12 @@ async fn index_rebuild_is_deterministic() {
         "index snapshot must be non-empty after declares — projection or rebuild is broken"
     );
     assert!(
-        snapshot1.contains("---fts---"),
-        "snapshot missing fts section: {snapshot1}"
+        snapshot1.contains("---fts_word---"),
+        "snapshot missing word-fts section: {snapshot1}"
+    );
+    assert!(
+        snapshot1.contains("---fts_ngram---"),
+        "snapshot missing ngram-fts section: {snapshot1}"
     );
     assert!(
         snapshot1.contains("---vec---"),

@@ -15,7 +15,7 @@ fn fts_search_empty_space_returns_empty() {
     let (_dir, store) = setup_store();
     let conn = store.connection();
     let hits =
-        oxibrain_store::query::fts_search(conn, "nonexistent", "test", 10).expect("fts_search");
+        oxibrain_store::query::fts_search(conn, "nonexistent", "test", 10, oxibrain_store::query::FtsIndex::Word).expect("fts_search");
     assert!(hits.is_empty());
 }
 

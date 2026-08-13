@@ -4,6 +4,7 @@ use oxibrain_store::reproject;
 use rusqlite::Connection;
 
 fn setup() -> (Connection, FakeClock) {
+    oxibrain_store::migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(include_str!("../src/migrations/v1.sql"))
         .unwrap();
@@ -12,6 +13,10 @@ fn setup() -> (Connection, FakeClock) {
     conn.execute_batch(include_str!("../src/migrations/v3.sql"))
         .unwrap();
     conn.execute_batch(include_str!("../src/migrations/v4.sql"))
+        .unwrap();
+    conn.execute_batch(include_str!("../src/migrations/v5.sql"))
+        .unwrap();
+    conn.execute_batch(include_str!("../src/migrations/v6.sql"))
         .unwrap();
     oxibrain_store::registry::seed_core_v1(&conn).unwrap();
     conn.execute(

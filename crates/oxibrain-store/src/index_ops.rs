@@ -57,13 +57,13 @@ fn entity_surface(conn: &Connection, entity_id: &str) -> Result<String, BrainErr
     }
 }
 
-/// Drop and rebuild all FTS5 content for a space.
+/// Drop and rebuild all FTS5 content for a space — both word and trigram
+/// indexes (§7.4). Both are always populated; no script detection, no routing.
 pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
-    conn.execute(
-        "DELETE FROM episodes_fts WHERE space_id = ?1",
-        params![space],
-    )
-    .map_err(sql_err)?;
+    conn.execute("DELETE FROM fts_word WHERE space_id = ?1", params![space])
+        .map_err(sql_err)?;
+    conn.execute("DELETE FROM fts_ngram WHERE space_id = ?1", params![space])
+        .map_err(sql_err)?;
     // Index episodes.
     let mut stmt = conn
         .prepare("SELECT id, content FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL")
@@ -78,9 +78,15 @@ pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
     drop(stmt);
     for (id, content) in &episodes {
         conn.execute(
-            "INSERT INTO episodes_fts (space_id, target_kind, target_id, body)
-             VALUES (?1, 'episode', ?2, ?3)",
-            params![space, id, content],
+            "INSERT INTO fts_word (body, space_id, target_kind, target_id)
+             VALUES (?1, ?2, 'episode', ?3)",
+            params![content, space, id],
+        )
+        .map_err(sql_err)?;
+        conn.execute(
+            "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
+             VALUES (?1, ?2, 'episode', ?3)",
+            params![content, space, id],
         )
         .map_err(sql_err)?;
     }
@@ -89,9 +95,15 @@ pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
     for stmt in &statements {
         let body = render_statement(conn, stmt)?;
         conn.execute(
-            "INSERT INTO episodes_fts (space_id, target_kind, target_id, body)
-             VALUES (?1, 'statement', ?2, ?3)",
-            params![space, stmt.id, body],
+            "INSERT INTO fts_word (body, space_id, target_kind, target_id)
+             VALUES (?1, ?2, 'statement', ?3)",
+            params![body, space, stmt.id],
+        )
+        .map_err(sql_err)?;
+        conn.execute(
+            "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
+             VALUES (?1, ?2, 'statement', ?3)",
+            params![body, space, stmt.id],
         )
         .map_err(sql_err)?;
     }
@@ -170,8 +182,12 @@ pub fn snapshot_indexes(conn: &Connection, space: &str) -> Result<String, BrainE
     let mut out = String::new();
     for (label, sql) in [
         (
-            "fts",
-            "SELECT target_kind, target_id, body FROM episodes_fts WHERE space_id = ?1 ORDER BY target_kind, target_id",
+            "fts_word",
+            "SELECT target_kind, target_id, body FROM fts_word WHERE space_id = ?1 ORDER BY target_kind, target_id",
+        ),
+        (
+            "fts_ngram",
+            "SELECT target_kind, target_id, body FROM fts_ngram WHERE space_id = ?1 ORDER BY target_kind, target_id",
         ),
         (
             "vec",
