@@ -1,10 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  api,
-  type GraphNode,
-  type GraphEdge,
-  type EntityBeliefs,
-} from "../api";
+import { api, type GraphNode, type GraphEdge } from "../api";
+import { BriefMarkdown } from "../markdown";
 
 interface SimNode extends GraphNode {
   x: number;
@@ -26,7 +22,7 @@ export function GraphExplorer() {
   const [nodes, setNodes] = useState<SimNode[]>([]);
   const [edges, setEdges] = useState<GraphEdge[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [beliefs, setBeliefs] = useState<EntityBeliefs | null>(null);
+  const [beliefs, setBeliefs] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -156,7 +152,7 @@ export function GraphExplorer() {
       setBeliefs(null);
       return;
     }
-    api.getEntity(selected).then(setBeliefs).catch(() => setBeliefs(null));
+    api.brief(selected).then(setBeliefs).catch(() => setBeliefs(null));
   }, [selected]);
 
   const handleMouseDown = useCallback(
@@ -308,43 +304,13 @@ export function GraphExplorer() {
 
       {/* Detail panel */}
       {selected && beliefs && (
-        <aside className="w-80 border-l border-line bg-ink-2 p-5 overflow-auto animate-fade-in">
-          <div className="mb-1 font-mono text-xs text-text-faint">
-            {beliefs.entity_type}
-          </div>
-          <h3 className="mb-4 font-display text-xl text-text">
-            {beliefs.entity_surface}
-          </h3>
-          <div className="space-y-3 stagger">
-            {beliefs.beliefs.length === 0 ? (
-              <p className="font-mono text-xs text-text-faint">No beliefs.</p>
-            ) : (
-              beliefs.beliefs.map((b, i) => (
-                <div
-                  key={i}
-                  className="rounded-lg border border-line bg-surface p-3"
-                >
-                  <div className="font-mono text-xs text-amber">
-                    {b.predicate}
-                  </div>
-                  <div className="mt-1 text-sm text-text">
-                    {b.object_surface}
-                  </div>
-                  <div className="mt-1 font-mono text-xs text-text-faint">
-                    {b.valid_from.slice(0, 10)}
-                    {b.valid_to ? ` → ${b.valid_to.slice(0, 10)}` : " → now"}
-                    {" · "}conf {(b.confidence * 100).toFixed(0)}%
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+        <aside className="w-96 border-l border-line bg-ink-2 p-5 overflow-auto animate-fade-in">
+          <BriefMarkdown markdown={beliefs} onNavigate={(id) => setSelected(id)} />
         </aside>
       )}
     </div>
   );
 }
-
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }

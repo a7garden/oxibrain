@@ -84,8 +84,11 @@ export const api = {
   recall: (query: string, space = "personal") =>
     callTool<RecallResult>("recall", { query, space }),
 
-  getEntity: (entityId: string, space = "personal") =>
-    callTool<EntityBeliefs>("get_entity", { entity_id: entityId, space }),
+  brief: (entityId: string, space = "personal") =>
+    callTool<string>("brief", { entity_id: entityId, space }),
+
+  navigate: (from: string, link: string, space = "personal") =>
+    callTool<string>("navigate", { from, link, space }),
 
   traverse: (start: string[], space = "personal", depth = 2) =>
     callTool<TraversalResult>("traverse", {
@@ -93,9 +96,6 @@ export const api = {
       space,
       depth,
     }),
-
-  timeline: (entityId: string, space = "personal") =>
-    callTool<TimelineEntry[]>("timeline", { entity_id: entityId, space }),
 
   contradictions: (space = "personal") =>
     callTool<Contradiction[]>("contradictions", { space }),
@@ -172,13 +172,6 @@ export interface Belief {
   source_episode_id: string;
 }
 
-export interface EntityBeliefs {
-  entity_id: string;
-  entity_surface: string;
-  entity_type: string;
-  beliefs: Belief[];
-}
-
 export interface GraphNode {
   id: string;
   surface: string;
@@ -196,14 +189,6 @@ export interface TraversalResult {
   edges: GraphEdge[];
 }
 
-export interface TimelineEntry {
-  predicate: string;
-  object_surface: string;
-  valid_from: string;
-  valid_to: string | null;
-  confidence: number;
-  episode_id: string;
-}
 
 export interface Contradiction {
   statement_id: string;

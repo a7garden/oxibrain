@@ -1,12 +1,12 @@
 import { useState, useEffect, type ReactNode } from "react";
 import { api, type SpaceOverview } from "./api";
 import { GraphExplorer } from "./views/GraphExplorer";
-import { Timeline } from "./views/Timeline";
+import { Brief } from "./views/Brief";
 import { AskProvenance } from "./views/AskProvenance";
 import { ContradictionInbox } from "./views/ContradictionInbox";
 import { QuickCapture } from "./views/QuickCapture";
 
-type ViewId = "graph" | "timeline" | "ask" | "contradictions" | "capture";
+type ViewId = "graph" | "brief" | "ask" | "contradictions" | "capture";
 
 const NAV_ITEMS: Array<{
   id: ViewId;
@@ -15,7 +15,7 @@ const NAV_ITEMS: Array<{
   desc: string;
 }> = [
   { id: "graph", label: "Graph", icon: "✦", desc: "Constellation of entities" },
-  { id: "timeline", label: "Timeline", icon: "◐", desc: "Beliefs over time" },
+  { id: "brief", label: "Page", icon: "▤", desc: "Entity page with links" },
   { id: "ask", label: "Ask", icon: "⌕", desc: "Query with provenance" },
   { id: "contradictions", label: "Conflicts", icon: "⚡", desc: "Contradictions inbox" },
   { id: "capture", label: "Capture", icon: "✎", desc: "Quick note" },
@@ -135,7 +135,7 @@ export default function App() {
 function renderView(view: ViewId): ReactNode {
   switch (view) {
     case "graph": return <GraphExplorer />;
-    case "timeline": return <Timeline />;
+    case "brief": return <Brief />;
     case "ask": return <AskProvenance />;
     case "contradictions": return <ContradictionInbox />;
     case "capture": return <QuickCapture />;

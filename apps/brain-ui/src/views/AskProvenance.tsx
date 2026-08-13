@@ -1,15 +1,12 @@
 import { useState, useCallback } from "react";
-import {
-  api,
-  type SearchResult,
-  type ExplainBlock,
-} from "../api";
+import { api, type SearchResult } from "../api";
+import { BriefMarkdown } from "../markdown";
 
 export function AskProvenance() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [provenance, setProvenance] = useState<ExplainBlock | null>(null);
+  const [provenance, setProvenance] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
 
@@ -38,15 +35,10 @@ export function AskProvenance() {
       setExpanded(entityId);
       setProvenance(null);
       try {
-        const beliefs = await api.getEntity(entityId);
-        if (beliefs.beliefs[0]) {
-          const why = await api.why(
-            `${entityId}:${beliefs.beliefs[0].predicate}`,
-          );
-          setProvenance(why);
-        }
+        const page = await api.brief(entityId);
+        setProvenance(page);
       } catch {
-        // no provenance available
+        // no brief available
       }
     },
     [expanded],
@@ -129,31 +121,12 @@ export function AskProvenance() {
                       Provenance
                     </h4>
                     {provenance ? (
-                      <div className="space-y-2">
-                        {provenance.assertions.map((a, ai) => (
-                          <div
-                            key={ai}
-                            className="rounded-lg bg-surface/60 p-3"
-                          >
-                            <div className="flex items-center gap-2 font-mono text-xs text-text-faint">
-                              <span className="text-amber-dim">
-                                {a.extractor_id}
-                              </span>
-                              <span>·</span>
-                              <span>{a.valid_from.slice(0, 10)}</span>
-                            </div>
-                            <p className="mt-1 text-sm italic text-text-dim">
-                              "{a.mention_text}"
-                            </p>
-                            <div className="mt-1 font-mono text-xs text-text-faint">
-                              episode: {a.episode_id.slice(0, 16)}…
-                            </div>
-                          </div>
-                        ))}
+                      <div className="rounded-lg bg-surface/60 p-3">
+                        <BriefMarkdown markdown={provenance} onNavigate={() => {}} />
                       </div>
                     ) : (
                       <p className="font-mono text-xs text-text-faint">
-                        Loading provenance…
+                        Loading page…
                       </p>
                     )}
                   </div>
