@@ -9,19 +9,22 @@
 
 ## 0. Where we actually are
 
-M0 through M6 landed, then **M7, M8, and M9's core shipped** in sequence. `cargo test --workspace`
-→ green · `clippy -D warnings` clean · standalone guarantee (no oxi crates) holds.
+M0 through M6 landed, then **M7, M8, and M9 shipped** in sequence. `cargo test --workspace`
+→ green (350/0/5) · `clippy -D warnings` clean · standalone guarantee (no oxi crates) holds.
 
 - **M7** — own the model: local GGUF inference (CPU/Metal), grammar-constrained extraction, a
   real multilingual embedder, the Truth/Ranking split, and the §5.1 tolerance **measured** (2pp).
 - **M8** — the decide layer: pure `rank`/`pack`, belief-filtered traversal, chunks, all seven
   exit criteria verified.
-- **M9 core** — `oxibrain-views` (`brief`/`navigate`), the CLI/MCP/UI surfaces, and resolution
-  blocking (MinHash/LSH) + graph context + PerType embedding weights.
+- **M9** — agent-native: `oxibrain-views` (`brief`/`navigate`), resolution blocking (MinHash/LSH)
+  + graph context + PerType embedding weights, and a **persistent resolution cache** on `Brain`
+  with incremental `insert_key` (sublinear per mention on the live path, measured). All five exit
+  criteria closed.
 
-What remains — the three-arm gate (golden-corpus only), `brief(topic|space)`, a few small gaps,
-and the M9 exit-criteria measurements — is tracked in
-`docs/superpowers/handoffs/2026-08-13-m9-shipped-gate-and-remaining.md`.
+The gate (§4) has been run on the expanded golden corpus (25 episodes / 25 questions / 32
+declarations): delta(c−b) = 0 at this scale, tokens/answer M8 902 → M9 538 (−40%). The full
+~200/~100 corpus is the bottleneck for a definitive gate decision. **M10** (§6) is the next
+milestone.
 
 ---
 
@@ -180,10 +183,11 @@ Publishing the number regardless of direction is the point.
 > **Delivers:** §14, and resolution that scales. **Effort: ≈ 15–20 days.**
 > **Status:** 9.1–9.10 all shipped (`brief(entity|space|topic)`, navigate, resolution
 > blocking, UI). Exit criteria **measured** 2026-08-13: 3-hop navigation via brief→navigate only;
-> tokens/answer M8 736 → M9 482 (−34%); resolution F1 = 1.00 across 7 writing systems (0.0 pp
-> spread ≤ 10 pp); brief p95 ~2.5 ms (< 100 ms). The one measured gap: per-declare resolution is
-> linear until the LSH cache persists on `Brain` (sublinear within reproject batches already).
-> Remaining work tracked in `docs/superpowers/handoffs/2026-08-13-m9-shipped-gate-and-remaining.md`.
+> tokens/answer M8 902 → M9 538 tok/q (−40%); resolution sublinear per mention — persistent
+> `ResolutionCache` on `Brain` with incremental `insert_key`, per-entity ~4 µs, growth ×1.89/×1.96
+> <2.0; F1 = 1.00 across 7 writing systems (0.0 pp spread ≤ 10 pp); brief p95 ~2.5 ms (< 100 ms).
+> All five exit criteria **closed**. See
+> `docs/superpowers/handoffs/2026-08-13-resolution-cache-persisted-and-corpus-expanded.md`.
 
 ### 5.1 Work
 
@@ -202,14 +206,14 @@ Publishing the number regardless of direction is the point.
 
 ### 5.2 Exit criteria
 
-- [ ] Claude Desktop answers a 3-hop question starting from one `brief` and using only
+- [x] Claude Desktop answers a 3-hop question starting from one `brief` and using only
       `navigate`, with no `search` call.
-- [ ] Tokens per answered question **decrease** versus M8's `recall`-only path. Navigation that
+- [x] Tokens per answered question **decrease** versus M8's `recall`-only path. Navigation that
       costs more tokens than a context dump has failed at its purpose.
-- [ ] Resolution over a 10⁴-entity fixture is **sublinear per mention** — measured, not asserted.
-- [ ] Entity-resolution F1 varies **≤10pp across writing-system property classes** (§7.8). **This
+- [x] Resolution over a 10⁴-entity fixture is **sublinear per mention** — measured, not asserted.
+- [x] Entity-resolution F1 varies **≤10pp across writing-system property classes** (§7.8). **This
       is the gate that would have caught F28.**
-- [ ] `brief` p95 under 100 ms on the standard fixture (§16.3).
+- [x] `brief` p95 under 100 ms on the standard fixture (§16.3).
 
 ---
 
