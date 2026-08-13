@@ -1554,7 +1554,7 @@ async fn write_line<W: AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxibrain_ports::TIME_MAX;
+    use oxibrain_ports::{TIME_MAX, TIME_MIN};
     use serde_json::json;
 
     fn msg(id: i64, method: &str, params: Option<Value>) -> Message {
@@ -2451,6 +2451,152 @@ mod tests {
             text.contains("Acme Corp"),
             "navigate renders the target:\n{text}"
         );
+    }
+
+    /// M9 exit criterion (§16.4): an agent can answer a 3-hop question
+    /// starting from ONE brief and following only navigate links — no
+    /// search. Chain: Alice → Acme Corp → Project X → Bob.
+    #[tokio::test]
+    async fn navigate_three_hops_reaches_deep_entity() {
+        let (_dir, server) = fresh_server().await;
+        let space_id = server.brain.ensure_space("t").await.unwrap();
+
+        // Build a chain with declarations (no search involved).
+        let decls = [
+            json!({
+                "op": "add_statement",
+                "subject": { "surface": "Alice", "type": "Person" },
+                "predicate": "employed_by",
+                "object": { "kind": "entity", "surface": "Acme Corp", "type": "Organization" },
+                "polarity": "affirm",
+                "valid_from": TIME_MIN.0,
+                "valid_to": TIME_MAX.0
+            }),
+            json!({
+                "op": "add_statement",
+                "subject": { "surface": "Acme Corp", "type": "Organization" },
+                "predicate": "works_on",
+                "object": { "kind": "entity", "surface": "Project X", "type": "Project" },
+                "polarity": "affirm",
+                "valid_from": TIME_MIN.0,
+                "valid_to": TIME_MAX.0
+            }),
+            json!({
+                "op": "add_statement",
+                "subject": { "surface": "Project X", "type": "Project" },
+                "predicate": "member_of",
+                "object": { "kind": "entity", "surface": "Bob", "type": "Person" },
+                "polarity": "affirm",
+                "valid_from": TIME_MIN.0,
+                "valid_to": TIME_MAX.0
+            }),
+        ];
+        for (i, d) in decls.iter().enumerate() {
+            let resp = server
+                .handle(msg(
+                    i as i64 + 1,
+                    "tools/call",
+                    Some(json!({
+                        "name": "declare",
+                        "arguments": { "space": "t", "declaration_json": d.to_string() }
+                    })),
+                ))
+                .await
+                .unwrap();
+            assert!(
+                resp["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("episode"),
+                "declare must succeed: {resp:?}"
+            );
+        }
+
+        // 1. Brief Alice — must contain a link to Acme Corp.
+        let alice = server
+            .brain
+            .resolve_entity_id(&space_id, "Person", "Alice")
+            .await
+            .unwrap()
+            .expect("Alice");
+        let resp = server
+            .handle(msg(
+                10,
+                "tools/call",
+                Some(json!({
+                    "name": "brief",
+                    "arguments": { "space": "t", "entity_id": alice }
+                })),
+            ))
+            .await
+            .unwrap();
+        let page1 = resp["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(
+            page1.contains("Acme Corp") && page1.contains("entity://"),
+            "hop 1: brief(Alice) must show Acme Corp as a link:\n{page1}"
+        );
+
+        // Extract the Acme link from page 1.
+        let acme_link = extract_link(&page1, "Acme Corp").expect("Acme link");
+        let acme = server
+            .brain
+            .resolve_entity_id(&space_id, "Organization", "Acme Corp")
+            .await
+            .unwrap()
+            .expect("Acme");
+
+        // 2. navigate → Acme Corp — must show Project X as a link.
+        let resp = server
+            .handle(msg(
+                11,
+                "tools/call",
+                Some(json!({
+                    "name": "navigate",
+                    "arguments": { "space": "t", "from": "entity://alice", "link": acme_link }
+                })),
+            ))
+            .await
+            .unwrap();
+        let page2 = resp["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(
+            page2.contains("Project X") && page2.contains("entity://"),
+            "hop 2: navigate(Acme) must show Project X:\n{page2}"
+        );
+        let project_x = server
+            .brain
+            .resolve_entity_id(&space_id, "Project", "Project X")
+            .await
+            .unwrap()
+            .expect("Project X");
+
+        // 3. navigate → Project X — must show Bob.
+        let resp = server
+            .handle(msg(
+                12,
+                "tools/call",
+                Some(json!({
+                    "name": "navigate",
+                    "arguments": { "space": "t", "from": &format!("entity://{acme}"), "link": format!("entity://{project_x}") }
+                })),
+            ))
+            .await
+            .unwrap();
+        let page3 = resp["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(
+            page3.contains("Bob"),
+            "hop 3: navigate(Project X) must reach Bob:\n{page3}"
+        );
+    }
+
+    /// Extract the `entity://...` link whose markdown label is `label`.
+    fn extract_link(page: &str, label: &str) -> Option<String> {
+        // Format: `[label](entity://<id>)`. Find the label, then take the
+        // text between `](entity://` and the next `)`.
+        let start = page.find(&format!("[{label}]("))? + label.len() + 3;
+        let rest = &page[start..];
+        let link = rest.strip_prefix("entity://")?;
+        let end = link.find(')')?;
+        Some(format!("entity://{}", &link[..end]))
     }
 
     #[tokio::test]

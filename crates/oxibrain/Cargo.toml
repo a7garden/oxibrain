@@ -37,3 +37,7 @@ serde.workspace = true
 [[bench]]
 name = "budget"
 harness = false
+
+[[bench]]
+name = "m9_exit"
+harness = false
