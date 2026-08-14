@@ -1,0 +1,10 @@
+# Graph reasoning: coworker at same company.
+# Keyword: "Frank". Answer: "Ivan" (also employed by Cyberdyne).
+# Lexical: Frank's statements mention Cyberdyne but not Ivan.
+# Hybrid: BFS finds Ivan via shared employer Cyberdyne.
+
+id = "q-027"
+category = "graph_reasoning"
+question = "Who else works at Frank's company?"
+answer = "Ivan"
+supporting_episodes = ["note-023", "note-025"]

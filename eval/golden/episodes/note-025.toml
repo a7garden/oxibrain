@@ -1,0 +1,31 @@
+# Graph reasoning: Ivan at Cyberdyne (same employer as Frank).
+
+shape = "note"
+lang = "en"
+occurred_at = "2023-06-01"
+
+content = "Ivan is a senior engineer at Cyberdyne, known for his Rust expertise."
+
+[[entities]]
+surface = "Ivan"
+type = "Person"
+
+[[entities]]
+surface = "Cyberdyne"
+type = "Organization"
+
+[[entities]]
+surface = "Rust"
+type = "Concept"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Ivan"
+object_surface = "Cyberdyne"
+valid_from = "2022-01-01"
+
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Ivan"
+object_surface = "Rust"
+valid_from = "2022-01-01"

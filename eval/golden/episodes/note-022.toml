@@ -1,0 +1,31 @@
+# Graph reasoning: Grace's skills (reachable from Frank via knows).
+
+shape = "note"
+lang = "en"
+occurred_at = "2023-03-01"
+
+content = "Grace is the team's infrastructure lead. She has deep expertise in Kubernetes and GraphQL."
+
+[[entities]]
+surface = "Grace"
+type = "Person"
+
+[[entities]]
+surface = "Kubernetes"
+type = "Concept"
+
+[[entities]]
+surface = "GraphQL"
+type = "Concept"
+
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Grace"
+object_surface = "Kubernetes"
+valid_from = "2023-03-01"
+
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Grace"
+object_surface = "GraphQL"
+valid_from = "2023-03-01"

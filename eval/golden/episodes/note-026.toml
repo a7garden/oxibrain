@@ -1,0 +1,31 @@
+# Graph reasoning: Judy knows Ivan (1-hop neighbour).
+
+shape = "note"
+lang = "en"
+occurred_at = "2023-07-01"
+
+content = "Judy is a product manager. She works closely with Ivan on ProjectBeta."
+
+[[entities]]
+surface = "Judy"
+type = "Person"
+
+[[entities]]
+surface = "Ivan"
+type = "Person"
+
+[[entities]]
+surface = "ProjectBeta"
+type = "Project"
+
+[[statements]]
+predicate = "knows"
+subject_surface = "Judy"
+object_surface = "Ivan"
+valid_from = "2023-07-01"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "Judy"
+object_surface = "ProjectBeta"
+valid_from = "2023-07-01"

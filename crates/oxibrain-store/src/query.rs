@@ -553,6 +553,24 @@ pub fn hybrid_query(
                     mode: QueryMode::Graph,
                 })
                 .collect();
+            // Emit Statement targets from BFS edges — the concrete evidence
+            // (e.g., "Grace has_skill Kubernetes") that connects the seed to
+            // its graph neighbours. Without this, graph expansion only returns
+            // Entity nodes, which the caller cannot render as statements.
+            // Depth-2+ edges are the novel evidence lexical search cannot reach.
+            let mut seen_stmts: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for (_, _, _, stmt_id, _) in &bfs_result.edges {
+                if seen_stmts.insert(stmt_id.clone()) {
+                    graph_hits.push(SearchHit {
+                        target: SearchTarget::Statement {
+                            id: stmt_id.clone(),
+                        },
+                        score: 0.4,
+                        mode: QueryMode::Graph,
+                    });
+                }
+            }
             for mut h in seed_hits {
                 h.mode = QueryMode::Graph;
                 graph_hits.push(h);
@@ -1031,6 +1049,42 @@ pub fn render_statements(
                     .unwrap_or_default(),
             };
             Ok(format!("{id} | {subject} {predicate} {object}"))
+        })
+        .map_err(sql_err)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
+}
+
+/// Look up statement IDs where the given entities appear as subject or object.
+/// Used by the gate runner to resolve graph-expanded Entity targets into their
+/// concrete statement evidence.
+pub fn statements_for_entities(
+    conn: &Connection,
+    space: &str,
+    entity_ids: &[String],
+) -> Result<Vec<String>, BrainError> {
+    if entity_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = entity_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT DISTINCT s.id FROM statements s
+             INNER JOIN beliefs b ON b.statement_id = s.id
+             WHERE s.space_id = ?1
+               AND b.status = 'active'
+               AND (s.subject_id IN ({placeholders}) OR s.object_entity IN ({placeholders}))"
+        ))
+        .map_err(sql_err)?;
+    let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&space];
+    for id in entity_ids {
+        params_vec.push(id);
+    }
+    for id in entity_ids {
+        params_vec.push(id);
+    }
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params_vec.iter()), |r| {
+            r.get::<_, String>(0)
         })
         .map_err(sql_err)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)

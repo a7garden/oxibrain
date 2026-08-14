@@ -141,6 +141,34 @@ pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
         )
         .map_err(sql_err)?;
     }
+    // Index entity surfaces so that FTS search by entity name returns Entity
+    // targets — the graph expansion seeds from these (§11.4). Without this,
+    // graph expansion finds no seeds and hybrid silently degrades to lexical.
+    let mut entity_stmt = conn
+        .prepare("SELECT entity_id, surface FROM entity_keys WHERE space_id = ?1")
+        .map_err(sql_err)?;
+    let entity_rows: Vec<(String, String)> = entity_stmt
+        .query_map(params![space], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    drop(entity_stmt);
+    for (eid, surface) in &entity_rows {
+        conn.execute(
+            "INSERT INTO fts_word (body, space_id, target_kind, target_id)
+             VALUES (?1, ?2, 'entity', ?3)",
+            params![surface, space, eid],
+        )
+        .map_err(sql_err)?;
+        conn.execute(
+            "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
+             VALUES (?1, ?2, 'entity', ?3)",
+            params![surface, space, eid],
+        )
+        .map_err(sql_err)?;
+    }
     Ok(())
 }
 

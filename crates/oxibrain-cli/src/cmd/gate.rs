@@ -429,7 +429,7 @@ async fn run_arm(
         mode: arm.query_mode(),
         space: space_id.to_string(),
         as_of,
-        limit: 5,
+        limit: 15,
         min_confidence: 0.0,
     };
     let result = brain.query(query).await.context(arm.label())?;
@@ -438,9 +438,29 @@ async fn run_arm(
     // agent-visible surface: the ranked statement's full text, not just
     // its predicate name.
     let mut ids: Vec<String> = Vec::new();
-    for item in result.items.iter().take(5) {
+    for item in result.items.iter().take(15) {
         if let oxibrain_core::rank::TargetId::Statement { id } = &item.target {
             ids.push(id.clone());
+        }
+    }
+    // For the hybrid arm (C), also resolve Entity targets to their statements.
+    // Graph expansion discovers Entity nodes (e.g., "Grace"); the agent needs
+    // Grace's statements ("Grace has_skill Kubernetes") to answer questions
+    // that require graph traversal. The lexical arm (B) never has Entity
+    // targets from graph expansion, so it is unaffected.
+    if arm == Arm::C {
+        let mut entity_ids: Vec<String> = Vec::new();
+        for item in result.items.iter().take(15) {
+            if let oxibrain_core::rank::TargetId::Entity { id } = &item.target {
+                entity_ids.push(id.clone());
+            }
+        }
+        if !entity_ids.is_empty() {
+            let entity_stmts = brain
+                .statements_for_entities(space_id, &entity_ids)
+                .await
+                .unwrap_or_default();
+            ids.extend(entity_stmts);
         }
     }
     let rendered_lines = brain.render_statements(space_id, &ids).await?;

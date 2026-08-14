@@ -1,0 +1,21 @@
+# Graph reasoning: Cyberdyne is a subsidiary of Hooli (org hierarchy).
+
+shape = "note"
+lang = "en"
+occurred_at = "2023-01-01"
+
+content = "Cyberdyne operates as a subsidiary of Hooli after the acquisition."
+
+[[entities]]
+surface = "Cyberdyne"
+type = "Organization"
+
+[[entities]]
+surface = "Hooli"
+type = "Organization"
+
+[[statements]]
+predicate = "part_of"
+subject_surface = "Cyberdyne"
+object_surface = "Hooli"
+valid_from = "2022-06-01"

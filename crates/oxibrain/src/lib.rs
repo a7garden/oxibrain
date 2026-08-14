@@ -961,6 +961,17 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
+    /// Look up statement IDs where the given entities are subject or object.
+    pub async fn statements_for_entities(
+        &self,
+        space: &str,
+        entity_ids: &[String],
+    ) -> Result<Vec<String>, BrainError> {
+        let (h, space, eids) = (self.handle.clone(), space.to_string(), entity_ids.to_vec());
+        read_op!(h, |conn| oxibrain_store::query::statements_for_entities(
+            conn, &space, &eids
+        ))
+    }
 
     /// Extract all (predicate, subject_surface, object_surface) triples from a
     /// space's current projection. Used by the eval suite and CLI `eval` command.
@@ -979,10 +990,12 @@ impl Brain {
         .map(|triples| {
             triples
                 .into_iter()
-                .map(|(p, s, o)| oxibrain_core::eval::ExtractedTriple {
-                    predicate: p,
-                    subject_surface: s,
-                    object_surface: o,
+                .map(|(predicate, subject_surface, object_surface)| {
+                    oxibrain_core::eval::ExtractedTriple {
+                        predicate,
+                        subject_surface,
+                        object_surface,
+                    }
                 })
                 .collect()
         })

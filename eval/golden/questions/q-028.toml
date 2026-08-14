@@ -1,0 +1,10 @@
+# Graph reasoning: parent company of employer.
+# Keyword: "Frank". Answer: "Hooli" (Cyberdyne part_of Hooli).
+# Lexical: Frank's statements mention Cyberdyne but not Hooli.
+# Hybrid: BFS depth-2 edge "Cyberdyne part_of Hooli".
+
+id = "q-028"
+category = "graph_reasoning"
+question = "What is the parent company of Frank's employer?"
+answer = "Hooli"
+supporting_episodes = ["note-023", "note-027"]

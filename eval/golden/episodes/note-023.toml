@@ -1,0 +1,51 @@
+# Graph reasoning: Frank's relationships (hub entity for traversal).
+
+shape = "note"
+lang = "en"
+occurred_at = "2023-04-01"
+
+content = "Frank has been at Cyberdyne for two years, working on ProjectAlpha. He regularly collaborates with Grace and codes in TypeScript."
+
+[[entities]]
+surface = "Frank"
+type = "Person"
+
+[[entities]]
+surface = "Cyberdyne"
+type = "Organization"
+
+[[entities]]
+surface = "ProjectAlpha"
+type = "Project"
+
+[[entities]]
+surface = "Grace"
+type = "Person"
+
+[[entities]]
+surface = "TypeScript"
+type = "Concept"
+
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Frank"
+object_surface = "Cyberdyne"
+valid_from = "2021-04-01"
+
+[[statements]]
+predicate = "works_on"
+subject_surface = "Frank"
+object_surface = "ProjectAlpha"
+valid_from = "2021-04-01"
+
+[[statements]]
+predicate = "knows"
+subject_surface = "Frank"
+object_surface = "Grace"
+valid_from = "2021-04-01"
+
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Frank"
+object_surface = "TypeScript"
+valid_from = "2021-04-01"

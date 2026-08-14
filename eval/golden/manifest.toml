@@ -21,8 +21,8 @@ name = "knowledge_update"
 description = "A later episode changes a belief; the brain must answer with the updated value."
 
 [[categories]]
-name = "temporal_reasoning"
-description = "The brain must answer what was true at a specific past instant, not now."
+name = "graph_reasoning"
+description = "The answer requires traversing the knowledge graph; the answer entity is not mentioned in the question so lexical-only search cannot find it."
 
 # ── Episodes (original 10) ────────────────────────────────────────────────
 
@@ -178,6 +178,44 @@ shape = "document"
 lang = "en"
 file = "episodes/document-005.toml"
 
+# ── Episodes (graph reasoning network) ───────────────────────────────────
+
+[[episodes]]
+id = "note-022"
+shape = "note"
+lang = "en"
+file = "episodes/note-022.toml"
+
+[[episodes]]
+id = "note-023"
+shape = "note"
+lang = "en"
+file = "episodes/note-023.toml"
+
+[[episodes]]
+id = "note-024"
+shape = "note"
+lang = "en"
+file = "episodes/note-024.toml"
+
+[[episodes]]
+id = "note-025"
+shape = "note"
+lang = "en"
+file = "episodes/note-025.toml"
+
+[[episodes]]
+id = "note-026"
+shape = "note"
+lang = "en"
+file = "episodes/note-026.toml"
+
+[[episodes]]
+id = "note-027"
+shape = "note"
+lang = "en"
+file = "episodes/note-027.toml"
+
 # ── Questions (original 10) ───────────────────────────────────────────────
 
 [[questions]]
@@ -306,3 +344,30 @@ file = "questions/q-024.toml"
 id = "q-025"
 category = "knowledge_update"
 file = "questions/q-025.toml"
+
+# ── Questions (graph reasoning) ──────────────────────────────────────────
+
+[[questions]]
+id = "q-026"
+category = "graph_reasoning"
+file = "questions/q-026.toml"
+
+[[questions]]
+id = "q-027"
+category = "graph_reasoning"
+file = "questions/q-027.toml"
+
+[[questions]]
+id = "q-028"
+category = "graph_reasoning"
+file = "questions/q-028.toml"
+
+[[questions]]
+id = "q-029"
+category = "graph_reasoning"
+file = "questions/q-029.toml"
+
+[[questions]]
+id = "q-030"
+category = "graph_reasoning"
+file = "questions/q-030.toml"

@@ -1,0 +1,31 @@
+# Graph reasoning: Heidi knows Frank (1-hop neighbour).
+
+shape = "note"
+lang = "en"
+occurred_at = "2023-05-01"
+
+content = "Heidi joined the team recently. She previously worked with Frank and is skilled in TensorFlow."
+
+[[entities]]
+surface = "Heidi"
+type = "Person"
+
+[[entities]]
+surface = "Frank"
+type = "Person"
+
+[[entities]]
+surface = "TensorFlow"
+type = "Concept"
+
+[[statements]]
+predicate = "knows"
+subject_surface = "Heidi"
+object_surface = "Frank"
+valid_from = "2023-05-01"
+
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Heidi"
+object_surface = "TensorFlow"
+valid_from = "2023-05-01"

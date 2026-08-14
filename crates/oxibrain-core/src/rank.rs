@@ -524,11 +524,14 @@ pub fn rank(input: &RetrievalInput, spec: &Retrieval) -> RankingResult {
     // 4. Rerank. Each variant either preserves the order or replaces it.
     apply_rerank(&mut items, &spec.rerank, &input.entity_vectors);
 
-    // 5. Sort descending by fused_score; tie-break on rrf_key for determinism.
+    // 5. Sort descending by fused_score; tie-break on target type (evidence
+    //    before navigation: Statement > Episode > Entity > Chunk > Community)
+    //    then on rrf_key for full determinism.
     items.sort_by(|a, b| {
         b.fused_score
             .partial_cmp(&a.fused_score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| target_type_rank(&a.target).cmp(&target_type_rank(&b.target)))
             .then_with(|| a.target.rrf_key().cmp(&b.target.rrf_key()))
     });
 
@@ -592,6 +595,18 @@ fn minimal_facts(target: &TargetId) -> TargetFacts {
         distinct_episodes: 0,
         channels: Vec::new(),
         channel_scores: Vec::new(),
+    }
+}
+
+/// Priority for tie-breaking in the final sort: evidence (Statement) before
+/// navigation (Entity). Lower = higher priority.
+fn target_type_rank(t: &TargetId) -> u8 {
+    match t {
+        TargetId::Statement { .. } => 0,
+        TargetId::Episode { .. } => 1,
+        TargetId::Entity { .. } => 2,
+        TargetId::Chunk { .. } => 3,
+        TargetId::Community { .. } => 4,
     }
 }
 

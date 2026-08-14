@@ -1,0 +1,10 @@
+# Graph reasoning: skill of a colleague reachable only via graph traversal.
+# Keyword: "Judy". Answer: "Rust" (Ivan's skill, Judy knows Ivan).
+# Lexical: Judy's statements mention Ivan and ProjectBeta, not Rust.
+# Hybrid: BFS depth-2 edge "Ivan has_skill Rust".
+
+id = "q-029"
+category = "graph_reasoning"
+question = "What programming language does Judy's colleague know?"
+answer = "Rust"
+supporting_episodes = ["note-025", "note-026"]

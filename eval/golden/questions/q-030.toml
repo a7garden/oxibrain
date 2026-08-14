@@ -1,0 +1,10 @@
+# Graph reasoning: skill of an acquaintance reachable only via graph traversal.
+# Keyword: "Heidi". Answer: "TypeScript" (Frank's skill, Heidi knows Frank).
+# Lexical: Heidi's statements mention Frank and TensorFlow, not TypeScript.
+# Hybrid: BFS depth-2 edge "Frank has_skill TypeScript".
+
+id = "q-030"
+category = "graph_reasoning"
+question = "What programming language does Heidi's colleague know?"
+answer = "TypeScript"
+supporting_episodes = ["note-023", "note-024"]

@@ -1,0 +1,10 @@
+# Graph reasoning: skill of a colleague reachable only via graph traversal.
+# Keyword: "Frank". Answer: "Kubernetes" (Grace's skill, Frank knows Grace).
+# Lexical arm: finds Frank's statements, none mention Kubernetes.
+# Hybrid arm: BFS depth-2 edge "Grace has_skill Kubernetes".
+
+id = "q-026"
+category = "graph_reasoning"
+question = "What technology is Frank's colleague skilled in?"
+answer = "Kubernetes"
+supporting_episodes = ["note-022", "note-023"]
