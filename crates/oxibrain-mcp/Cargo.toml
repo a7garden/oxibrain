@@ -3,6 +3,8 @@ name = "oxibrain-mcp"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "MCP server tools for oxibrain — fifteen-tool cap"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

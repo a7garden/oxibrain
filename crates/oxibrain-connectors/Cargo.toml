@@ -3,6 +3,8 @@ name = "oxibrain-connectors"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Source connectors for oxibrain — vault readers, file ingest"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

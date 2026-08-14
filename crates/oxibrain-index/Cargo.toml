@@ -3,6 +3,8 @@ name = "oxibrain-index"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Lexical and graph index primitives for oxibrain — n-gram, TF-IDF, adjacency, community"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

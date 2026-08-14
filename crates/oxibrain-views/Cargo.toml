@@ -3,6 +3,8 @@ name = "oxibrain-views"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Rendering and view layer for oxibrain — Markdown briefs, exports"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

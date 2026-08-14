@@ -3,6 +3,8 @@ name = "oxibrain-store"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "SQLite storage layer for oxibrain — ledger, projection, migrations, queries"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

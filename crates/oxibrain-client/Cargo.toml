@@ -3,6 +3,8 @@ name = "oxibrain-client"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Client SDK for oxibrain — programmatic access to the brain"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

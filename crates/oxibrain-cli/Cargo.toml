@@ -3,6 +3,8 @@ name = "oxibrain-cli"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Command-line interface and MCP server for oxibrain"
+repository.workspace = true
 rust-version.workspace = true
 
 [[bin]]

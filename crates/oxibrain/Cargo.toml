@@ -3,6 +3,8 @@ name = "oxibrain"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Facade library for oxibrain — the local-first second brain engine"
+repository.workspace = true
 rust-version.workspace = true
 
 [features]

@@ -3,6 +3,8 @@ name = "oxibrain-llm-http"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "HTTP LLM provider adapter for oxibrain (OpenAI-compatible)"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

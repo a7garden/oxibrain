@@ -3,6 +3,8 @@ name = "oxibrain-llm-local"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Local LLM adapter for oxibrain — GGUF inference with grammar-constrained decoding"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

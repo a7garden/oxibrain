@@ -3,6 +3,8 @@ name = "oxibrain-embed-local"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Local embedding adapter for oxibrain — multilingual sentence embeddings"
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
