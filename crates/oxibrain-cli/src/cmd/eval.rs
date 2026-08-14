@@ -4,7 +4,9 @@
 //! `full` requires a live provider (nightly only).
 
 use oxibrain::Brain;
-use oxibrain_core::eval::{ExtractedTriple, compute_metrics};
+use oxibrain_core::eval::{
+    ExtractedTriple, compute_metrics_with_fabrication, measure_fabrication_rate,
+};
 use oxibrain_core::extraction::{ExtractMechanism, ExtractorConfig};
 use oxibrain_core::{SourceRef, TrustTier};
 use oxibrain_ports::{FakeClock, FakeLlmPort, LlmResponse, Timestamp};
@@ -84,6 +86,7 @@ async fn run_fast() -> anyhow::Result<()> {
     let extractor = test_extractor();
     let mut all_extracted = Vec::new();
     let mut all_expected = Vec::new();
+    let mut all_entity_surfaces: Vec<String> = Vec::new();
 
     for fixture in &fixtures {
         let dir = tempfile::TempDir::new()?;
@@ -121,16 +124,27 @@ async fn run_fast() -> anyhow::Result<()> {
         }
 
         let extracted = brain.debug_triples(&space).await?;
+        // Collect entity surfaces for fabrication measurement (§17.3, 10.7).
+        for t in &extracted {
+            all_entity_surfaces.push(t.subject_surface.clone());
+            all_entity_surfaces.push(t.object_surface.clone());
+        }
         all_extracted.extend(extracted);
         all_expected.extend(fixture.expected_triples.clone());
     }
 
-    let metrics = compute_metrics(&all_extracted, &all_expected);
+    // Fabricated entity rate measured from source text (§17.3, 10.7).
+    // Each entity surface must appear verbatim in some fixture's content; the
+    // validator enforces this and measure_fabrication_rate proves it. No
+    // hardcoded 0.0.
+    let combined_source: String = fixtures
+        .iter()
+        .map(|f| f.content)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let global_rate = measure_fabrication_rate(&all_entity_surfaces, &combined_source);
 
-    println!("═══ oxibrain eval — fast suite ═══");
-    println!("Fixtures:    {}", fixtures.len());
-    println!("Extracted:   {} triples", all_extracted.len());
-    println!("Expected:    {} triples", all_expected.len());
+    let metrics = compute_metrics_with_fabrication(&all_extracted, &all_expected, global_rate);
     println!();
     println!(
         "Fabricated entity rate: {:.3}  (gate: 0.000)",

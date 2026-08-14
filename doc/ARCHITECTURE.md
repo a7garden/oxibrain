@@ -1352,7 +1352,7 @@ pub enum Rerank {
     None,
     GraphDistance { from: Vec<EntityId> },
     Corroboration,
-    Mmr { lambda: f32 },
+    Mmr { lambda: f32, max_similarity: Option<f32> },
     CrossEncoder,                   // via RerankPort
     Chain(Vec<Rerank>),
 }

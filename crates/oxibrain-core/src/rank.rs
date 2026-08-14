@@ -113,7 +113,15 @@ pub enum Rerank {
     /// `Support` is already on every belief row.
     Corroboration,
     /// Maximal marginal relevance — diversity-aware vector reranker.
-    Mmr { lambda: f32 },
+    /// `lambda` trades relevance vs diversity (0.5 = balanced).
+    /// `max_similarity` — when set, a candidate whose cosine to any
+    /// already-selected item exceeds this ceiling is deferred to the end
+    /// of the list rather than selected, so no two survivors in the
+    /// selection prefix are near-duplicates (§11.4 exit criterion).
+    Mmr {
+        lambda: f32,
+        max_similarity: Option<f32>,
+    },
     /// Apply rerankers in sequence.
     Chain(Vec<Rerank>),
 }
@@ -232,7 +240,10 @@ impl Retrieval {
                 space: VecSpace::Entity,
             }],
             fusion: Fusion::Rrf { k: 60 },
-            rerank: Rerank::Mmr { lambda: 0.5 },
+            rerank: Rerank::Mmr {
+                lambda: 0.5,
+                max_similarity: Some(0.9),
+            },
             filters: Filters::open(space),
             limit: 20,
             explain: false,
@@ -757,7 +768,10 @@ fn apply_rerank(
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
-        Rerank::Mmr { lambda } => {
+        Rerank::Mmr {
+            lambda,
+            max_similarity,
+        } => {
             // O(k²) MMR: pick top-1, then greedily select the item that
             // maximises `λ * score - (1-λ) * max_sim_to_selected`.
             //
@@ -765,10 +779,17 @@ fn apply_rerank(
             // cosine distance between dense embeddings — real MMR. When not,
             // we fall back to the score proxy `|Δscore|` (smaller = more
             // similar), preserving the legacy M7 behaviour.
+            //
+            // When `max_similarity` (ceiling) is set, any candidate whose
+            // cosine to an already-selected item exceeds the ceiling is
+            // *deferred* — skipped in the greedy loop and appended at the end
+            // (sorted by score). This enforces a hard diversity floor in the
+            // selection prefix without dropping items (conservation holds).
             if items.is_empty() {
                 return;
             }
             let lambda = *lambda as f64;
+            let ceiling = max_similarity.map(|c| c as f64);
             let mut reordered: Vec<RankedItem> = Vec::with_capacity(items.len());
             let mut pool: Vec<RankedItem> = items.to_vec();
             // First pick: highest fused score.
@@ -779,7 +800,7 @@ fn apply_rerank(
             });
             reordered.push(pool.remove(0));
             while !pool.is_empty() {
-                let mut best_idx = 0usize;
+                let mut best_idx: Option<usize> = None;
                 let mut best_score = f64::NEG_INFINITY;
                 for (i, cand) in pool.iter().enumerate() {
                     let cand_vec = item_vector(cand, entity_vectors);
@@ -803,13 +824,32 @@ fn apply_rerank(
                         let last = reordered.last().unwrap().fused_score;
                         (last - cand.fused_score).abs()
                     };
+                    // Ceiling check: defer near-duplicates.
+                    if let Some(c) = ceiling {
+                        if used_cosine && max_sim > c {
+                            continue;
+                        }
+                    }
                     let mmr = lambda * cand.fused_score - (1.0 - lambda) * sim;
                     if mmr > best_score {
                         best_score = mmr;
-                        best_idx = i;
+                        best_idx = Some(i);
                     }
                 }
-                reordered.push(pool.remove(best_idx));
+                match best_idx {
+                    Some(i) => reordered.push(pool.remove(i)),
+                    // All remaining candidates are above the ceiling —
+                    // append them by descending score and stop.
+                    None => {
+                        pool.sort_by(|a, b| {
+                            b.fused_score
+                                .partial_cmp(&a.fused_score)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        reordered.append(&mut pool);
+                        break;
+                    }
+                }
             }
             items.clone_from_slice(&reordered);
         }
@@ -1250,5 +1290,144 @@ mod tests {
             let j = |r: &RankingResult| serde_json::to_string(r).expect("serialize");
             prop_assert_eq!(j(&r1), j(&r2));
         }
+    }
+
+    // ── MMR diversity invariant (§11.4, M10 10.3 exit criterion) ────────
+    // Exit criterion: "Top-10 results for a broad query contain no two items
+    // above 0.9 mutual similarity."
+    //
+    // Test setup: 15 entities — 10 with distinct directions (evenly spaced on
+    // the unit circle, cosine ≈ 0.81 between neighbors) plus 5 near-duplicates
+    // (cosine ≈ 0.999) of 5 of those originals. The near-duplicates carry
+    // *higher* raw fused scores so that without the ceiling they would crowd
+    // the top-10. With `max_similarity: Some(0.9)`, the ceiling defers them
+    // to the tail and the top-10 contains only mutually-distinct items.
+
+    #[test]
+    fn mmr_ceiling_defers_near_duplicates_in_top_10() {
+        use std::collections::HashMap;
+        let mut vectors: HashMap<String, Vec<f32>> = HashMap::new();
+        let mut names: Vec<String> = Vec::new();
+
+        // 10 distinct directions: 36° apart on the unit circle.
+        for i in 0..10 {
+            let name = format!("d{i}");
+            names.push(name.clone());
+            let angle = (i as f64) * std::f64::consts::PI / 5.0;
+            vectors.insert(name, vec![angle.cos() as f32, angle.sin() as f32]);
+        }
+        // 5 near-duplicates of d0..d4 (cosine ≈ 0.999 to their original).
+        for i in 0..5 {
+            let name = format!("dup{i}");
+            names.push(name.clone());
+            let angle = (i as f64) * std::f64::consts::PI / 5.0;
+            // Same direction, 1% perturbation → cosine ≈ 0.9999.
+            vectors.insert(
+                name,
+                vec![(angle.cos() * 1.01) as f32, (angle.sin() * 1.01) as f32],
+            );
+        }
+
+        // Give duplicates HIGHER fused scores so they'd dominate without ceiling.
+        let mut items: Vec<RankedItem> = names
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let score = if e.starts_with("dup") {
+                    1.5 - 0.01 * i as f64 // dup scores: 1.5 range
+                } else {
+                    1.0 - 0.01 * i as f64 // distinct scores: 1.0 range
+                };
+                RankedItem {
+                    target: TargetId::Entity { id: e.clone() },
+                    facts: facts(TargetId::Entity { id: e.clone() }, 0.8, "works_on"),
+                    fused_score: score,
+                    salience: 0.8,
+                    rank: i,
+                    channels: vec![],
+                }
+            })
+            .collect();
+
+        apply_rerank(
+            &mut items,
+            &Rerank::Mmr {
+                lambda: 0.5,
+                max_similarity: Some(0.9),
+            },
+            &vectors,
+        );
+
+        // Assert: no two items in the top-10 have cosine > 0.9.
+        for (i, a) in items.iter().take(10).enumerate() {
+            let a_vec = match &a.target {
+                TargetId::Entity { id } => vectors.get(id).unwrap(),
+                _ => unreachable!(),
+            };
+            for (j, b) in items.iter().take(10).enumerate() {
+                if i >= j {
+                    continue;
+                }
+                let b_vec = match &b.target {
+                    TargetId::Entity { id } => vectors.get(id).unwrap(),
+                    _ => unreachable!(),
+                };
+                let sim = cosine_sim(a_vec, b_vec);
+                assert!(
+                    sim <= 0.9,
+                    "MMR kept a >0.9 pair at top-10 positions {i}/{j} \
+                     ({:?} / {:?}): cosine = {sim:.4}",
+                    a.target,
+                    b.target,
+                );
+            }
+        }
+
+        // Conservation: all 15 items still present.
+        assert_eq!(items.len(), 15);
+    }
+
+    // ── MMR ceiling conservation: no items dropped ─────────────────────
+    // Even with a ceiling, every input item must survive in the output.
+    // `rank` conservation: every candidate in exactly one of items or dropped.
+
+    #[test]
+    fn mmr_ceiling_never_drops_items() {
+        use std::collections::HashMap;
+        let mut vectors: HashMap<String, Vec<f32>> = HashMap::new();
+        let names: Vec<String> = (0..8).map(|i| format!("e{i}")).collect();
+        // All near-identical (cosine ≈ 1.0) — everything should be deferred
+        // except the first pick.
+        for name in &names {
+            vectors.insert(name.clone(), vec![1.0, 0.01, 0.0]);
+        }
+
+        let mut items: Vec<RankedItem> = names
+            .iter()
+            .enumerate()
+            .map(|(i, e)| RankedItem {
+                target: TargetId::Entity { id: e.clone() },
+                facts: facts(TargetId::Entity { id: e.clone() }, 0.8, "works_on"),
+                fused_score: 1.0 - 0.01 * i as f64,
+                salience: 0.8,
+                rank: i,
+                channels: vec![],
+            })
+            .collect();
+
+        let count_before = items.len();
+        apply_rerank(
+            &mut items,
+            &Rerank::Mmr {
+                lambda: 0.5,
+                max_similarity: Some(0.9),
+            },
+            &vectors,
+        );
+        assert_eq!(
+            items.len(),
+            count_before,
+            "MMR ceiling must not drop items — conservation invariant"
+        );
     }
 }
