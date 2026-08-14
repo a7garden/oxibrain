@@ -973,8 +973,7 @@ impl Brain {
         ))
     }
 
-    /// Extract all (predicate, subject_surface, object_surface) triples from a
-    /// space's current projection. Used by the eval suite and CLI `eval` command.
+    /// Extract all triples from a space's current projection.
     pub async fn debug_triples(
         &self,
         space: &str,
@@ -987,15 +986,12 @@ impl Brain {
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
-        .map(|triples| {
-            triples
-                .into_iter()
-                .map(|(predicate, subject_surface, object_surface)| {
-                    oxibrain_core::eval::ExtractedTriple {
-                        predicate,
-                        subject_surface,
-                        object_surface,
-                    }
+        .map(|t| {
+            t.into_iter()
+                .map(|(p, s, o)| oxibrain_core::eval::ExtractedTriple {
+                    predicate: p,
+                    subject_surface: s,
+                    object_surface: o,
                 })
                 .collect()
         })
