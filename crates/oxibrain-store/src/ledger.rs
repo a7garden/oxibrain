@@ -1,9 +1,12 @@
 //! Ledger-zone writes/reads: spaces and episodes. M0 only; knowledge writes land in M1.
 
 use crate::sql_err;
-use oxibrain_core::{Episode, EpisodeKind, SourceRef, TrustTier, content_hash, episode_id};
+use oxibrain_core::{
+    ContentHash, Episode, EpisodeKind, SourceRef, TrustTier, content_hash, episode_id,
+};
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::{Connection, params};
+use std::collections::{HashMap, HashSet};
 
 /// Idempotently create a space, returning its id. Id is derived from name (deterministic).
 pub fn create_space(conn: &Connection, name: &str, now: Timestamp) -> Result<String, BrainError> {
@@ -177,6 +180,38 @@ pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, Brain
 pub fn episode_count(conn: &Connection) -> Result<i64, BrainError> {
     conn.query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get::<_, i64>(0))
         .map_err(sql_err)
+}
+
+/// Note episodes' content hashes grouped by source path, for sync
+/// classification. One query; decision-free (P9). Redacted episodes are
+/// excluded — a redacted path has no live episode, so re-syncing its content
+/// ingests afresh.
+pub fn note_hashes_by_path(
+    conn: &Connection,
+    space: &str,
+) -> Result<HashMap<String, HashSet<ContentHash>>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT source_ref, content_hash FROM episodes
+             WHERE space_id = ?1 AND source_kind = 'note'
+               AND source_ref IS NOT NULL AND redacted_at IS NULL",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(sql_err)?;
+    let mut out: HashMap<String, HashSet<ContentHash>> = HashMap::new();
+    for row in rows {
+        let (path, hash) = row.map_err(sql_err)?;
+        let mut bytes = [0u8; 32];
+        if hash.len() == 32 {
+            bytes.copy_from_slice(&hash);
+        }
+        out.entry(path).or_default().insert(ContentHash(bytes));
+    }
+    Ok(out)
 }
 
 fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainError> {

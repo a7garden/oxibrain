@@ -28,6 +28,15 @@ pub enum Command {
         #[arg(long, default_value = "personal")]
         space: String,
     },
+    /// Sync a directory of markdown notes into a space. Idempotent: unchanged
+    /// files are skipped; new and modified files are ingested with
+    /// occurred_at = file mtime.
+    Sync {
+        /// Directory to scan recursively for .md files.
+        path: PathBuf,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
     /// Show store statistics.
     Stats,
     /// Health check.

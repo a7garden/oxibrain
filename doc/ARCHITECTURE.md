@@ -1,6 +1,6 @@
 # oxibrain — Architecture
 
-> **Version:** v2.1 · **Date:** 2026-08-13 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.2 · **Date:** 2026-08-15 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
@@ -1817,6 +1817,7 @@ that were never populated (F30); the description must match what is returned.
 ```
 oxibrain init | doctor | stats
 oxibrain ingest <path|-> [--source kind] [--trust tier] [--space s] [--watch]
+oxibrain sync <dir> [--space s]                     # vault sync: idempotent, occurred_at = mtime
 oxibrain ask "<question>" [--as-of DATE] [--global] [--explain]
 oxibrain page <entity>                        # rendered brief
 oxibrain entity show|merge|split|alias
@@ -1830,6 +1831,15 @@ oxibrain export [--format jsonl|md] | import
 oxibrain serve [--stdio|--socket|--http] [--daemon] | token issue|list|revoke
 oxibrain predicate add|list | eval [--suite fast|full|bench|parity]
 ```
+
+
+`sync` scans a directory for `.md` files via `oxibrain-connectors` and classifies each
+against the ledger's live note episodes for the space (`oxibrain-core::sync::classify`,
+pure — P9). New and modified files are ingested with `occurred_at` = file mtime, so
+episode ids are stable across re-syncs and an unchanged tree is a no-op. A modified
+path appends a new episode; the previous episode and its assertions remain (P1) —
+stale claims surface via `contradictions` and are removed with `retract`. Sync never
+retracts on its own.
 
 The CLI is a first-class product surface, not a debug tool.
 

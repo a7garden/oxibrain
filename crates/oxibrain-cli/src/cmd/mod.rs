@@ -20,6 +20,7 @@ pub mod reextract;
 pub mod reproject;
 pub mod serve;
 pub mod stats;
+pub mod sync;
 pub mod timeline;
 pub mod token;
 pub mod why;

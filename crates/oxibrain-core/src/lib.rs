@@ -58,10 +58,12 @@ pub use pack::{
 pub mod chunking;
 pub use chunking::{Chunk, ChunkPolicy, render_context_prefix, short_ts, split_into_chunks};
 pub mod stats;
+pub mod sync;
 pub use security::{
     AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
     TokenInfo,
 };
+pub use sync::{KnownNotes, SyncAction, SyncFile, classify as classify_sync};
 
 pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens_rough};
 pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};

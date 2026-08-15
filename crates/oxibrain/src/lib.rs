@@ -142,6 +142,16 @@ impl Brain {
             .await
     }
 
+    /// Note content hashes per source path (live episodes only), for sync
+    /// classification. Read-only; the decision lives in
+    /// [`oxibrain_core::classify_sync`].
+    pub async fn note_hashes(&self, space: &str) -> Result<oxibrain_core::KnownNotes, BrainError> {
+        let space = space.to_string();
+        read_op!(self.handle, |conn| ledger::note_hashes_by_path(
+            conn, &space
+        ))
+    }
+
     pub async fn get_episode(&self, id: &str) -> Result<Option<Episode>, BrainError> {
         let id = id.to_string();
         read_op!(self.handle, |conn| ledger::get_episode(conn, &id))
