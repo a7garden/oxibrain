@@ -133,7 +133,7 @@ fn default_confidence_prior() -> f32 {
 }
 /// Registry version for this ontology.
 pub const CORE_V1_MAJOR: u32 = 1;
-pub const CORE_V1_MINOR: u32 = 2;
+pub const CORE_V1_MINOR: u32 = 3;
 
 static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::new(|| {
     vec![
@@ -245,13 +245,14 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
         PredicateDef {
             name: "part_of".into(),
             object_kind: ObjectKind::Entity("Organization".into()),
-            subject_types: vec!["Organization".into()],
+            subject_types: vec!["Organization".into(), "Project".into(), "Artifact".into()],
             cardinality: Cardinality::Functional,
             temporality: Temporality::Static,
             invalidation: Invalidation::Supersede,
             symmetric: false,
             inverse_of: None,
-            description: "This organization is part of a parent organization.".into(),
+            description: "This organization/project/artifact is part of a parent organization."
+                .into(),
             examples: vec!["Acme subsidiary is part of Acme Corp".into()],
             deprecated_by: None,
             profile_relevant: false,
@@ -260,13 +261,13 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
         PredicateDef {
             name: "located_in".into(),
             object_kind: ObjectKind::Entity("Place".into()),
-            subject_types: vec!["Place".into()],
+            subject_types: vec!["Place".into(), "Artifact".into()],
             cardinality: Cardinality::Functional,
             temporality: Temporality::Static,
             invalidation: Invalidation::Supersede,
             symmetric: false,
             inverse_of: None,
-            description: "This place is located within another place.".into(),
+            description: "This place or artifact is located within a place.".into(),
             examples: vec!["Seoul is located in South Korea".into()],
             deprecated_by: None,
             profile_relevant: false,
@@ -305,13 +306,18 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
         PredicateDef {
             name: "aliases".into(),
             object_kind: ObjectKind::Literal(LiteralType::Text),
-            subject_types: vec!["Person".into()],
+            subject_types: vec![
+                "Person".into(),
+                "Organization".into(),
+                "Project".into(),
+                "Artifact".into(),
+            ],
             cardinality: Cardinality::MultiValued,
             temporality: Temporality::Static,
             invalidation: Invalidation::Coexist,
             symmetric: false,
             inverse_of: None,
-            description: "Alternative names for this person. Multiple values coexist.".into(),
+            description: "Alternative names for this entity. Multiple values coexist.".into(),
             examples: vec!["Alice's alias is A. Smith".into()],
             deprecated_by: None,
             profile_relevant: true,
