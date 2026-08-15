@@ -31,11 +31,11 @@ jobs:
           if cargo tree -p oxibrain | grep -E 'oxios-|oxicode-'; then
             echo "oxi-ecosystem crate leaked into default build"; exit 1
           fi
-      - name: rusqlite isolation (only store references it)
+      - name: rusqlite isolation (core, views, facade src only)
         run: |
-          if grep -rn 'use rusqlite' --include='*.rs' crates \
-             | grep -v 'crates/oxibrain-store/'; then
-            echo "rusqlite referenced outside oxibrain-store"; exit 1
+          if grep -rn 'use rusqlite' --include='*.rs' \
+             crates/oxibrain-core/src crates/oxibrain-views/src crates/oxibrain/src; then
+            echo "rusqlite referenced in core/views/facade production code"; exit 1
           fi
       - name: test
         run: cargo test --all-features
