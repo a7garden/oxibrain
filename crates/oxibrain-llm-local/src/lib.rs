@@ -21,7 +21,8 @@ use llama_cpp_2::model::LlamaModel;
 pub struct LocalLlmOptions {
     /// GPU layer offload. `0` = CPU only (portability floor). Default: all layers.
     pub n_gpu_layers: u32,
-    /// Context size in tokens. Default: 8192.
+    /// Context size in tokens. Default: 16384 — the extraction prompt plus a
+    /// max_tokens=8192 response must both fit or llama.cpp truncates silently.
     pub n_ctx: u32,
     pub n_threads: i32,
     /// Repetition penalty applied in the sampler chain. Default: 1.1. Reduces
@@ -36,7 +37,7 @@ impl Default for LocalLlmOptions {
     fn default() -> Self {
         Self {
             n_gpu_layers: 1000,
-            n_ctx: 8192,
+            n_ctx: 16384,
             n_threads: 4,
             repetition_penalty: 1.3,
             temperature: 0.4,
@@ -272,6 +273,10 @@ fn generate_blocking(
 
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(Some(NonZeroU32::new(opts.n_ctx).expect("n_ctx > 0")))
+        // The whole prompt is decoded in one batch; llama.cpp asserts
+        // (aborts the process) when a decode exceeds the default n_batch
+        // of 2048 tokens — long non-ASCII notes tokenize past it easily.
+        .with_n_batch(opts.n_ctx)
         .with_n_threads(opts.n_threads);
     let mut ctx = model
         .new_context(backend, ctx_params)
@@ -281,8 +286,11 @@ fn generate_blocking(
         .str_to_token(&prompt, AddBos::Never)
         .map_err(|e| BrainError::Model(format!("tokenization: {e}")))?;
 
-    // Feed the prompt into a batch. Use a batch large enough for prompt + output.
-    let batch_cap = (tokens.len() + req.max_tokens as usize + 64).clamp(1024, 8192);
+    // Feed the prompt into a batch. The batch only ever holds the full prompt
+    // (generation clears it to one token per step), so capacity follows the
+    // prompt — the old clamp(…, 8192) cap made prompts longer than 8K tokens
+    // impossible to feed at all.
+    let batch_cap = tokens.len().max(1024) + 64;
     let mut batch = LlamaBatch::new(batch_cap, 1);
     let last_index = (tokens.len() - 1) as i32;
     for (i, token) in (0_i32..).zip(tokens.iter().copied()) {
@@ -317,12 +325,18 @@ fn generate_blocking(
         ]),
     };
     // Generation loop. n_cur tracks total position; n_decode tracks output.
+    // The KV cache must hold prompt + output within n_ctx: without the
+    // budget below, a long prompt pushes decode past the context and llama.cpp
+    // fails the batch silently ("failed to find a memory slot"), truncating
+    // the JSON mid-string with no error surfaced.
+    let kv_budget = (opts.n_ctx as i32 - batch.n_tokens() - 8).max(0);
+    let max_out = (req.max_tokens as i32).min(kv_budget);
     let mut n_cur = batch.n_tokens();
     let mut n_decode = 0;
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut output = String::new();
 
-    while n_decode < req.max_tokens as i32 {
+    while n_decode < max_out {
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         // NOTE: sample() accepts internally; do NOT call accept() again.
         if model.is_eog_token(token) {
