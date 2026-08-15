@@ -16,14 +16,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked || true
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: deny
-        run: cargo deny check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features
       - name: standalone build
         run: cargo build -p oxibrain --no-default-features --features http-llm
       - name: standalone guarantee (no oxi crates)
