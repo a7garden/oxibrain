@@ -137,8 +137,7 @@ fn resolution_is_sublinear_per_mention() {
             let ratio = t.as_secs_f64() / pt.as_secs_f64();
             let n_ratio = n as f64 / pn as f64;
             println!(
-                "    growth: N ×{:.1} → time ×{:.2} (sublinear iff {:.2} < {:.1})",
-                n_ratio, ratio, ratio, n_ratio
+                "    growth: N ×{n_ratio:.1} → time ×{ratio:.2} (sublinear iff {ratio:.2} < {n_ratio:.1})"
             );
         }
         prev_time = Some(t);

@@ -191,8 +191,7 @@ fn injection_in_code_block_rejected() {
         .any(|(_, errs)| errs.iter().any(surface_mismatch));
     assert!(
         wrong_span_rejected,
-        "code-block-derived claim with wrong span must be rejected; result={:#?}",
-        result
+        "code-block-derived claim with wrong span must be rejected; result={result:#?}"
     );
 }
 

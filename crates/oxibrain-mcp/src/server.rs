@@ -1740,8 +1740,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(result).unwrap();
         assert!(
             parsed["items"].is_array(),
-            "items must be an array, got {:?}",
-            parsed
+            "items must be an array, got {parsed:?}"
         );
     }
 
