@@ -75,9 +75,9 @@ jobs:
           publish oxibrain-llm-http
           publish oxibrain-llm-local --no-verify
           publish oxibrain-connectors
-          publish oxibrain-client
           publish oxibrain
           publish oxibrain-mcp
+          publish oxibrain-client
           publish oxibrain-cli
 
       - name: Create GitHub release
