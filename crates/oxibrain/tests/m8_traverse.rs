@@ -95,8 +95,7 @@ async fn traverse_excludes_retracted_edges() {
     let pre_targets: Vec<String> = pre.nodes.iter().map(|n| n.entity.clone()).collect();
     assert!(
         pre_targets.contains(&c),
-        "C must be reachable before retraction; got {:?}",
-        pre_targets
+        "C must be reachable before retraction; got {pre_targets:?}"
     );
 
     // Find B's statement_id and retract it.
@@ -136,7 +135,6 @@ async fn traverse_excludes_retracted_edges() {
     let post_targets: Vec<String> = post.nodes.iter().map(|n| n.entity.clone()).collect();
     assert!(
         !post_targets.contains(&c),
-        "C must NOT be reachable after retraction; got {:?}",
-        post_targets
+        "C must NOT be reachable after retraction; got {post_targets:?}"
     );
 }

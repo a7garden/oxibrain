@@ -1122,6 +1122,7 @@ dependencies = [
  "oxibrain-connectors",
  "oxibrain-core",
  "oxibrain-llm-http",
+ "oxibrain-llm-local",
  "oxibrain-mcp",
  "oxibrain-ports",
  "oxibrain-store",

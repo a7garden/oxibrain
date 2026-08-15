@@ -647,7 +647,7 @@ fn check_filters(facts: &TargetFacts, filters: &Filters) -> Option<DropReason> {
     }
     // `trust`: explicit exclusion list.
     if let TrustPolicy::Exclude(excluded) = &filters.trust {
-        if excluded.iter().any(|tier| *tier == facts.trust) {
+        if excluded.contains(&facts.trust) {
             return Some(DropReason::TrustExcluded { tier: facts.trust });
         }
     }

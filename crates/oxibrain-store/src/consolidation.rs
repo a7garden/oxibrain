@@ -308,7 +308,7 @@ pub fn build_consolidation_prompt(
                 |r| r.get(0),
             )
             .map_err(sql_err)?;
-        prompt.push_str(&format!("--- Episode {} ---\n{}\n\n", ep_id, content));
+        prompt.push_str(&format!("--- Episode {ep_id} ---\n{content}\n\n"));
     }
     Ok(prompt)
 }
@@ -332,7 +332,7 @@ pub fn build_community_prompt(
                 |r| r.get(0),
             )
             .unwrap_or_else(|_| "Unknown".into());
-        prompt.push_str(&format!("- {} ({}): ", entity_id, entity_type));
+        prompt.push_str(&format!("- {entity_id} ({entity_type}): "));
         let summaries: Vec<String> = beliefs
             .iter()
             .map(|b| format!("{:?} (conf {:.2})", b.status, b.confidence))

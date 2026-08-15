@@ -159,8 +159,8 @@ async fn run_fast() -> anyhow::Result<()> {
         metrics.statement_recall
     );
     println!();
-    println!("Extracted: {:?}", all_extracted);
-    println!("Expected:  {:?}", all_expected);
+    println!("Extracted: {all_extracted:?}");
+    println!("Expected:  {all_expected:?}");
 
     match metrics.check_gates() {
         Ok(()) => {

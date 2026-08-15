@@ -41,6 +41,9 @@ pub enum ExtractMechanism {
     JsonSchema,
     /// Forced tool call (Anthropic).
     ToolCall,
+    /// GBNF grammar-constrained decoding (local GGUF path, §9.4 D28). The
+    /// grammar is generated from the predicate registry (P4).
+    Grammar,
     /// JSON mode without schema enforcement (weakest; validator is the only gate).
     JsonMode,
 }
@@ -282,27 +285,33 @@ pub fn validate_claims(
             }
         }
 
-        // 5. Subject span exists in content.
-        check_span(&claim.subject.span, content, &mut errors);
-
-        // 6. Object span.
-        match &claim.object {
-            ClaimObject::Entity { mention } => {
-                check_span(&mention.span, content, &mut errors);
-            }
-            ClaimObject::Literal { span, .. } => {
-                check_span(span, content, &mut errors);
+        // 5-7. Spans and surfaces. Model offsets drift on multibyte text and
+        // casing; repair before rejecting. The fabricated-entity gate still
+        // holds: a claim survives only when each surface is literally present
+        // in the content at the (possibly corrected) span.
+        let mut repaired = claim.clone();
+        if !resolve_mention(&mut repaired.subject, content) {
+            errors.push(ValidationError::SurfaceNotVerbatim {
+                surface: claim.subject.surface.clone(),
+                span: claim.subject.span,
+                found: String::new(),
+            });
+        }
+        if let ClaimObject::Entity { mention } = &mut repaired.object {
+            if !resolve_mention(mention, content) {
+                errors.push(ValidationError::SurfaceNotVerbatim {
+                    surface: mention.surface.clone(),
+                    span: mention.span,
+                    found: String::new(),
+                });
             }
         }
-
-        // 7. Surface forms are verbatim at the given spans (fabricated-entity gate).
-        check_verbatim(&claim.subject, content, &mut errors);
-        if let ClaimObject::Entity { mention } = &claim.object {
-            check_verbatim(mention, content, &mut errors);
+        if let ClaimObject::Literal { span, .. } = &repaired.object {
+            check_span(span, content, &mut errors);
         }
 
         if errors.is_empty() {
-            valid.push(claim.clone());
+            valid.push(repaired);
         } else {
             invalid.push((claim.clone(), errors));
         }
@@ -321,19 +330,62 @@ fn check_span(span: &(u32, u32), content: &str, errors: &mut Vec<ValidationError
     }
 }
 
-fn check_verbatim(m: &MentionRef, content: &str, errors: &mut Vec<ValidationError>) {
-    let bytes = content.as_bytes();
-    if m.span.0 as usize >= bytes.len() || m.span.1 as usize > bytes.len() {
-        return; // SpanOutOfBounds already recorded
+/// Resolve a mention against the content, repairing span-interpretation drift
+/// in place. Returns `true` when the surface is verbatim-present at the span.
+///
+/// Repair ladder — every step keeps the fabricated-entity gate intact: the
+/// bytes at the (final) span must spell the surface. Relocating a surface to
+/// a *different* span is deliberately NOT done: the injection suite
+/// (oxibrain-store/tests/injection_suite.rs) requires that a span citing the
+/// wrong bytes is rejected even when the surface occurs elsewhere.
+/// 1. Exact byte span.
+/// 2. Char-index span — models count chars on multibyte (Korean/CJK) text.
+/// 3. Casing drift at the same span — canonicalize surface to the source text.
+fn resolve_mention(m: &mut MentionRef, content: &str) -> bool {
+    let (a, b) = (m.span.0 as usize, m.span.1 as usize);
+    // 1. Exact byte span.
+    if content.get(a..b) == Some(m.surface.as_str()) {
+        return true;
     }
-    let found = &content[m.span.0 as usize..m.span.1 as usize];
-    if found != m.surface {
-        errors.push(ValidationError::SurfaceNotVerbatim {
-            surface: m.surface.clone(),
-            span: m.span,
-            found: found.to_string(),
-        });
+    // 2. Char-index span.
+    if let Some(range) = char_span_to_bytes(content, a, b) {
+        if content.get(range.clone()) == Some(m.surface.as_str()) {
+            m.span = (range.start as u32, range.end as u32);
+            return true;
+        }
     }
+    // 3. Casing drift at the same span: the content is the source of truth.
+    if let Some(found) = content.get(a..b) {
+        if found.eq_ignore_ascii_case(m.surface.as_str()) {
+            m.surface = found.to_string();
+            return true;
+        }
+    }
+    false
+}
+
+/// Convert a (char_index_start, char_index_end) span to a byte range.
+/// Returns `None` when the indices don't address this content.
+fn char_span_to_bytes(content: &str, a: usize, b: usize) -> Option<std::ops::Range<usize>> {
+    if b < a {
+        return None;
+    }
+    let mut start = None;
+    let mut end = None;
+    let mut idx = 0usize;
+    for (bi, _) in content.char_indices() {
+        if idx == a {
+            start = Some(bi);
+        }
+        if idx == b {
+            end = Some(bi);
+            break;
+        }
+        idx += 1;
+    }
+    // `b` may equal the char count — the range then runs to the end.
+    let end = end.or((idx == b).then_some(content.len()))?;
+    Some(start?..end)
 }
 
 fn literal_type_matches(given: &str, expected: &LiteralType) -> bool {
@@ -521,8 +573,6 @@ number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
 integer ::= "-"? ([0-9] | [1-9] [0-9]*) ws
 ws ::= [ \t\n]*
 "#,
-        pred_alts = pred_alts,
-        etype_alts = etype_alts,
     )
 }
 
@@ -633,6 +683,59 @@ mod tests {
             model_digest: None,
         };
         assert_eq!(c.id(), c.id());
+    }
+
+    #[test]
+    fn grammar_mechanism_changes_extractor_id() {
+        // GBNF-constrained decoding (local path, §9.4 D28) must be recorded
+        // in the ExtractorId — different output mechanism, different cache key.
+        let base = ExtractorConfig {
+            model_id: "qwen2.5-1.5b-instruct".into(),
+            prompt_version: 1,
+            registry_major: 1,
+            mechanism: ExtractMechanism::Grammar,
+            max_tokens: 8192,
+            model_digest: None,
+        };
+        assert_eq!(base.id(), base.id());
+        let json_mode = ExtractorConfig {
+            mechanism: ExtractMechanism::JsonSchema,
+            ..base.clone()
+        };
+        assert_ne!(base.id(), json_mode.id());
+    }
+
+    #[test]
+    fn resolve_mention_repairs_casing_but_not_location() {
+        // Casing drift at the exact span → surface canonicalized to content.
+        let content = "The user prefers Rust.";
+        let mut m = MentionRef {
+            surface: "the user".into(),
+            entity_type: "person".into(),
+            span: (0, 8),
+        };
+        assert!(resolve_mention(&mut m, content));
+        assert_eq!(m.surface, "The user");
+
+        // Wrong span is rejected even when the surface occurs verbatim
+        // elsewhere — the injection suite relies on this (no relocation).
+        let mut m = MentionRef {
+            surface: "Rust".into(),
+            entity_type: "technology".into(),
+            span: (0, 4),
+        };
+        assert!(!resolve_mention(&mut m, content));
+    }
+
+    #[test]
+    fn resolve_mention_rejects_fabricated_surface() {
+        let content = "The user prefers Rust.";
+        let mut m = MentionRef {
+            surface: "Python".into(),
+            entity_type: "technology".into(),
+            span: (0, 6),
+        };
+        assert!(!resolve_mention(&mut m, content));
     }
 
     #[test]
@@ -828,13 +931,16 @@ mod tests {
 
     #[test]
     fn validate_span_out_of_bounds() {
+        // Entity mentions with drifted spans are repaired (relocated) as long
+        // as the surface is verbatim in the content; fabricated surfaces are
+        // still rejected — the fabricated-entity gate.
         let content = "Alice works on ProjectX.";
         let claim = make_claim(
             "works_on",
             "Alice",
             "Person",
             (0, 5),
-            "ProjectX",
+            "Zanzibar",
             "Project",
             (999, 1000),
         );

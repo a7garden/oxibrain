@@ -18,6 +18,7 @@ oxibrain-mcp.workspace = true
 oxibrain-store.workspace = true
 serde.workspace = true
 oxibrain-llm-http.workspace = true
+oxibrain-llm-local.workspace = true
 oxibrain-ports.workspace = true
 oxibrain-connectors.workspace = true
 clap = { workspace = true, features = ["env"] }

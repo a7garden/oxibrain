@@ -11,11 +11,21 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub async fn run(dir: &Path, episode_id: &str, space: &str) -> anyhow::Result<()> {
-    let (port, model, mechanism) = llm::from_env()?;
+    let provider = llm::from_env()?;
     let clock = Arc::new(SystemClock);
-    let brain = Brain::with_llm(BrainConfig::at(dir), clock, port).await?;
+    let brain = match provider.tokenizer.clone() {
+        Some(tok) => {
+            Brain::with_llm_and_tokenizer(BrainConfig::at(dir), clock, provider.port.clone(), tok)
+                .await?
+        }
+        None => Brain::with_llm(BrainConfig::at(dir), clock, provider.port.clone()).await?,
+    };
     let space_id = brain.ensure_space(space).await?;
-    let config = llm::config(model, mechanism);
+    let config = llm::config(
+        provider.model_id.clone(),
+        provider.mechanism,
+        provider.model_digest.clone(),
+    );
 
     let summary = brain.extract_one(&space_id, episode_id, &config).await?;
     println!(

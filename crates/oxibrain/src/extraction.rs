@@ -32,7 +32,9 @@ impl Brain {
         let schema = oxibrain_core::extraction::schema_from_registry(predicates);
         let system = oxibrain_core::extraction::build_extraction_prompt(predicates);
 
-        // 3. Call LLM [async, off-actor].
+        // 3. Call LLM [async, off-actor]. Grammar-capable adapters (the local
+        //    GGUF path, §9.4 D28) get a GBNF grammar generated from the
+        //    registry (P4); everything else takes schema-and-repair.
         let req = LlmRequest {
             model: config.model_id.clone(),
             system: Some(system),
@@ -40,7 +42,14 @@ impl Brain {
             json_schema: Some(schema),
             max_tokens: config.max_tokens,
         };
-        let response = llm.complete(req.clone()).await?;
+        let grammar = llm
+            .capabilities()
+            .grammar
+            .then(|| oxibrain_core::extraction::grammar_from_registry(predicates));
+        let response = match &grammar {
+            Some(g) => llm.generate_constrained(req.clone(), g).await?,
+            None => llm.complete(req.clone()).await?,
+        };
 
         // 4. Parse + validate [pure].
         let parsed: oxibrain_core::extraction::ExtractionResponse =
@@ -67,7 +76,11 @@ impl Brain {
                 prompt: repair_prompt,
                 ..req.clone()
             };
-            if let Ok(repair_response) = llm.complete(repair_req).await {
+            let repair_response = match &grammar {
+                Some(g) => llm.generate_constrained(repair_req, g).await,
+                None => llm.complete(repair_req).await,
+            };
+            if let Ok(repair_response) = repair_response {
                 if let Ok(repair_parsed) = serde_json::from_str::<
                     oxibrain_core::extraction::ExtractionResponse,
                 >(&repair_response.text)

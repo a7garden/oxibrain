@@ -338,10 +338,7 @@ fn resolution_f1_is_within_10pp_across_writing_systems() {
         } else {
             0.0
         };
-        println!(
-            "  {}: F1={:.2} (tp={} fp={} fn={})",
-            lang, f1, tp, fp, fn_count
-        );
+        println!("  {lang}: F1={f1:.2} (tp={tp} fp={fp} fn={fn_count})");
         per_lang_f1.push((lang.to_string(), f1));
     }
 

@@ -21,18 +21,25 @@ use llama_cpp_2::model::LlamaModel;
 pub struct LocalLlmOptions {
     /// GPU layer offload. `0` = CPU only (portability floor). Default: all layers.
     pub n_gpu_layers: u32,
-    /// Context size in tokens. Default: 4096.
+    /// Context size in tokens. Default: 8192.
     pub n_ctx: u32,
-    /// Threads for prompt processing. Default: 4.
     pub n_threads: i32,
+    /// Repetition penalty applied in the sampler chain. Default: 1.1. Reduces
+    /// grammar-constrained greedy rambling on small local models.
+    pub repetition_penalty: f32,
+    /// Sampling temperature. Default: 0.2. Breaks the loops that pure
+    /// greedy produces under a permissive GBNF grammar.
+    pub temperature: f32,
 }
 
 impl Default for LocalLlmOptions {
     fn default() -> Self {
         Self {
             n_gpu_layers: 1000,
-            n_ctx: 4096,
+            n_ctx: 8192,
             n_threads: 4,
+            repetition_penalty: 1.3,
+            temperature: 0.4,
         }
     }
 }
@@ -284,19 +291,31 @@ fn generate_blocking(
             .add(token, i, &[0], is_last)
             .map_err(|e| BrainError::Model(format!("batch add: {e}")))?;
     }
+
     ctx.decode(&mut batch)
         .map_err(|e| BrainError::Model(format!("prompt decode: {e}")))?;
 
-    // Sampler chain: optional grammar + greedy.
+    // Sampler chain: grammar + repetition penalty + temperature + greedy.
+    // A small Qwen with a grammar and pure greedy rambles — it explores the
+    // rule tree to its length limit without converging (§extraction tier-0
+    // risk, M7 risk table). Repetition penalty + temp break the loops so
     let mut sampler = match grammar {
         Some(g) => {
             let gs = LlamaSampler::grammar(model, g, "root")
                 .map_err(|e| BrainError::Model(format!("grammar init: {e}")))?;
-            LlamaSampler::chain_simple([gs, LlamaSampler::greedy()])
+            LlamaSampler::chain_simple([
+                gs,
+                LlamaSampler::penalties(64, opts.repetition_penalty, 0.0, 0.0),
+                LlamaSampler::temp(opts.temperature),
+                LlamaSampler::greedy(),
+            ])
         }
-        None => LlamaSampler::chain_simple([LlamaSampler::greedy()]),
+        None => LlamaSampler::chain_simple([
+            LlamaSampler::penalties(64, opts.repetition_penalty, 0.0, 0.0),
+            LlamaSampler::temp(opts.temperature),
+            LlamaSampler::greedy(),
+        ]),
     };
-
     // Generation loop. n_cur tracks total position; n_decode tracks output.
     let mut n_cur = batch.n_tokens();
     let mut n_decode = 0;

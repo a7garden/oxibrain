@@ -210,8 +210,7 @@ async fn timeline_diff_why_supersession() {
     let diff = brain.diff(&space, &alice_id, t0, t1).await.expect("diff");
     assert!(
         !diff.added.is_empty() || !diff.changed.is_empty(),
-        "diff should show added or changed between t0 and t1, got {:?}",
-        diff
+        "diff should show added or changed between t0 and t1, got {diff:?}"
     );
 
     // Why: pick one timeline entry and ask for provenance.
@@ -281,21 +280,18 @@ async fn rebuild_communities_separates_clusters() {
     // Each cluster should self-organize into its own community.
     assert!(
         a_sorted.contains(&a_id),
-        "A's community should include A, got {:?}",
-        a_sorted
+        "A's community should include A, got {a_sorted:?}"
     );
     assert!(
         x_sorted.contains(&x_id),
-        "X's community should include X, got {:?}",
-        x_sorted
+        "X's community should include X, got {x_sorted:?}"
     );
     // The two clusters must not overlap — A's community and X's community are
     // disjoint.
     for m in &a_sorted {
         assert!(
             !x_sorted.contains(m),
-            "cluster overlap: {} appears in both A and X communities",
-            m
+            "cluster overlap: {m} appears in both A and X communities"
         );
     }
 }

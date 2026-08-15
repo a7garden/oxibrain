@@ -125,8 +125,7 @@ fn insert_row(conn: &Connection, table: &str, row: &serde_json::Value) -> Result
         .ok_or_else(|| BrainError::Storage(format!("expected JSON object for table {table}")))?;
 
     let col_names: Vec<&String> = obj.keys().collect();
-    let placeholders = std::iter::repeat("?")
-        .take(col_names.len())
+    let placeholders = std::iter::repeat_n("?", col_names.len())
         .collect::<Vec<_>>()
         .join(",");
     let cols = col_names

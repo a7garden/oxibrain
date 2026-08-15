@@ -70,8 +70,7 @@ pub fn resolve_entity(conn: &Connection, id: &str) -> Result<String, BrainError>
             Some(target) => {
                 if visited.contains(&target) {
                     return Err(BrainError::Corruption(format!(
-                        "merge cycle: {} → {}",
-                        current, target
+                        "merge cycle: {current} → {target}"
                     )));
                 }
                 visited.push(target.clone());
@@ -417,8 +416,7 @@ pub fn replace_beliefs(
 ) -> Result<(), BrainError> {
     // Delete old beliefs for these statements.
     if !statement_ids.is_empty() {
-        let placeholders = std::iter::repeat("?")
-            .take(statement_ids.len())
+        let placeholders = std::iter::repeat_n("?", statement_ids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!("DELETE FROM beliefs WHERE statement_id IN ({placeholders})");

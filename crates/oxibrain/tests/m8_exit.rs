@@ -126,8 +126,7 @@ async fn search_as_of_returns_different_result_set() {
 
     assert_ne!(
         keys_no_asof, keys_asof,
-        "as_of filter must change the result set; no-as-of {:?} vs as-of {:?}",
-        keys_no_asof, keys_asof
+        "as_of filter must change the result set; no-as-of {keys_no_asof:?} vs as-of {keys_asof:?}"
     );
 }
 

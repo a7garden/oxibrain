@@ -487,7 +487,7 @@ fn answer_matches(needle: &str, haystack_lower: &str) -> bool {
 
 fn print_report(results: &[QuestionResult], ingested: usize) {
     println!("═══ oxibrain gate (golden-only) ═══");
-    println!("Episodes ingested: {} declarations", ingested);
+    println!("Episodes ingested: {ingested} declarations");
     println!("Questions:         {}", results.len());
     println!();
     // Per-question detail.

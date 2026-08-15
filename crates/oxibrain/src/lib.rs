@@ -669,6 +669,28 @@ impl Brain {
         })
     }
 
+    /// Create a Brain with a custom clock, LLM port, and tokenizer. The local
+    /// model path (§7.5) passes the model's own tokenizer so token budgets
+    /// are counted, not estimated.
+    pub async fn with_llm_and_tokenizer(
+        config: BrainConfig,
+        clock: Arc<dyn ClockPort>,
+        llm: Arc<dyn LlmPort>,
+        tokenizer: Arc<dyn TokenizerPort>,
+    ) -> Result<Self, BrainError> {
+        let store = tokio::task::spawn_blocking(move || StoreHandle::open(&config.dir))
+            .await
+            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+        Ok(Self {
+            handle: Arc::new(store),
+            clock,
+            llm: Some(llm),
+            tokenizer,
+            embedder: None,
+            cache: Arc::new(Mutex::new(ResolutionCache::new())),
+        })
+    }
+
     /// Attach a dense embedder for QueryMode::Dense / hybrid dense channel (§7.6).
     pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingPort>) -> Self {
         self.embedder = Some(embedder);

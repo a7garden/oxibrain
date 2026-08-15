@@ -156,14 +156,13 @@ async fn fast_eval_suite() {
 
     let metrics = compute_metrics(&all_extracted, &all_expected);
 
-    eprintln!("Fast eval metrics: {:?}", metrics);
-    eprintln!("Extracted triples: {:?}", all_extracted);
-    eprintln!("Expected triples: {:?}", all_expected);
+    eprintln!("Fast eval metrics: {metrics:?}");
+    eprintln!("Extracted triples: {all_extracted:?}");
+    eprintln!("Expected triples: {all_expected:?}");
 
     let gate_result = metrics.check_gates();
     assert!(
         gate_result.is_ok(),
-        "§14.2 quality gates failed: {:?}",
-        gate_result
+        "§14.2 quality gates failed: {gate_result:?}"
     );
 }

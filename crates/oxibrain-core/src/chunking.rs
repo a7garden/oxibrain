@@ -171,7 +171,7 @@ pub fn render_context_prefix(
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     parts.push(format!("[{}", short_ts(occurred_at)));
-    parts.push(format!("· {}", source_kind));
+    parts.push(format!("· {source_kind}"));
     if !mentions.is_empty() {
         let m = mentions
             .iter()

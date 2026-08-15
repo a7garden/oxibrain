@@ -31,10 +31,9 @@ pub fn shingles(s: &str, n: usize) -> std::collections::BTreeSet<String> {
         return BTreeSet::new();
     }
     let pad = n.saturating_sub(1);
-    let chars: Vec<char> = std::iter::repeat(BOUNDARY)
-        .take(pad)
+    let chars: Vec<char> = std::iter::repeat_n(BOUNDARY, pad)
         .chain(s.chars())
-        .chain(std::iter::repeat(BOUNDARY).take(pad))
+        .chain(std::iter::repeat_n(BOUNDARY, pad))
         .collect();
     if chars.len() < n {
         // Only possible if s was empty, already handled — but guard anyway.

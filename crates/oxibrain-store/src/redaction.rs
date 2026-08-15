@@ -540,8 +540,7 @@ fn query_strings_in(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(ids.len())
+    let placeholders = std::iter::repeat_n("?", ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!("{prefix} ({placeholders})");
@@ -553,8 +552,7 @@ fn delete_in(conn: &Connection, prefix: &str, ids: &[String]) -> Result<(), Brai
     if ids.is_empty() {
         return Ok(());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(ids.len())
+    let placeholders = std::iter::repeat_n("?", ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!("{prefix} ({placeholders})");

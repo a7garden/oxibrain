@@ -32,6 +32,13 @@ pub async fn run(dir: &Path, question: &str, space: &str) -> anyhow::Result<()> 
             "  rank={} score={:.4} salience={:.4} -> {target}",
             item.rank, item.fused_score, item.salience
         );
+        if let TargetId::Episode { id } = &item.target {
+            if let Ok(Some(ep)) = brain.get_episode(id).await {
+                let flat: String = ep.content.chars().filter(|c| *c != '\n').collect();
+                let excerpt: String = flat.chars().take(160).collect();
+                println!("    {excerpt}");
+            }
+        }
     }
     Ok(())
 }
