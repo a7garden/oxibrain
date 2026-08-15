@@ -44,14 +44,22 @@ jobs:
           publish() {
             local crate="$1"; shift
             local extra=("$@")
+            local out
             for attempt in 1 2 3 4 5 6; do
               echo "::group::Publish $crate (attempt $attempt)"
-              if cargo publish "${extra[@]}" -p "$crate"; then
+              if out=$(cargo publish "${extra[@]}" -p "$crate" 2>&1); then
+                echo "$out"
                 echo "::endgroup::"
                 echo "✅ $crate"
                 return 0
               fi
+              echo "$out"
               echo "::endgroup::"
+              # Already at this version — idempotent skip (e.g. re-run).
+              if echo "$out" | grep -q "already uploaded"; then
+                echo "⏭️ $crate (already published at this version)"
+                return 0
+              fi
               # crates.io rate-limits new-crate publishes; back off and retry.
               sleep $((attempt * 120))
             done
