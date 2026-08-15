@@ -236,11 +236,11 @@ pub fn validate_claims(
 
         // 4. Object type matches predicate.object_kind.
         match (&claim.object, &pred_def.object_kind) {
-            (ClaimObject::Entity { mention }, ObjectKind::Entity(expected_ty)) => {
-                if &mention.entity_type != expected_ty {
+            (ClaimObject::Entity { mention }, ObjectKind::Entity(expected)) => {
+                if !expected.0.iter().any(|t| t == &mention.entity_type) {
                     errors.push(ValidationError::ObjectTypeMismatch {
                         predicate: claim.predicate.clone(),
-                        expected: expected_ty.clone(),
+                        expected: expected.0.join("|"),
                         got: mention.entity_type.clone(),
                     });
                 }
@@ -260,7 +260,7 @@ pub fn validate_claims(
                     value,
                     ..
                 },
-                ObjectKind::Enum(variants),
+                ObjectKind::Enum { variants },
             ) => {
                 if !variants.iter().any(|v| v == value) {
                     errors.push(ValidationError::ObjectTypeMismatch {
@@ -272,7 +272,7 @@ pub fn validate_claims(
                 let _ = literal_type; // enum values are strings; type is not constrained further
             }
             (ClaimObject::Entity { .. }, ObjectKind::Literal(_))
-            | (ClaimObject::Entity { .. }, ObjectKind::Enum(_))
+            | (ClaimObject::Entity { .. }, ObjectKind::Enum { .. })
             | (ClaimObject::Literal { .. }, ObjectKind::Entity(_)) => {
                 errors.push(ValidationError::ObjectTypeMismatch {
                     predicate: claim.predicate.clone(),
@@ -411,7 +411,7 @@ pub fn schema_from_registry(predicates: &[PredicateDef]) -> serde_json::Value {
         .flat_map(|p| {
             let subjects = p.subject_types.iter().map(|t| t.as_str());
             let objects = match &p.object_kind {
-                ObjectKind::Entity(t) => vec![t.as_str()],
+                ObjectKind::Entity(types) => types.0.iter().map(|t| t.as_str()).collect(),
                 _ => vec![],
             };
             subjects.chain(objects)
@@ -537,7 +537,7 @@ pub fn grammar_from_registry(predicates: &[PredicateDef]) -> String {
         .flat_map(|p| {
             let subjects = p.subject_types.iter().map(|t| t.as_str());
             let objects = match &p.object_kind {
-                ObjectKind::Entity(t) => vec![t.as_str()],
+                ObjectKind::Entity(types) => types.0.iter().map(|t| t.as_str()).collect(),
                 _ => vec![],
             };
             subjects.chain(objects)
@@ -587,9 +587,9 @@ pub fn build_extraction_prompt(predicates: &[PredicateDef]) -> String {
     );
     for p in predicates {
         let obj_desc = match &p.object_kind {
-            ObjectKind::Entity(t) => format!("entity: {t}"),
+            ObjectKind::Entity(types) => format!("entity: {}", types.0.join("|")),
             ObjectKind::Literal(lt) => format!("literal: {lt:?}"),
-            ObjectKind::Enum(variants) => format!("enum: {}", variants.join("|")),
+            ObjectKind::Enum { variants } => format!("enum: {}", variants.join("|")),
         };
         s.push_str(&format!("- {} ({}): {}\n", p.name, obj_desc, p.description));
         if !p.examples.is_empty() {
@@ -888,6 +888,47 @@ mod tests {
         let result = validate_claims(&[claim], content, crate::registry::core_v1());
         assert_eq!(result.valid.len(), 1);
         assert!(result.invalid.is_empty());
+    }
+
+    #[test]
+    fn validate_part_of_accepts_project_object() {
+        // Regression: part_of's object allowed only Organization before
+        // registry minor 4 — project-part-of-project and artifact-part-of-
+        // project knowledge was rejected as object_type_mismatch.
+        let content = "The parser module belongs to ProjectX.";
+        let claim = make_claim(
+            "part_of",
+            "parser module",
+            "Artifact",
+            (4, 17),
+            "ProjectX",
+            "Project",
+            (29, 37),
+        );
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert_eq!(result.valid.len(), 1, "errors: {:?}", result.invalid);
+        assert!(result.invalid.is_empty());
+    }
+
+    #[test]
+    fn validate_object_type_mismatch_lists_allowed_types() {
+        let content = "Alice works on ProjectX.";
+        let claim = make_claim(
+            "works_on",
+            "Alice",
+            "Person",
+            (0, 5),
+            "ProjectX",
+            "Place",
+            (15, 23),
+        );
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert!(result.valid.is_empty());
+        assert!(result.invalid[0].1.iter().any(|e| matches!(
+            e,
+            ValidationError::ObjectTypeMismatch { expected, got, .. }
+                if expected == "Project" && got == "Place"
+        )));
     }
 
     #[test]

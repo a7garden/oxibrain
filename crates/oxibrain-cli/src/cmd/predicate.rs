@@ -37,13 +37,13 @@ pub fn run() -> anyhow::Result<()> {
 
 fn format_object_kind(k: &ObjectKind) -> String {
     match k {
-        ObjectKind::Entity(t) => format!("entity:{t}"),
+        ObjectKind::Entity(types) => format!("entity:{{{}}}", types.0.join("|")),
         ObjectKind::Literal(LiteralType::Text) => "literal:text".into(),
         ObjectKind::Literal(LiteralType::Date) => "literal:date".into(),
         ObjectKind::Literal(LiteralType::DateTime) => "literal:datetime".into(),
         ObjectKind::Literal(LiteralType::Number) => "literal:number".into(),
         ObjectKind::Literal(LiteralType::Bool) => "literal:bool".into(),
         ObjectKind::Literal(LiteralType::Quantity { unit }) => format!("literal:quantity[{unit}]"),
-        ObjectKind::Enum(vals) => format!("enum:{{{}}}", vals.join("|")),
+        ObjectKind::Enum { variants: vals } => format!("enum:{{{}}}", vals.join("|")),
     }
 }

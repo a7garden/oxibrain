@@ -46,7 +46,7 @@ fn make_assertion(stmt: &str, ep: &str, polarity: Polarity, from: i64, to: i64) 
 fn def_supersede() -> PredicateDef {
     PredicateDef {
         name: "employed_by".into(),
-        object_kind: ObjectKind::Entity("Organization".into()),
+        object_kind: ObjectKind::Entity(["Organization"].into()),
         subject_types: vec!["Person".into()],
         cardinality: Cardinality::Functional,
         temporality: Temporality::Interval,
@@ -64,7 +64,7 @@ fn def_supersede() -> PredicateDef {
 fn def_static() -> PredicateDef {
     PredicateDef {
         name: "born_in".into(),
-        object_kind: ObjectKind::Entity("Place".into()),
+        object_kind: ObjectKind::Entity(["Place"].into()),
         subject_types: vec!["Person".into()],
         cardinality: Cardinality::Functional,
         temporality: Temporality::Static,
@@ -82,7 +82,7 @@ fn def_static() -> PredicateDef {
 fn def_multivalued() -> PredicateDef {
     PredicateDef {
         name: "works_on".into(),
-        object_kind: ObjectKind::Entity("Project".into()),
+        object_kind: ObjectKind::Entity(["Project"].into()),
         subject_types: vec!["Person".into()],
         cardinality: Cardinality::MultiValued,
         temporality: Temporality::Interval,

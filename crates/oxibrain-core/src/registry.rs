@@ -80,15 +80,82 @@ impl Invalidation {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ObjectKind {
-    Entity(EntityTypeRef),
-    Literal(LiteralType),
-    Enum(Vec<String>),
+/// Entity types a predicate's object may take (registry minor 4+). Serializes
+/// as a JSON array; deserialization also accepts the pre-4 single-string form
+/// so `def_json` rows written by older registries keep loading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityTypes(pub Vec<EntityTypeRef>);
+
+impl<const N: usize> From<[&str; N]> for EntityTypes {
+    fn from(types: [&str; N]) -> Self {
+        Self(types.iter().map(|s| (*s).to_string()).collect())
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl From<&str> for EntityTypes {
+    fn from(t: &str) -> Self {
+        Self(vec![t.to_string()])
+    }
+}
+
+impl Serialize for EntityTypes {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_seq(self.0.iter())
+    }
+}
+
+impl<'de> Deserialize<'de> for EntityTypes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct EntityTypesVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EntityTypesVisitor {
+            type Value = EntityTypes;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an entity type string or an array of entity type strings")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<EntityTypes, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(EntityTypes(vec![v.to_string()]))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<EntityTypes, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(t) = seq.next_element::<String>()? {
+                    out.push(t);
+                }
+                Ok(EntityTypes(out))
+            }
+        }
+
+        deserializer.deserialize_any(EntityTypesVisitor)
+    }
+}
+
+/// What a predicate's object can be. Untagged; variant order is load-bearing:
+/// `Literal` is tried first so literal type names ("text", "date", …) are not
+/// swallowed by the string-accepting `Entity` visitor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ObjectKind {
+    Literal(LiteralType),
+    Entity(EntityTypes),
+    Enum { variants: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LiteralType {
     Text,
@@ -133,7 +200,7 @@ fn default_confidence_prior() -> f32 {
 }
 /// Registry version for this ontology.
 pub const CORE_V1_MAJOR: u32 = 1;
-pub const CORE_V1_MINOR: u32 = 3;
+pub const CORE_V1_MINOR: u32 = 4;
 
 static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::new(|| {
     vec![
@@ -244,15 +311,16 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
         },
         PredicateDef {
             name: "part_of".into(),
-            object_kind: ObjectKind::Entity("Organization".into()),
+            object_kind: ObjectKind::Entity(["Organization", "Project"].into()),
             subject_types: vec!["Organization".into(), "Project".into(), "Artifact".into()],
             cardinality: Cardinality::Functional,
             temporality: Temporality::Static,
             invalidation: Invalidation::Supersede,
             symmetric: false,
             inverse_of: None,
-            description: "This organization/project/artifact is part of a parent organization."
-                .into(),
+            description:
+                "This organization/project/artifact is part of a parent organization or project."
+                    .into(),
             examples: vec!["Acme subsidiary is part of Acme Corp".into()],
             deprecated_by: None,
             profile_relevant: false,
@@ -423,5 +491,63 @@ mod tests {
             assert_eq!(def.temporality, back.temporality);
             assert_eq!(def.invalidation, back.invalidation);
         }
+    }
+
+    #[test]
+    fn part_of_accepts_multiple_object_types() {
+        // The regression this redesign exists for: project-part-of-project
+        // knowledge must survive validation (minor 4).
+        let def = core_v1()
+            .iter()
+            .find(|d| d.name == "part_of")
+            .expect("part_of");
+        let ObjectKind::Entity(types) = &def.object_kind else {
+            panic!("part_of object must be Entity");
+        };
+        assert!(types.0.iter().any(|t| t == "Organization"));
+        assert!(types.0.iter().any(|t| t == "Project"));
+    }
+
+    #[test]
+    fn object_kind_entity_roundtrips_through_array() {
+        let def = core_v1()
+            .iter()
+            .find(|d| d.name == "part_of")
+            .expect("part_of");
+        let json = serde_json::to_string(&def.object_kind).expect("serialize");
+        assert_eq!(json, r#"["Organization","Project"]"#);
+        let back: ObjectKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, def.object_kind);
+    }
+
+    #[test]
+    fn object_kind_accepts_legacy_single_string() {
+        // def_json rows written by registry minor <= 3 stored Entity as a
+        // bare string; they must keep loading (no migration required).
+        let k: ObjectKind = serde_json::from_str(r#""Organization""#).expect("legacy string");
+        assert_eq!(k, ObjectKind::Entity(["Organization"].into()));
+    }
+
+    #[test]
+    fn object_kind_literal_strings_stay_literal() {
+        // Variant-order guard: Literal is tried before Entity so literal type
+        // names are not swallowed by the string-accepting Entity visitor.
+        let k: ObjectKind = serde_json::from_str(r#""text""#).expect("literal");
+        assert_eq!(k, ObjectKind::Literal(LiteralType::Text));
+    }
+
+    #[test]
+    fn object_kind_enum_uses_object_shape() {
+        // Enum moved from a bare array (ambiguous with multi-type Entity) to
+        // an object shape under untagged serde. No core/v1 predicate uses it.
+        let k: ObjectKind = serde_json::from_str(r#"{"variants":["yes","no"]}"#).expect("enum");
+        assert_eq!(
+            k,
+            ObjectKind::Enum {
+                variants: vec!["yes".into(), "no".into()]
+            }
+        );
+        let json = serde_json::to_string(&k).expect("serialize");
+        assert_eq!(json, r#"{"variants":["yes","no"]}"#);
     }
 }

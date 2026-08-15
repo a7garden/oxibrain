@@ -462,7 +462,7 @@ mod tests {
     fn def_employed() -> PredicateDef {
         PredicateDef {
             name: "employed_by".into(),
-            object_kind: ObjectKind::Entity("Organization".into()),
+            object_kind: ObjectKind::Entity(["Organization"].into()),
             subject_types: vec!["Person".into()],
             cardinality: Cardinality::Functional,
             temporality: Temporality::Interval,
@@ -480,7 +480,7 @@ mod tests {
     fn def_born_in() -> PredicateDef {
         PredicateDef {
             name: "born_in".into(),
-            object_kind: ObjectKind::Entity("Place".into()),
+            object_kind: ObjectKind::Entity(["Place"].into()),
             subject_types: vec!["Person".into()],
             cardinality: Cardinality::Functional,
             temporality: Temporality::Static,
@@ -498,7 +498,7 @@ mod tests {
     fn def_works_on() -> PredicateDef {
         PredicateDef {
             name: "works_on".into(),
-            object_kind: ObjectKind::Entity("Project".into()),
+            object_kind: ObjectKind::Entity(["Project"].into()),
             subject_types: vec!["Person".into()],
             cardinality: Cardinality::MultiValued,
             temporality: Temporality::Interval,
