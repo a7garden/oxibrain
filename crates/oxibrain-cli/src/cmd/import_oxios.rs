@@ -23,7 +23,7 @@ pub async fn run(dir: &Path, db: &Path, space: &str) -> anyhow::Result<()> {
     );
 
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    brain.ensure_space(space).await?;
+    let space_id = brain.ensure_space(space).await?;
 
     let mut ok = 0usize;
     let mut fail = 0usize;
@@ -44,7 +44,7 @@ pub async fn run(dir: &Path, db: &Path, space: &str) -> anyhow::Result<()> {
 
         match brain
             .ingest(
-                space,
+                &space_id,
                 content,
                 SourceRef::AgentTrace,
                 TrustTier::SemiTrusted,
