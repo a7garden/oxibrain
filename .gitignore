@@ -20,3 +20,8 @@ dist/
 proptest-regressions/
 spike/gbnf/target/
 spike/gbnf/Cargo.lock
+
+# Local publish scripts (contain credentials — never commit)
+.publish-remaining.sh
+.publish.log
+.publish*.sh
