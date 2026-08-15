@@ -119,6 +119,11 @@ pub struct ExtractSummary {
     pub quarantined: usize,
     pub episodes_done: usize,
     pub episodes_failed: usize,
+    /// (episode_id, error) for every failed episode. Batch loops used to
+    /// discard these, making deterministic per-episode failures (truncated
+    /// tool calls, unparseable responses) undiagnosable from the outside.
+    #[serde(default)]
+    pub failures: Vec<(String, String)>,
 }
 
 /// Extraction budget limits (§7.6). The queue holds on exhaustion; it never drops.

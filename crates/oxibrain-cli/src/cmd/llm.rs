@@ -64,7 +64,7 @@ pub fn resolve_provider(
 }
 
 /// Build an LLM port from the environment.
-pub fn from_env() -> anyhow::Result<ProviderLlm> {
+pub async fn from_env() -> anyhow::Result<ProviderLlm> {
     let explicit = std::env::var("OXIBRAIN_LLM_PROVIDER").ok();
     let provider = resolve_provider(
         explicit.as_deref(),
@@ -101,7 +101,7 @@ pub fn from_env() -> anyhow::Result<ProviderLlm> {
                 tokenizer: None,
             })
         }
-        Provider::Local => local_from_manifest(),
+        Provider::Local => local_from_manifest().await,
     }
 }
 
@@ -114,23 +114,61 @@ fn extract_entry(
         .find(|e| e.role == oxibrain::models::ModelRole::Extract)
 }
 
+/// Make sure the local extract model is on disk before we open it. Pure
+/// decision in `oxibrain::pull_plan`; the pull (network, fs writes) lives
+/// here where it can show progress to a real terminal.
+async fn ensure_local_model_present() -> anyhow::Result<()> {
+    use oxibrain::models::{default_manifest, load_manifest, model_dir, pull_entry, save_manifest};
+    use oxibrain::pull_plan::{ExtractPullPlan, plan_extract_pull};
+
+    let dir = model_dir();
+    // Touch the dir so plan_extract_pull can find files there.
+    std::fs::create_dir_all(&dir)?;
+    let manifest = load_manifest().unwrap_or_default();
+    let defaults = default_manifest();
+    let plan = plan_extract_pull(&manifest, &dir, &defaults);
+
+    let entry = match plan {
+        ExtractPullPlan::NoOp => return Ok(()),
+        ExtractPullPlan::NeedsPullFromManifest(e) => e,
+        ExtractPullPlan::NeedsBootstrap(e) => {
+            // First-time setup: persist the default manifest so subsequent
+            // loads are stable.
+            let mut next = manifest.clone();
+            if !next.iter().any(|m| m.name == e.name) {
+                next.push(e.clone());
+                save_manifest(&next)?;
+            }
+            e
+        }
+    };
+
+    println!(
+        "pulling local extract model {} ({} MiB) — first use only...",
+        entry.name, entry.size_mb
+    );
+    pull_entry(&entry, &dir, oxibrain::models::cli_progress)
+        .await
+        .map_err(|e| anyhow::anyhow!("pull {}: {e}", entry.name))?;
+    println!("  verified");
+    Ok(())
+}
+
 /// Load the local extraction model from the artifact manifest (§8.4): verify
 /// the digest (weight changes must change the ExtractorId, §9.5), open the
-/// GGUF, and expose its tokenizer (§7.5).
-fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
+/// GGUF, and expose its tokenizer (§7.5). Lazy-pulls the model on first use
+/// so `oxibrain init` does not have to download anything.
+async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
     use oxibrain::models::{load_manifest, model_dir, verify_entry};
 
+    ensure_local_model_present().await?;
+
     let manifest = load_manifest().context("load model manifest")?;
-    let entry = extract_entry(&manifest).ok_or_else(|| {
-        anyhow::anyhow!("no extract-role model in the manifest — run `oxibrain model pull`")
-    })?;
+    let entry = extract_entry(&manifest)
+        .ok_or_else(|| anyhow::anyhow!("local extract model could not be resolved after pull"))?;
     let dir = model_dir();
-    verify_entry(entry, &dir).map_err(|e| {
-        anyhow::anyhow!(
-            "model digest mismatch for {}: {e} — run `oxibrain model pull`",
-            entry.name
-        )
-    })?;
+    verify_entry(entry, &dir)
+        .map_err(|e| anyhow::anyhow!("model digest mismatch for {}: {e}", entry.name))?;
     let path = dir.join(&entry.file);
     let llm = Arc::new(
         oxibrain_llm_local::LocalLlm::open(&path, oxibrain_llm_local::LocalLlmOptions::default())
@@ -159,7 +197,7 @@ pub fn config(
         prompt_version: 1,
         registry_major: CORE_V1_MAJOR,
         mechanism,
-        max_tokens: 2048,
+        max_tokens: 8192,
         model_digest,
     }
 }

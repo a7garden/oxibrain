@@ -51,10 +51,26 @@ impl Brain {
             None => llm.complete(req.clone()).await?,
         };
 
-        // 4. Parse + validate [pure].
+        // 4. Parse + validate [pure]. An unparseable response (truncated
+        // tool call, grammar runaway past the KV budget) is invalid output:
+        // it is recorded in extraction_failures like any other, never
+        // silently dropped, and then fails the episode loudly.
         let parsed: oxibrain_core::extraction::ExtractionResponse =
-            serde_json::from_str(&response.text)
-                .map_err(|e| BrainError::Extraction(format!("parse LLM response: {e}")))?;
+            match serde_json::from_str(&response.text) {
+                Ok(p) => p,
+                Err(e) => {
+                    let err = BrainError::Extraction(format!("parse LLM response: {e}"));
+                    self.record_response_failure(
+                        episode_id,
+                        &config.id(),
+                        &response.text,
+                        &err,
+                        now,
+                    )
+                    .await;
+                    return Err(err);
+                }
+            };
         let mut result = oxibrain_core::extraction::validate_claims(
             &parsed.claims,
             &episode.content,
@@ -144,6 +160,7 @@ impl Brain {
                     quarantined: invalid_count,
                     episodes_done: 1,
                     episodes_failed: 0,
+                    failures: Vec::new(),
                 };
                 let _ = tx.send(summary);
                 Ok(())
@@ -156,6 +173,45 @@ impl Brain {
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
+    /// Best-effort recording of an unparseable LLM response into
+    /// extraction_failures (invalid output is never silently dropped).
+    async fn record_response_failure(
+        &self,
+        episode_id: &str,
+        extractor_id: &str,
+        raw_response: &str,
+        error: &BrainError,
+        now: oxibrain_ports::Timestamp,
+    ) {
+        let h = self.handle.clone();
+        let episode_id = episode_id.to_string();
+        let extractor_id = extractor_id.to_string();
+        let raw = raw_response.to_string();
+        let msg = error.to_string();
+        let res = tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer()?.submit(Box::new(move |conn| {
+                let errors_json = serde_json::to_string(&[msg]).unwrap_or_else(|_| "[]".into());
+                oxibrain_store::quarantine::record_failure(
+                    conn,
+                    &episode_id,
+                    &extractor_id,
+                    &raw,
+                    &errors_json,
+                    now,
+                )?;
+                let _ = tx.send(());
+                Ok(())
+            }))?;
+            h.writer()?.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("record_failure channel dropped".into()))
+        })
+        .await;
+        if let Err(e) = res {
+            eprintln!("warn: recording response failure: {e}");
+        }
+    }
     /// Process pending extraction jobs in batch. Claims up to
     /// `budget.max_episodes_per_batch` ready jobs and extracts each.
     pub(crate) async fn extract_pending_impl(
@@ -222,6 +278,7 @@ impl Brain {
                 }
                 Err(e) => {
                     total.episodes_failed += 1;
+                    total.failures.push((job.episode_id.clone(), e.to_string()));
                     // Fail the job.
                     let h = self.handle.clone();
                     let job_id = job.id.clone();
@@ -282,8 +339,9 @@ impl Brain {
                     total.quarantined += s.quarantined;
                     total.episodes_done += 1;
                 }
-                Err(_) => {
+                Err(e) => {
                     total.episodes_failed += 1;
+                    total.failures.push((ep_id.clone(), e.to_string()));
                 }
             }
         }
