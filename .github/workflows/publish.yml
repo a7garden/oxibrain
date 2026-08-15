@@ -56,7 +56,7 @@ jobs:
               echo "$out"
               echo "::endgroup::"
               # Already at this version — idempotent skip (e.g. re-run).
-              if echo "$out" | grep -q "already uploaded"; then
+              if echo "$out" | grep -qE "already (uploaded|exists)"; then
                 echo "⏭️ $crate (already published at this version)"
                 return 0
               fi
