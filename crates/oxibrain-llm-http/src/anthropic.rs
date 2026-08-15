@@ -7,14 +7,22 @@ pub struct AnthropicLlm {
     api_key: String,
     model: String,
     client: Client,
+    base_url: String,
 }
 
 impl AnthropicLlm {
     pub fn new(api_key: String, model: String) -> Self {
+        // ANTHROPIC_BASE_URL lets Anthropic-compatible endpoints (proxies,
+        // GLM coding plans, Bedrock gateways) be used without code changes.
+        let base_url = std::env::var("ANTHROPIC_BASE_URL")
+            .unwrap_or_else(|_| "https://api.anthropic.com".into())
+            .trim_end_matches('/')
+            .to_string();
         Self {
             api_key,
             model,
             client: Client::new(),
+            base_url,
         }
     }
 }
@@ -36,7 +44,7 @@ impl LlmPort for AnthropicLlm {
         }
         let response = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
