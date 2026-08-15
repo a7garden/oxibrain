@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub async fn run(dir: &Path, episode_id: &str, space: &str) -> anyhow::Result<()> {
-    let provider = llm::from_env()?;
+    let provider = llm::from_env().await?;
     let clock = Arc::new(SystemClock);
     let brain = match provider.tokenizer.clone() {
         Some(tok) => {

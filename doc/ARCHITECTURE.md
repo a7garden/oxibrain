@@ -1,6 +1,6 @@
 # oxibrain — Architecture
 
-> **Version:** v2.2 · **Date:** 2026-08-15 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.3 · **Date:** 2026-08-16 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
@@ -98,8 +98,9 @@ The product must be complete with no GUI:
 `cargo install oxibrain && oxibrain init && oxibrain ingest ~/notes && oxibrain ask "…"`.
 A GUI required for the product to make sense would mean the CLI and MCP surfaces failed.
 
-Under C2, `oxibrain init` also fetches model weights (§8.4). The binary stays small; the
-product works offline afterwards.
+Under C2, model weights pull lazily on the first extraction command (§8.4); `init`
+stays instant and offline. The binary stays small; the product works offline
+afterwards.
 
 ### 1.4 Boundary: oxibrain is not an editor
 
@@ -1081,17 +1082,23 @@ onboarding; it is now one accepted only for quality, on episodes the user's poli
 
 ### 8.4 Model artifacts are Cache-zone
 
-Weights are fetched by `oxibrain init` (or lazily on first `ingest`) into `~/.oxi/models/`,
-pinned by digest. This is the **Cache zone** the design already defines: expensive to reproduce,
-cheap to re-fetch, never irreplaceable.
+Weights are fetched lazily — by the first command that needs them (`extract`,
+`reextract`) — into `~/.oxi/models/`, or `$OXIBRAIN_MODELS_DIR` when set, pinned
+by digest. `oxibrain init` provisions the store and nothing else: the empty
+install is instant, and exploration commands (`stats`, `page`, MCP read tools)
+never download. This is the **Cache zone** the design already defines: expensive
+to reproduce, cheap to re-fetch, never irreplaceable.
 
 - The digest is an input to `ExtractorId`, so swapping weights is a normal re-extraction, never
   a silent quality change.
 - `oxibrain doctor` verifies digests and reports drift.
-- An air-gapped install is `--model-path`, not a special build.
+- An air-gapped install points `OXIBRAIN_MODELS_DIR` at a pre-pulled directory — no special
+  build, and the lazy pull becomes a verify-only no-op.
 - `oxibrain backup --no-cache` skips weights; restore re-fetches.
 
-`init` must show progress and be resumable. It is the first thing a new user experiences.
+The first extraction shows download progress and is resumable (`<file>.part`,
+HTTP Range). That command is the moment the user has committed to the workflow,
+so the one-time download lands there, not in `init` (ADR-005).
 
 ### 8.5 Tiering: local first, escalate deliberately
 

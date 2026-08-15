@@ -7,6 +7,7 @@ pub mod config;
 mod extraction;
 mod ingest;
 pub mod models;
+pub mod pull_plan;
 mod render;
 
 pub use config::BrainConfig;

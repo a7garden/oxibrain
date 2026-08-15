@@ -31,7 +31,7 @@ impl ModelRole {
 }
 
 /// One model in the manifest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub role: ModelRole,
     /// Stable name, e.g. `qwen2.5-1.5b-instruct`.
@@ -72,8 +72,18 @@ pub fn default_manifest() -> Vec<ModelEntry> {
     ]
 }
 
-/// The models directory: `~/.oxi/models/`.
+/// The models directory: `$OXIBRAIN_MODELS_DIR` if set, else `~/.oxi/models/`.
+///
+/// The env override is the air-gapped escape hatch (§8.4): point it at a
+/// pre-pulled directory and the lazy pull becomes a verify-only no-op.
 pub fn model_dir() -> PathBuf {
+    model_dir_with(std::env::var_os("OXIBRAIN_MODELS_DIR"))
+}
+
+fn model_dir_with(override_dir: Option<std::ffi::OsString>) -> PathBuf {
+    if let Some(dir) = override_dir {
+        return PathBuf::from(dir);
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(home).join(".oxi").join("models")
 }
@@ -267,6 +277,20 @@ mod tests {
         assert_eq!(loaded[0].name, "qwen2.5-1.5b-instruct");
         assert_eq!(loaded[0].role, ModelRole::Extract);
         assert_eq!(loaded[1].role, ModelRole::Embed);
+    }
+
+    #[test]
+    fn model_dir_env_override_wins() {
+        assert_eq!(
+            model_dir_with(Some("/opt/oxibrain-models".into())),
+            PathBuf::from("/opt/oxibrain-models")
+        );
+    }
+
+    #[test]
+    fn model_dir_default_is_home_dot_oxi_models() {
+        let dir = model_dir_with(None);
+        assert!(dir.ends_with(".oxi/models"), "got {dir:?}");
     }
 
     #[test]

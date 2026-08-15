@@ -124,7 +124,9 @@ async fn ensure_local_model_present() -> anyhow::Result<()> {
     let dir = model_dir();
     // Touch the dir so plan_extract_pull can find files there.
     std::fs::create_dir_all(&dir)?;
-    let manifest = load_manifest().unwrap_or_default();
+    // A malformed manifest is a loud error, not a silent reset: bootstrap
+    // must never overwrite entries the user cannot see were dropped.
+    let manifest = load_manifest().map_err(|e| anyhow::anyhow!("load model manifest: {e}"))?;
     let defaults = default_manifest();
     let plan = plan_extract_pull(&manifest, &dir, &defaults);
 
