@@ -3004,6 +3004,7 @@ mod tests {
                 "valid_to"
             ]
         );
+        assert_eq!(e["predicate"], "employed_by");
     }
 
     #[tokio::test]
