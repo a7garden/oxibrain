@@ -540,17 +540,30 @@ impl BrainServer {
 
     async fn tool_retract(&self, args: &Value) -> Result<String, ToolErr> {
         let space_id = self.ensure_space(&space_arg(args)).await?;
-        let subject: EntityRef =
-            serde_json::from_value(args.get("subject").cloned().unwrap_or_default())
-                .map_err(|e| ToolErr::Params(format!("parse subject: {e}")))?;
-        let predicate = str_arg(args, "predicate")?;
-        let object: DeclObject =
-            serde_json::from_value(args.get("object").cloned().unwrap_or_default())
-                .map_err(|e| ToolErr::Params(format!("parse object: {e}")))?;
-        let episode = str_arg(args, "episode")?;
+        // Statement-first path: when `statement_id` is given, the declaration
+        // inputs are rebuilt from the stored statement — callers that hold a
+        // statement id (the conflicts inbox) don't have to resubmit resolvable
+        // surfaces or entity types.
+        let sid = str_arg_or(args, "statement_id", "");
+        let (subject, predicate, object) = if sid.is_empty() {
+            let subject: EntityRef =
+                serde_json::from_value(args.get("subject").cloned().unwrap_or_default())
+                    .map_err(|e| ToolErr::Params(format!("parse subject: {e}")))?;
+            let predicate = str_arg(args, "predicate")?.to_string();
+            let object: DeclObject =
+                serde_json::from_value(args.get("object").cloned().unwrap_or_default())
+                    .map_err(|e| ToolErr::Params(format!("parse object: {e}")))?;
+            (subject, predicate, object)
+        } else {
+            self.brain
+                .retract_parts(&space_id, &sid)
+                .await
+                .map_err(ToolErr::run)?
+        };
+        let episode = str_arg_or(args, "episode", "");
         let decl = Declaration::Retract {
             subject,
-            predicate: predicate.to_string(),
+            predicate,
             object,
             episode: episode.to_string(),
         };
@@ -1015,17 +1028,18 @@ fn tool_list() -> Value {
                     "required": ["content"]
                 })),
             tool("retract",
-                "Write a denying assertion — retract a statement extracted from a specific episode. Creates a Declaration episode.",
+                "Retract a statement. Prefer the statement_id form — the declaration is rebuilt from the stored statement (no surfaces/types needed); this retracts ALL assertions of the statement. The subject/predicate/object form is the legacy resubmission path. Creates a Declaration episode.",
                 json!({
                     "type": "object",
                     "properties": {
-                        "subject": { "type": "object", "description": "Entity ref: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
-                        "predicate": { "type": "string", "description": "Predicate name." },
-                        "object": { "type": "object", "description": "Entity or literal object.", "properties": { "kind": {"type":"string","enum":["entity","literal"]} }, "required": ["kind"] },
-                        "episode": { "type": "string", "description": "Episode ID the retraction applies to." },
+                        "statement_id": { "type": "string", "description": "Statement to retract — takes precedence over subject/predicate/object." },
+                        "subject": { "type": "object", "description": "Entity ref: {\"surface\":\"...\",\"type\":\"...\"} (legacy path).", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} } },
+                        "predicate": { "type": "string", "description": "Predicate name (legacy path)." },
+                        "object": { "type": "object", "description": "Entity or literal object (legacy path).", "properties": { "kind": {"type":"string","enum":["entity","literal"]} } },
+                        "episode": { "type": "string", "description": "Originating episode id (audit context)." },
                         "space": { "type": "string", "description": "Space name (default: personal)." }
                     },
-                    "required": ["subject", "predicate", "object", "episode"]
+                    "required": []
                 })),
             tool("merge_entities",
                 "Merge two entities: the loser is redirected to the winner. Creates a Declaration episode. Both refs use surface form + type.",
@@ -2917,6 +2931,94 @@ mod tests {
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Retracted as episode"), "got: {text}");
+    }
+
+    #[tokio::test]
+    async fn retract_by_statement_id_removes_conflict() {
+        // The conflicts-inbox path: the UI holds a statement_id from
+        // `contradictions` and must not resubmit surfaces/types. Seeding a
+        // contradiction, then retracting one statement by id, must remove it
+        // from the contradiction list — the inbox count drops to zero.
+        let (_dir, server) = fresh_server().await;
+        let acme = json!({
+            "op": "add_statement",
+            "subject": { "surface": "Alice", "type": "Person" },
+            "predicate": "employed_by",
+            "object": { "kind": "entity", "surface": "Acme Corp", "type": "Organization" },
+            "polarity": "affirm",
+            "valid_from": 1_000,
+            "valid_to": TIME_MAX.0
+        });
+        let globex = json!({
+            "op": "add_statement",
+            "subject": { "surface": "Alice", "type": "Person" },
+            "predicate": "employed_by",
+            "object": { "kind": "entity", "surface": "Globex", "type": "Organization" },
+            "polarity": "affirm",
+            "valid_from": 1_000,
+            "valid_to": TIME_MAX.0
+        });
+        for decl in [acme, globex] {
+            server
+                .handle(msg(
+                    1,
+                    "tools/call",
+                    Some(json!({
+                        "name": "declare",
+                        "arguments": { "space": "t", "declaration_json": decl.to_string() }
+                    })),
+                ))
+                .await
+                .unwrap();
+        }
+
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "contradictions",
+                    "arguments": { "space": "t" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let details: Vec<Value> = serde_json::from_str(text).expect("contradictions JSON");
+        assert_eq!(details.len(), 2, "both employed_by statements conflict");
+        let sid = details[0]["statement_id"].as_str().unwrap().to_string();
+
+        let resp = server
+            .handle(msg(
+                3,
+                "tools/call",
+                Some(json!({
+                    "name": "retract",
+                    "arguments": { "space": "t", "statement_id": sid }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Retracted as episode"), "got: {text}");
+
+        let resp = server
+            .handle(msg(
+                4,
+                "tools/call",
+                Some(json!({
+                    "name": "contradictions",
+                    "arguments": { "space": "t" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let details: Vec<Value> = serde_json::from_str(text).expect("contradictions JSON");
+        assert!(
+            details.is_empty(),
+            "retracted statement must leave the conflict list, got {details:?}"
+        );
     }
 
     #[tokio::test]

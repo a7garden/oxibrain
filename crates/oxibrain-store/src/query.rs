@@ -239,6 +239,64 @@ pub fn contradiction_details(
     });
     Ok(out)
 }
+
+/// Rebuild a Retract declaration's inputs (subject ref, predicate, object)
+/// from the stored statement — the statement-first retract path. Callers that
+/// hold a `statement_id` (e.g. the conflicts inbox) never have to resubmit
+/// resolvable surfaces or types; the truth half is the source of truth.
+pub fn retract_parts(
+    conn: &Connection,
+    space: &str,
+    statement_id: &str,
+) -> Result<
+    (
+        crate::project::EntityRef,
+        String,
+        crate::project::DeclObject,
+    ),
+    BrainError,
+> {
+    let row: (String, String, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT subject_id, predicate, object_entity, object_literal
+             FROM statements WHERE space_id = ?1 AND id = ?2",
+            params![space, statement_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .map_err(|_| BrainError::NotFound(format!("statement {statement_id} in {space}")))?;
+    let (subject_id, predicate, object_entity, object_literal) = row;
+    let entity_ref_of = |id: &str| -> Result<crate::project::EntityRef, BrainError> {
+        Ok(crate::project::EntityRef {
+            surface: crate::brief::surface_of(conn, id)?,
+            ty: conn
+                .query_row(
+                    "SELECT type_name FROM entities WHERE id = ?1",
+                    params![id],
+                    |r| r.get::<_, String>(0),
+                )
+                .map_err(sql_err)?,
+        })
+    };
+    let object = match (object_entity, object_literal) {
+        (Some(eid), None) => {
+            let r = entity_ref_of(&eid)?;
+            crate::project::DeclObject::Entity {
+                surface: r.surface,
+                ty: r.ty,
+            }
+        }
+        (None, Some(lit)) => crate::project::DeclObject::Literal {
+            literal_type: "text".to_string(),
+            value: lit,
+        },
+        _ => {
+            return Err(BrainError::NotFound(format!(
+                "statement {statement_id} object column invariant violated"
+            )));
+        }
+    };
+    Ok((entity_ref_of(&subject_id)?, predicate, object))
+}
 /// One ranked entity, projected for the `/ask` UI list.
 /// `entity_id` is the canonical entity id; `entity_surface` and
 /// `entity_type` come from the entities + entity_keys tables (falling

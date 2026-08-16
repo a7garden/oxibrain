@@ -294,6 +294,28 @@ impl Brain {
         })
     }
 
+    /// Rebuild a Retract declaration's inputs from a stored statement —
+    /// the statement-first retract path (the conflicts inbox holds statement
+    /// ids, not resolvable surfaces). Pure read; the caller declares.
+    pub async fn retract_parts(
+        &self,
+        space: &str,
+        statement_id: &str,
+    ) -> Result<
+        (
+            oxibrain_store::project::EntityRef,
+            String,
+            oxibrain_store::project::DeclObject,
+        ),
+        BrainError,
+    > {
+        let space = space.to_string();
+        let statement_id = statement_id.to_string();
+        read_op!(self.handle, |conn| {
+            query::retract_parts(conn, &space, &statement_id)
+        })
+    }
+
     /// Beliefs as of a valid-time point.
     pub async fn beliefs_as_of(
         &self,
