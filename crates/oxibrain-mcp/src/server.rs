@@ -3020,6 +3020,97 @@ mod tests {
             "retracted statement must leave the conflict list, got {details:?}"
         );
     }
+    #[tokio::test]
+    async fn retract_by_statement_id_handles_literal_object() {
+        // The legacy retract path encoded objects as {kind, surface/value}.
+        // For literal objects, the column stores a TypedValue JSON blob —
+        // the statement-first path must round-trip it through DeclObject
+        // without losing the (literal_type, value) pair (silent no-op if it
+        // passes the raw JSON string).
+        let (_dir, server) = fresh_server().await;
+        let make = |value: &str| {
+            json!({
+                "op": "add_statement",
+                "subject": { "surface": "Bob", "type": "Person" },
+                "predicate": "full_name",
+                "object": { "kind": "literal", "literal_type": "text", "value": value },
+                "polarity": "affirm",
+                "valid_from": 1_000,
+                "valid_to": TIME_MAX.0
+            })
+        };
+        for v in ["Bob Smith", "Robert Smith"] {
+            server
+                .handle(msg(
+                    1,
+                    "tools/call",
+                    Some(json!({
+                        "name": "declare",
+                        "arguments": { "space": "t", "declaration_json": make(v).to_string() }
+                    })),
+                ))
+                .await
+                .unwrap();
+        }
+
+        // Snapshot the contradictions to find one of the literal statements.
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "contradictions",
+                    "arguments": { "space": "t" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let details: Value = serde_json::from_str(text).expect("parse");
+        assert_eq!(details.as_array().unwrap().len(), 2, "got: {text}");
+        let target = details
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["object_value"] == "Bob Smith")
+            .expect("Bob Smith value present")["statement_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Retract by statement_id — must not silently no-op on literal objects.
+        let resp = server
+            .handle(msg(
+                3,
+                "tools/call",
+                Some(json!({
+                    "name": "retract",
+                    "arguments": { "space": "t", "statement_id": target }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("Retracted as episode"), "got: {text}");
+
+        // Contradiction list drops to empty — the retracted statement is
+        // no longer an affirmation, so its peer (which had no other
+        // conflicting source) no longer appears as contradicted either.
+        let resp = server
+            .handle(msg(
+                4,
+                "tools/call",
+                Some(json!({
+                    "name": "contradictions",
+                    "arguments": { "space": "t" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let details: Value = serde_json::from_str(text).expect("parse");
+        assert_eq!(details.as_array().unwrap().len(), 0, "got: {text}");
+    }
 
     #[tokio::test]
     async fn redact_dry_run_previews_closure() {

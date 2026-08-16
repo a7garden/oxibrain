@@ -285,10 +285,42 @@ pub fn retract_parts(
                 ty: r.ty,
             }
         }
-        (None, Some(lit)) => crate::project::DeclObject::Literal {
-            literal_type: "text".to_string(),
-            value: lit,
-        },
+        (None, Some(lit)) => {
+            // `object_literal` is a `serde_json::to_string(TypedValue)` blob
+            // (see `knowledge::insert_statement`). Parse it back so we hash
+            // on the canonical (literal_type, value) pair; Quantity/Enum
+            // can't be expressed as `DeclObject::Literal` and surface a
+            // hard error rather than silently no-oping the retract.
+            let tv: oxibrain_core::knowledge::TypedValue =
+                serde_json::from_str(&lit).map_err(|e| {
+                    BrainError::Corruption(format!(
+                        "statement {statement_id} object_literal not TypedValue JSON: {e}"
+                    ))
+                })?;
+            let (literal_type, value) = match tv {
+                oxibrain_core::knowledge::TypedValue::Text(s) => ("text".to_string(), s),
+                oxibrain_core::knowledge::TypedValue::Date(s) => ("date".to_string(), s),
+                oxibrain_core::knowledge::TypedValue::DateTime(s) => ("datetime".to_string(), s),
+                oxibrain_core::knowledge::TypedValue::Number(n) => {
+                    ("number".to_string(), n.to_string())
+                }
+                oxibrain_core::knowledge::TypedValue::Bool(b) => {
+                    ("bool".to_string(), b.to_string())
+                }
+                oxibrain_core::knowledge::TypedValue::Quantity { .. }
+                | oxibrain_core::knowledge::TypedValue::Enum(_) => {
+                    return Err(BrainError::Invalid(format!(
+                        "statement {statement_id} literal object kind is \
+                         Quantity or Enum and cannot be retracted via \
+                         statement_id — use the legacy surface form"
+                    )));
+                }
+            };
+            crate::project::DeclObject::Literal {
+                literal_type,
+                value,
+            }
+        }
         _ => {
             return Err(BrainError::NotFound(format!(
                 "statement {statement_id} object column invariant violated"

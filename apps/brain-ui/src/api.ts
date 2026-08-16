@@ -46,19 +46,33 @@ export async function rpc<T = unknown>(
 
 // ── MCP tool calls ──────────────────────────────────────────────────────
 
+interface McpToolResult {
+  content: Array<{ type: string; text: string }>;
+  /** `true` when the tool ran but failed (server-side `tool_error`).
+   *  Protocol-level errors come back on `json.error`, never here. */
+  isError?: boolean;
+}
+
 /** Call an MCP tool by name with arguments.
  *  Some tools return JSON (`search`, `recall`, `why`, `contradictions`, `stats`).
  *  Others return plain text (`brief`, `navigate`, `remember`, `merge_entities`,
  *  `retract`). Try JSON first; on parse failure return the raw text — callers
- *  typed `Promise<string>` will get the markdown / confirmation as-is. */
+ *  typed `Promise<string>` will get the markdown / confirmation as-is.
+ *
+ *  If the server marks the result `isError: true`, the call throws so
+ *  consumers (e.g. `useMutation`) flow through their `onError` paths
+ *  rather than receiving a false-positive success. */
 export async function callTool<T = unknown>(
   name: string,
   args: Record<string, unknown> = {},
 ): Promise<T> {
-  const result = await rpc<{ content: Array<{ type: string; text: string }> }>(
-    "tools/call",
-    { name, arguments: args },
-  );
+  const result = await rpc<McpToolResult>("tools/call", {
+    name,
+    arguments: args,
+  });
+  if (result?.isError) {
+    throw new Error(result?.content?.[0]?.text ?? "tool error");
+  }
   const text = result?.content?.[0]?.text;
   if (text === undefined) return result as unknown as T;
   try {

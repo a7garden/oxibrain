@@ -276,16 +276,19 @@ function ConfirmRetractDialog({
   onConfirm,
 }: ConfirmRetractDialogProps) {
   const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const focusedOnce = useRef(false);
 
   useEffect(() => {
-    confirmRef.current?.focus();
+    if (!focusedOnce.current) {
+      confirmRef.current?.focus();
+      focusedOnce.current = true;
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !submitting) onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel, submitting]);
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
