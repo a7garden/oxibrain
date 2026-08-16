@@ -54,6 +54,9 @@ const askRoute = createRoute({
   path: "/ask",
   validateSearch: (s: Record<string, unknown>) => ({
     q: typeof s.q === "string" ? s.q : "",
+    // Unique-per-press marker; the `/` hotkey pushes a fresh timestamp so
+    // AskView's autofocus effect fires on every press, including same-route.
+    autofocus: typeof s.autofocus === "number" ? s.autofocus : 0,
   }),
   component: AskView,
 });

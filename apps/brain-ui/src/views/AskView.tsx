@@ -13,9 +13,9 @@ import { fetchers, qk } from "../queries";
  * beliefs; each belief discloses its `why` block — assertions with episode,
  * extractor, polarity, and the confidence breakdown. */
 export function AskView() {
-  const { q } = useSearch({ from: "/ask" });
+  const { q, autofocus } = useSearch({ from: "/ask" });
   const navigate = useNavigate();
-
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [input, setInput] = useState(q);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -25,7 +25,11 @@ export function AskView() {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       if (input !== q) {
-        void navigate({ to: "/ask", search: { q: input }, replace: true });
+        void navigate({
+          to: "/ask",
+          search: { q: input, autofocus: 0 },
+          replace: true,
+        });
       }
     }, 300);
     return () => window.clearTimeout(timer.current);
@@ -35,6 +39,18 @@ export function AskView() {
   useEffect(() => {
     setInput((current) => (current === q ? current : q));
   }, [q]);
+
+  // `autofocus` is a fresh timestamp pushed by the `/` hotkey on every
+  // press. Any positive value triggers focus + select. The flag is
+  // observable per-press (each push is a new number), so same-route `/`
+  // presses refocus without navigating to clear.
+  const lastAutofocus = useRef(0);
+  useEffect(() => {
+    if (!autofocus || autofocus === lastAutofocus.current) return;
+    lastAutofocus.current = autofocus;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [autofocus]);
 
   const query = useQuery({
     queryKey: qk.search(q),
@@ -49,6 +65,7 @@ export function AskView() {
         Search entities; open a belief to see where it came from.
       </p>
       <input
+        ref={inputRef}
         id="ask-input"
         autoFocus
         value={input}

@@ -1,6 +1,9 @@
+import { useMemo, useState } from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
+import { CommandPalette } from "./components/CommandPalette";
+import { useHotkeys } from "./hooks/useHotkeys";
 import { fetchers, qk } from "./queries";
 import { toggleTheme } from "./theme";
 
@@ -45,7 +48,40 @@ export function AppShell({ children }: AppShellProps) {
   const isOffline = spaceQuery.isError;
   const overview = spaceQuery.data;
 
+  // ── Global hotkeys + command palette ─────────────────────────────────
+  // The palette is mounted once at the shell level so it survives route
+  // changes. The single-key hotkeys (`/`, `c`, `t`) are suppressed by
+  // useHotkeys when the user is typing in an input — the palette's own
+  // input is one such input, so opening the palette automatically disables
+  // those bindings.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const navigate = useNavigate();
+  const hotkeyMap = useMemo(
+    () => ({
+      "mod+k": () => setPaletteOpen((v) => !v),
+      "/": () => {
+        // Push a fresh autofocus timestamp so AskView's effect focuses its
+        // input whether we're crossing routes or already on /ask. AskView's
+        // autofocus effect fires on every timestamp change, including
+        // same-route presses.
+        void navigate({
+          to: "/ask",
+          search: { q: "", autofocus: Date.now() },
+        });
+      },
+      c: () => {
+        void navigate({ to: "/capture" });
+      },
+      t: () => {
+        toggleTheme();
+      },
+    }),
+    [navigate],
+  );
+  useHotkeys(hotkeyMap);
+
   return (
+    <>
     <div className="flex h-full font-sans">
       <aside className="bg-surface-sunken flex w-60 flex-col border-r border-line">
         <div className="flex items-center gap-2.5 px-5 py-5">
@@ -144,5 +180,7 @@ export function AppShell({ children }: AppShellProps) {
         <div className="flex-1 overflow-auto">{children}</div>
       </main>
     </div>
+    <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+    </>
   );
 }
