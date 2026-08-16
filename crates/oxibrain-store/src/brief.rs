@@ -166,7 +166,9 @@ fn load_statements(
         let (id, subject, predicate, object_entity, object_literal) = row.map_err(sql_err)?;
         let object = match (object_entity, object_literal) {
             (Some(eid), None) => Object::Entity(eid),
-            (None, Some(lit)) => Object::Literal(TypedValue::Text(lit)),
+            (None, Some(lit)) => {
+                Object::Literal(serde_json::from_str(&lit).expect("valid literal in db"))
+            }
             _ => Object::Literal(TypedValue::Text(String::new())),
         };
         map.insert(

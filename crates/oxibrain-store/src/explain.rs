@@ -43,7 +43,9 @@ pub fn why(conn: &Connection, space: &str, statement_id: &str) -> Result<Explain
                 let object_literal: Option<String> = r.get(4)?;
                 let object = match (object_entity, object_literal) {
                     (Some(eid), None) => Object::Entity(eid),
-                    (None, Some(lit)) => Object::Literal(TypedValue::Text(lit)),
+                    (None, Some(lit)) => {
+                        Object::Literal(serde_json::from_str(&lit).expect("valid literal in db"))
+                    }
                     _ => Object::Literal(TypedValue::Text(String::new())),
                 };
                 Ok(Statement {
