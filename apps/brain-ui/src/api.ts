@@ -150,6 +150,12 @@ export const api = {
       space,
     }),
 
+  /** Statement-first retract: the conflicts inbox holds statement ids, not
+   *  resolvable surfaces or entity types — the server rebuilds the
+   *  Declaration from the stored statement. Retraction denies ALL assertions
+   *  of the statement and emits a Declaration episode. */
+  retractStatement: (statementId: string, space = "personal") =>
+    callTool<string>("retract", { statement_id: statementId, space }),
   spaceOverview: (space = "personal") =>
     readResource<SpaceOverview>(`space://${space}`),
 
