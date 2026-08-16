@@ -305,6 +305,16 @@ impl Brain {
         let space = space.to_string();
         read_op!(self.handle, |conn| query::contradictions(conn, &space))
     }
+    /// Contradicted statements with surfaces and supporting episodes (UI DTO).
+    pub async fn contradiction_details(
+        &self,
+        space: &str,
+    ) -> Result<Vec<oxibrain_store::query::ContradictionDetail>, BrainError> {
+        let space = space.to_string();
+        read_op!(self.handle, |conn| {
+            oxibrain_store::query::contradiction_details(conn, &space)
+        })
+    }
     /// Aggregate counts for a space (episodes, entities, statements,
     /// contradicted statements). Used by the `stats` MCP tool and dashboards.
     pub async fn stats(&self, space: &str) -> Result<oxibrain_core::SpaceStats, BrainError> {

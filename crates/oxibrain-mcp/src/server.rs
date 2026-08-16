@@ -420,12 +420,12 @@ impl BrainServer {
 
     async fn tool_contradictions(&self, args: &Value) -> Result<String, ToolErr> {
         let space_id = self.ensure_space(&space_arg(args)).await?;
-        let stmts = self
+        let details = self
             .brain
-            .contradictions(&space_id)
+            .contradiction_details(&space_id)
             .await
             .map_err(ToolErr::run)?;
-        to_json(&stmts)
+        to_json(&details)
     }
 
     async fn tool_stats(&self, args: &Value) -> Result<String, ToolErr> {
@@ -2339,6 +2339,82 @@ mod tests {
         assert!(response_str.contains("200 OK"), "got: {response_str}");
         assert!(response_str.contains("\"id\":1"), "got: {response_str}");
         assert!(response_str.contains("\"result\""), "got: {response_str}");
+    }
+
+    #[tokio::test]
+    async fn contradictions_tool_returns_detail_dto_contract() {
+        let (_dir, server) = fresh_server().await;
+        // Two conflicting static values for born_in(Alice, …).
+        for city in ["Seoul", "Busan"] {
+            let decl = serde_json::json!({
+                "op": "add_statement",
+                "subject": { "surface": "Alice", "type": "Person" },
+                "predicate": "born_in",
+                "object": { "kind": "entity", "surface": city, "type": "City" },
+                "polarity": "affirm",
+                "valid_from": 1_000,
+                "valid_to": TIME_MAX.0
+            });
+            let resp = server
+                .handle(msg(
+                    1,
+                    "tools/call",
+                    Some(serde_json::json!({
+                        "name": "declare",
+                        "arguments": { "space": "t", "declaration_json": decl.to_string() }
+                    })),
+                ))
+                .await
+                .unwrap();
+            assert!(
+                resp["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Declared as episode")
+            );
+        }
+
+        let resp = server
+            .handle(msg(
+                3,
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "contradictions",
+                    "arguments": { "space": "t" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let arr: serde_json::Value = serde_json::from_str(text).expect("dto parses");
+        let arr = arr.as_array().expect("array of details");
+        assert_eq!(arr.len(), 2, "got: {text}");
+        for d in arr {
+            // Exact key set — the UI's TypeScript mirrors this test.
+            // serde_json::Map iterates keys in sorted order (BTreeMap), so the
+            // wire-format declaration order is lost once the text is parsed
+            // back into Value. Compare the *set*, not the sequence.
+            let mut keys: Vec<&str> = d.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                vec![
+                    "affirm_episodes",
+                    "deny_episodes",
+                    "object_kind",
+                    "object_value",
+                    "predicate",
+                    "statement_id",
+                    "subject_id",
+                    "subject_surface",
+                    "subject_type"
+                ],
+                "contract keys, got: {keys:?}"
+            );
+            assert_eq!(d["subject_surface"], "Alice");
+            assert_eq!(d["subject_type"], "Person");
+            assert!(d["affirm_episodes"].as_array().unwrap().len() == 1);
+        }
     }
 
     // ── Tests for new §12.2 tools ────────────────────────────────────────
