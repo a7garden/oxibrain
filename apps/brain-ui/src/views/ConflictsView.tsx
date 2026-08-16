@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api, type ContradictionDetail } from "../api";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ErrorState } from "../components/ErrorState";
 import { HUE_DOT, hueForType } from "../lib/hue";
 import { fetchers, qk } from "../queries";
@@ -146,8 +147,37 @@ export function ConflictsView() {
       )}
 
       {pending && (
-        <ConfirmRetractDialog
-          pending={pending}
+        <ConfirmDialog
+          titleId="conflicts-retract-title"
+          title="Retract this value?"
+          description={
+            <>
+              A new declaration episode will be recorded
+              {pending.episodeCount === 1
+                ? " denying the existing assertion of this statement."
+                : ` denying all ${pending.episodeCount} assertions of this statement.`}
+              {" "}The original episodes are preserved.
+            </>
+          }
+          details={[
+            { label: "subject", value: pending.subjectSurface },
+            { label: "predicate", value: pending.predicate },
+            {
+              label: "object",
+              value: (
+                <>
+                  {pending.objectValue}
+                  <span className="ml-2 text-text-subtle">
+                    ({pending.objectKind})
+                  </span>
+                </>
+              ),
+            },
+          ]}
+          cancelLabel="cancel"
+          confirmLabel="retract"
+          confirmingLabel="retracting…"
+          variant="danger"
           submitting={mutation.isPending}
           onCancel={() => setPending(null)}
           onConfirm={() => {
@@ -250,6 +280,8 @@ function ValueRow({ value, onRetract }: ValueRowProps) {
   );
 }
 
+// PendingRetract moved into ConflictsView-local scope so the dialog body
+// stays inline; ConfirmDialog owns the chrome (focus, escape, backdrop).
 interface PendingRetract {
   statementId: string;
   subjectSurface: string;
@@ -257,101 +289,4 @@ interface PendingRetract {
   objectValue: string;
   objectKind: "entity" | "literal";
   episodeCount: number;
-}
-
-interface ConfirmRetractDialogProps {
-  pending: PendingRetract;
-  submitting: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}
-
-/** Confirm dialog matching DESIGN §6.7: backdrop blur+dark, surface-raised
- *  panel, destructive primary button, ghost cancel. Escape + backdrop click
- *  cancel; focus auto-routes to the destructive button on open. */
-function ConfirmRetractDialog({
-  pending,
-  submitting,
-  onCancel,
-  onConfirm,
-}: ConfirmRetractDialogProps) {
-  const confirmRef = useRef<HTMLButtonElement | null>(null);
-  const focusedOnce = useRef(false);
-
-  useEffect(() => {
-    if (!focusedOnce.current) {
-      confirmRef.current?.focus();
-      focusedOnce.current = true;
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !submitting) onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel, submitting]);
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !submitting) onCancel();
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="conflicts-retract-title"
-        className="bg-surface-raised text-text w-full max-w-[520px] rounded-[var(--dialog-radius)] shadow-lg p-6"
-      >
-        <h2
-          id="conflicts-retract-title"
-          className="font-display text-base font-semibold text-text"
-        >
-          Retract this value?
-        </h2>
-        <p className="mt-2 text-sm text-text-muted">
-          A new declaration episode will be recorded
-          {pending.episodeCount === 1
-            ? " denying the existing assertion of this statement."
-            : ` denying all ${pending.episodeCount} assertions of this statement.`}
-          {" "}The original episodes are preserved.
-        </p>
-        <dl className="mt-4 space-y-1.5 font-mono text-xs">
-          <div className="flex justify-between gap-4">
-            <dt className="text-text-subtle">subject</dt>
-            <dd className="text-text">{pending.subjectSurface}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-text-subtle">predicate</dt>
-            <dd className="text-text">{pending.predicate}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-text-subtle">object</dt>
-            <dd className="text-text">
-              {pending.objectValue}
-              <span className="ml-2 text-text-subtle">({pending.objectKind})</span>
-            </dd>
-          </div>
-        </dl>
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={submitting}
-            className="rounded-[var(--button-radius)] px-3 py-1.5 font-mono text-xs text-text-muted transition-colors hover:bg-surface-muted disabled:opacity-50"
-          >
-            cancel
-          </button>
-          <button
-            ref={confirmRef}
-            type="button"
-            onClick={onConfirm}
-            disabled={submitting}
-            className="bg-status-error text-text-inverse rounded-[var(--button-radius)] px-3 py-1.5 font-mono text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {submitting ? "retracting…" : "retract"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
