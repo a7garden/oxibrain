@@ -152,13 +152,20 @@ fn contradiction_details_carries_surfaces_and_episodes() {
     project_declaration(&conn, "s1", &d2, clock.now(), &mut cache).unwrap();
 
     let details = query::contradiction_details(&conn, "s1").unwrap();
-    assert_eq!(details.len(), 2, "both conflicting statements appear: {details:?}");
+    assert_eq!(
+        details.len(),
+        2,
+        "both conflicting statements appear: {details:?}"
+    );
     for d in &details {
         assert_eq!(d.subject_surface, "Alice");
         assert_eq!(d.subject_type, "Person");
         assert_eq!(d.predicate, "born_in");
         assert_eq!(d.object_kind, "entity");
-        assert!(!d.affirm_episodes.is_empty(), "each value names its episode");
+        assert!(
+            !d.affirm_episodes.is_empty(),
+            "each value names its episode"
+        );
         assert!(d.object_value == "Seoul" || d.object_value == "Busan");
     }
     let values: Vec<&str> = details.iter().map(|d| d.object_value.as_str()).collect();

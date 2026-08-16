@@ -195,12 +195,8 @@ pub fn contradiction_details(
     for s in stmts {
         let subject_surface = crate::brief::surface_of(conn, &s.subject)?;
         let (object_kind, object_value) = match &s.object {
-            Object::Entity(eid) => {
-                ("entity".to_string(), crate::brief::surface_of(conn, eid)?)
-            }
-            Object::Literal(tv) => {
-                ("literal".to_string(), crate::brief::literal_repr(tv))
-            }
+            Object::Entity(eid) => ("entity".to_string(), crate::brief::surface_of(conn, eid)?),
+            Object::Literal(tv) => ("literal".to_string(), crate::brief::literal_repr(tv)),
         };
         let entity = conn
             .query_row(
@@ -234,8 +230,13 @@ pub fn contradiction_details(
             deny_episodes: deny,
         });
     }
-    out.sort_by(|a, b| (&a.subject_surface, &a.predicate, &a.object_value)
-        .cmp(&(&b.subject_surface, &b.predicate, &b.object_value)));
+    out.sort_by(|a, b| {
+        (&a.subject_surface, &a.predicate, &a.object_value).cmp(&(
+            &b.subject_surface,
+            &b.predicate,
+            &b.object_value,
+        ))
+    });
     Ok(out)
 }
 
