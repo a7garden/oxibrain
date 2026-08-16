@@ -632,6 +632,12 @@ impl BrainServer {
                 "name": "Graph around entity",
                 "description": "Bounded subgraph. Optional &space=name &direction=out|in|both.",
                 "mimeType": "application/json"
+            }, {
+                "uriTemplate": "timeline://{entity}?space=name&from=ms&to=ms",
+                "name": "Entity timeline",
+                "description": "Belief intervals for an entity. from/to are optional epoch-ms bounds.",
+                "mimeType": "application/json"
+
             }]
         })
     }
@@ -743,6 +749,23 @@ impl BrainServer {
                     .await
                     .map_err(|e| (INTERNAL_ERROR, format!("traverse: {e}")))?;
                 serde_json::to_string_pretty(&result).unwrap_or_default()
+            }
+            "timeline" => {
+                let entity_id = path.trim_start_matches('/');
+                let from = qp
+                    .get("from")
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .map(oxibrain_ports::Timestamp);
+                let to = qp
+                    .get("to")
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .map(oxibrain_ports::Timestamp);
+                let entries = self
+                    .brain
+                    .timeline(&space_id, entity_id, from, to)
+                    .await
+                    .map_err(|e| (INTERNAL_ERROR, format!("timeline: {e}")))?;
+                serde_json::to_string_pretty(&entries).unwrap_or_default()
             }
             other => {
                 return Err((
@@ -2829,6 +2852,7 @@ mod tests {
         assert!(uris.contains(&"entity://{id}"));
         assert!(uris.contains(&"episode://{id}"));
         assert!(uris.contains(&"graph://{entity}?depth=n"));
+        assert!(uris.contains(&"timeline://{entity}?space=name&from=ms&to=ms"));
     }
 
     #[tokio::test]
@@ -2945,6 +2969,41 @@ mod tests {
         let text = resp["result"]["contents"][0]["text"].as_str().unwrap();
         let result: Value = serde_json::from_str(text).expect("graph parse");
         assert!(!result["nodes"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn timeline_resource_returns_entries_contract() {
+        let (_dir, server) = fresh_server().await;
+        let (_ep, alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(
+                1,
+                "resources/read",
+                Some(serde_json::json!({ "uri": format!("timeline://{alice}?space=t") })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["contents"][0]["text"].as_str().unwrap();
+        let v: serde_json::Value = serde_json::from_str(text).expect("timeline parses");
+        let arr = v.as_array().expect("array of entries");
+        assert!(!arr.is_empty(), "declare produced one belief: {text}");
+        let e = &arr[0];
+        let mut keys: Vec<&str> = e.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "object_entity",
+                "object_repr",
+                "predicate",
+                "recorded_at",
+                "statement_id",
+                "status",
+                "valid_from",
+                "valid_to"
+            ]
+        );
     }
 
     #[tokio::test]
