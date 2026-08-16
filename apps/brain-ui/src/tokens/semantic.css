@@ -1,0 +1,49 @@
+/* Tier 2 — Light semantic tokens. Verbatim from DESIGN.md §3.3. */
+:root {
+  /* Surfaces */
+  --color-surface:        var(--p-neutral-0);
+  --color-surface-raised: oklch(100% 0 0);
+  --color-surface-sunken: var(--p-neutral-50);
+  --color-surface-muted:  oklch(96% 0.005 265);
+
+  /* Text */
+  --color-text:        var(--p-neutral-900);  /* ink */
+  --color-text-muted:  var(--p-neutral-700);
+  --color-text-subtle: oklch(42% 0.010 95);  /* L=0.42 — passes L≤0.45 on light surfaces */
+  --color-text-inverse: oklch(98.5% 0.004 95);
+
+  /* Border */
+  --color-border:      var(--p-neutral-100);
+  --color-border-strong: oklch(82% 0.008 265);
+  --color-focus-ring:  oklch(0.45 0.04 265);
+
+  /* Functional hue labels (oximemo §7.7) */
+  --color-hue-red:    oklch(0.75 0.15 25);
+  --color-hue-amber:  oklch(0.75 0.15 75);
+  --color-hue-green:  oklch(0.75 0.13 145);
+  --color-hue-teal:   oklch(0.75 0.12 195);
+  --color-hue-blue:   oklch(0.70 0.14 250);
+  --color-hue-purple: oklch(0.72 0.15 310);
+
+  /* Status — verbatim OKLCH from §3.2 status hues table (no primitive ramp needed) */
+  --color-status-success: oklch(0.596 0.145 163);
+  --color-status-warning: oklch(0.669 0.162 70);
+  --color-status-error:   oklch(0.577 0.245 27.325);
+  --color-status-info:    oklch(0.623 0.214 259.815);
+
+  /* Status surfaces (panel backgrounds) */
+  --color-status-success-subtle: oklch(0.97 0.014 163);
+  --color-status-warning-subtle: oklch(0.97 0.014 70);
+  --color-status-error-subtle:   oklch(0.97 0.014 27);
+  --color-status-info-subtle:    oklch(0.97 0.014 259);
+
+  /* Interactive primary — dedicated button fill (darker than label hue for white-text contrast) */
+  --color-interactive-primary:           oklch(0.45 0.14 250);  /* L=0.45 — white text passes APCA Lc 60 */
+  --color-interactive-primary-foreground: oklch(98.5% 0.004 95);
+
+  /* Status text on subtle — darker variants for text inside -subtle surfaces (Lc 75+ at 10px) */
+  --color-status-success-on-subtle: oklch(0.40 0.13 163);
+  --color-status-warning-on-subtle: oklch(0.45 0.14 70);
+  --color-status-error-on-subtle:   oklch(0.42 0.18 27);
+  --color-status-info-on-subtle:    oklch(0.42 0.16 259);
+}

@@ -1,104 +1,38 @@
-@import "tailwindcss";
+@import "./tokens/primitives.css";
+@import "./tokens/semantic.css";
+@import "./tokens/semantic-dark.css";
+@import "./tokens/components.css";
+@import "./tokens/theme.css";
 
-@theme {
-  /* Warm dark palette — a digital observatory for thought */
-  --color-ink: #0c0b09;
-  --color-ink-2: #14120f;
-  --color-surface: #1c1915;
-  --color-surface-2: #26221c;
-  --color-line: #332e26;
-  --color-line-bright: #4a4338;
-
-  --color-text: #e6dfd0;
-  --color-text-dim: #a39a87;
-  --color-text-faint: #6b6557;
-
-  --color-amber: #e8a838;
-  --color-amber-dim: #b8862c;
-  --color-amber-glow: rgba(232, 168, 56, 0.15);
-
-  --color-rose: #e8635a;
-  --color-sage: #82b09a;
-  --color-violet: #9a8cc4;
-
-  --font-display: "Fraunces", Georgia, serif;
-  --font-sans: "Geist", system-ui, sans-serif;
-  --font-mono: "Geist Mono", "SF Mono", monospace;
-}
-
-html,
-body {
-  background-color: var(--color-ink);
+html, body {
+  background-color: var(--color-surface);
   color: var(--color-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   margin: 0;
   height: 100%;
 }
+#root { height: 100vh; }
 
-#root {
-  height: 100vh;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-line);
-  border-radius: 3px;
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
 }
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-line-bright);
+::selection { background: var(--color-interactive-primary); color: var(--color-interactive-primary-foreground); }
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.animate-fade-in { animation: fade-in var(--duration-base) var(--ease-out); }
+
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.skeleton {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(100deg, var(--color-surface-muted) 40%, var(--color-surface-sunken) 50%, var(--color-surface-muted) 60%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
 }
 
-/* Selection */
-::selection {
-  background: var(--color-amber-glow);
-  color: var(--color-amber);
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in, .skeleton { animation: none; }
 }
-
-/* Pulse animation for connection status */
-@keyframes pulse-amber {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.animate-pulse-amber {
-  animation: pulse-amber 2s ease-in-out infinite;
-}
-
-/* Slow drift for background stars */
-@keyframes drift {
-  0% { transform: translate(0, 0); }
-  50% { transform: translate(2px, -1px); }
-  100% { transform: translate(0, 0); }
-}
-
-/* Fade-in for view transitions */
-@keyframes fade-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.animate-fade-in {
-  animation: fade-in 0.25s ease-out;
-}
-
-/* Stagger helpers */
-.stagger > * {
-  opacity: 0;
-  animation: fade-in 0.3s ease-out forwards;
-}
-.stagger > *:nth-child(1) { animation-delay: 0.02s; }
-.stagger > *:nth-child(2) { animation-delay: 0.06s; }
-.stagger > *:nth-child(3) { animation-delay: 0.10s; }
-.stagger > *:nth-child(4) { animation-delay: 0.14s; }
-.stagger > *:nth-child(5) { animation-delay: 0.18s; }
-.stagger > *:nth-child(6) { animation-delay: 0.22s; }
-.stagger > *:nth-child(7) { animation-delay: 0.26s; }
-.stagger > *:nth-child(8) { animation-delay: 0.30s; }

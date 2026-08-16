@@ -1,0 +1,20 @@
+/* Tier 1 — OKLCH primitives. The only place raw OKLCH lives. */
+:root {
+  --p-neutral-0:   oklch(98.5% 0.004 95);
+  --p-neutral-50:  oklch(95%   0.006 95);
+  --p-neutral-100: oklch(90%   0.007 95);
+  --p-neutral-300: oklch(75%   0.010 95);
+  --p-neutral-500: oklch(55%   0.012 95);
+  --p-neutral-700: oklch(35%   0.012 265);
+  --p-neutral-900: oklch(18%   0.015 265);
+  --p-neutral-950: oklch(13%   0.020 265);
+  --p-neutral-999: oklch(0%    0 0);
+  --radius-xs: 0.25rem; --radius-sm: 0.375rem; --radius-md: 0.5rem;
+  --radius-lg: 0.75rem; --radius-xl: 1rem; --radius-2xl: 1.25rem;
+  --radius-full: 9999px;
+}
+.dark {
+  --p-neutral-100: oklch(28% 0.015 265);
+  --p-neutral-500: oklch(65% 0.012 265);
+  --p-neutral-950: oklch(13% 0.020 265);
+}

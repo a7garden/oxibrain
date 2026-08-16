@@ -1,0 +1,25 @@
+/* Tier 3 — Component-shaped tokens. Radiation + shadows + motion. */
+:root {
+  --button-radius:         var(--radius-md);
+  --input-radius:          var(--radius-md);
+  --select-radius:         var(--radius-md);
+  --card-radius:           var(--radius-lg);
+  --dialog-radius:         var(--radius-lg);
+  --popover-radius:        var(--radius-xl);
+  --tooltip-radius:        var(--radius-xl);
+  --badge-radius:          var(--radius-full);
+  --avatar-radius:         var(--radius-full);
+  --tag-radius:            var(--radius-xs);
+  --nav-item-radius:       var(--radius-md);
+  --nav-item-dense-radius: var(--radius-sm);
+
+  --input-shadow:        0 0 0 1px var(--color-border);
+  --input-shadow-focus:  0 0 0 1px var(--color-focus-ring), 0 0 0 4px oklch(0.45 0.04 265 / 0.15);
+  --input-shadow-error:  0 0 0 1px var(--color-status-error);
+
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 350ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
