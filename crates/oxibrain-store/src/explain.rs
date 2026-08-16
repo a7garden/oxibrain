@@ -22,6 +22,11 @@ pub struct AssertionDetail {
     pub polarity: String,
     pub confidence: f32,
     pub recorded_at: i64,
+    /// Verbatim subject-mention surface for this assertion (P3: assertions
+    /// keep their mention so re-resolution stays exact). `None` when the
+    /// mention row is missing (legacy rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,8 +74,10 @@ pub fn why(conn: &Connection, space: &str, statement_id: &str) -> Result<Explain
 
     let mut assert_stmt = conn
         .prepare(
-            "SELECT id, episode_id, extractor_id, polarity, confidence, recorded_at
-             FROM assertions WHERE statement_id = ?1 ORDER BY recorded_at",
+            "SELECT a.id, a.episode_id, a.extractor_id, a.polarity, a.confidence, a.recorded_at, m.surface
+             FROM assertions a
+             LEFT JOIN mentions m ON m.assertion_id = a.id AND m.role = 'subject'
+             WHERE a.statement_id = ?1 ORDER BY a.recorded_at",
         )
         .map_err(sql_err)?;
     let details = assert_stmt
@@ -84,6 +91,7 @@ pub fn why(conn: &Connection, space: &str, statement_id: &str) -> Result<Explain
                 polarity: polarity.to_string(),
                 confidence: r.get(4)?,
                 recorded_at: r.get(5)?,
+                mention: r.get(6)?,
             })
         })
         .map_err(sql_err)?;

@@ -315,6 +315,17 @@ export function useSigmaGraph({
       sigmaRef.current = sigma;
       graphRef.current = graph;
 
+      // Spec §8: the focus entity is centered. Position the camera on the
+      // focused node once the graph is laid out (positions are final after
+      // FA2 + normalizeSpread, so this runs after construction).
+      const focus = selectedRef.current;
+      if (focus && graph.hasNode(focus)) {
+        const pos = graph.getNodeAttributes(focus);
+        if (Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+          sigma.getCamera().setState({ x: pos.x, y: pos.y, ratio: 1 });
+        }
+      }
+
       relayoutRef.current = () => {
         const g = graphRef.current;
         if (!g) return;

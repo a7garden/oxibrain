@@ -1,10 +1,10 @@
-import type { Belief, SearchResult } from "../api";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ErrorState } from "../components/ErrorState";
 import { HUE_DOT, hueForType } from "../lib/hue";
 import { fetchers, qk } from "../queries";
+import type { Belief, SearchResult } from "../api";
 
 /** Ask view — search with per-belief provenance.
  *
@@ -209,6 +209,19 @@ function BeliefsPanel({ entityId }: { entityId: string }) {
 
   return (
     <div className="mt-2 space-y-1.5 rounded-[var(--card-radius)] border border-line bg-surface-raised p-4">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-2xs uppercase tracking-wider text-text-subtle">
+          beliefs
+        </span>
+        <Link
+          to="/entity/$entityId"
+          params={{ entityId }}
+          search={{ tab: "brief" }}
+          className="rounded-[var(--button-radius)] px-2 py-0.5 font-mono text-2xs text-interactive-primary transition-colors hover:bg-surface-muted"
+        >
+          open entity page →
+        </Link>
+      </div>
       {query.data.map((belief) => (
         <BeliefRow
           key={belief.statement}
@@ -311,7 +324,17 @@ function WhyPanel({ statementId }: { statementId: string }) {
             key={a.assertion_id}
             className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-xs text-text-muted"
           >
-            <span className="truncate text-text-subtle">{a.episode_id}</span>
+            <span className="truncate text-text-subtle" title={a.episode_id}>
+              {a.episode_id}
+            </span>
+            {a.mention && (
+              <span
+                className="rounded-[var(--badge-radius)] bg-surface-muted px-1.5 py-0.5 text-text"
+                title="verbatim subject mention"
+              >
+                “{a.mention}”
+            </span>
+            )}
             <span>{a.extractor ?? "declared"}</span>
             <span>{a.polarity}</span>
             <span>{Math.round(a.confidence * 100)}%</span>

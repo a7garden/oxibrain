@@ -251,6 +251,8 @@ export interface AssertionDetail {
   polarity: string;
   confidence: number;
   recorded_at: number;
+  /** Verbatim subject-mention surface (P3) — absent on legacy rows. */
+  mention?: string;
 }
 
 /** Mirrors `oxibrain_core::knowledge::Statement` projection used by `why`. */

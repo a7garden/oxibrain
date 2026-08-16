@@ -1959,6 +1959,12 @@ mod tests {
         // the UI's `/ask` page renders in each why row).
         let first_episode = parsed["assertions"][0]["episode_id"].as_str().unwrap();
         assert!(!first_episode.is_empty(), "assertion must name its episode");
+        // P3: each assertion carries its verbatim subject mention.
+        let first_mention = parsed["assertions"][0]["mention"].as_str().unwrap();
+        assert_eq!(
+            first_mention, "Alice",
+            "assertion must carry the verbatim subject mention, got {first_mention}"
+        );
     }
 
     #[tokio::test]
