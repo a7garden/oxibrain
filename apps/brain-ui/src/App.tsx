@@ -12,7 +12,7 @@ const sidebarPrimitives = {
   itemActive: "bg-surface-muted text-text font-medium",
   itemInactive: "text-text-muted hover:text-text hover:bg-surface-muted/50",
   sectionHeader:
-    "px-2 py-1.5 text-xs font-medium tracking-wider uppercase text-text-subtle",
+    "px-2 py-1.5 text-2xs font-medium tracking-wider uppercase text-text-subtle",
 } as const;
 
 interface NavItem {

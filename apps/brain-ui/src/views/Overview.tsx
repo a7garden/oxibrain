@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ErrorState } from "../components/ErrorState";
-import { hueForType } from "../lib/hue";
+import { HUE_DOT, hueForType } from "../lib/hue";
 import { fetchers, qk } from "../queries";
 
 /** Landing page: stat cards + recent-entity chips + conflicts banner. */
@@ -99,7 +99,7 @@ export function Overview() {
                 >
                   <span
                     aria-hidden
-                    className={`h-1.5 w-1.5 rounded-full bg-hue-${hueForType(e.type)}`}
+                    className={`h-1.5 w-1.5 rounded-full ${HUE_DOT[hueForType(e.type)]}`}
                   />
                   <span>{e.surface}</span>
                   <span className="text-text-subtle">· {e.type}</span>

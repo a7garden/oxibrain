@@ -45,4 +45,6 @@
   --font-display: var(--font-display);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 1.4;
 }

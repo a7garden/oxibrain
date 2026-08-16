@@ -46,7 +46,11 @@ export async function rpc<T = unknown>(
 
 // ── MCP tool calls ──────────────────────────────────────────────────────
 
-/** Call an MCP tool by name with arguments. */
+/** Call an MCP tool by name with arguments.
+ *  Some tools return JSON (`search`, `recall`, `why`, `contradictions`, `stats`).
+ *  Others return plain text (`brief`, `navigate`, `remember`, `merge_entities`,
+ *  `retract`). Try JSON first; on parse failure return the raw text — callers
+ *  typed `Promise<string>` will get the markdown / confirmation as-is. */
 export async function callTool<T = unknown>(
   name: string,
   args: Record<string, unknown> = {},
@@ -55,11 +59,13 @@ export async function callTool<T = unknown>(
     "tools/call",
     { name, arguments: args },
   );
-  // MCP tools return content blocks. Extract text.
-  if (result?.content?.[0]?.text) {
-    return JSON.parse(result.content[0].text) as T;
+  const text = result?.content?.[0]?.text;
+  if (text === undefined) return result as unknown as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return text as unknown as T;
   }
-  return result as unknown as T;
 }
 
 // ── MCP resource reads ──────────────────────────────────────────────────
@@ -109,7 +115,7 @@ export const api = {
     callTool<ContradictionDetail[]>("contradictions", { space }),
 
   remember: (content: string, space = "personal") =>
-    callTool<RememberResult>("remember", { content, space }),
+    callTool<string>("remember", { content, space }),
 
   listMerges: (space = "personal") =>
     callTool<MergeRecord[]>("review_merges", { space }),
@@ -121,7 +127,7 @@ export const api = {
     winnerType: string,
     space = "personal",
   ) =>
-    callTool<{ episode_id: string }>("merge_entities", {
+    callTool<string>("merge_entities", {
       loser: { surface: loserSurface, type: loserType },
       winner: { surface: winnerSurface, type: winnerType },
       space,
@@ -136,7 +142,7 @@ export const api = {
     episodeId: string,
     space = "personal",
   ) =>
-    callTool<{ episode_id: string }>("retract", {
+    callTool<string>("retract", {
       subject: { surface: subjectSurface, type: subjectType },
       predicate,
       object: { kind: objectKind, value: objectValue },
@@ -256,6 +262,7 @@ export interface AssertionDetail {
 export interface ExplainBlock {
   statement: {
     id: string;
+    space: string;
     subject: string;
     predicate: string;
     object: unknown;
@@ -267,13 +274,6 @@ export interface ExplainBlock {
     support_count: number;
     contradiction_count: number;
   };
-}
-
-export interface RememberResult {
-  episode_id: string;
-  extracted: number;
-  quarantined: number;
-  note: string;
 }
 
 /** Mirrors `oxibrain_core::knowledge::EntityMerge`. */

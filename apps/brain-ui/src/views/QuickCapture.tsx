@@ -1,10 +1,10 @@
 import { useState, useCallback } from "react";
-import { api, type RememberResult } from "../api";
+import { api } from "../api";
 
 export function QuickCapture() {
   const [text, setText] = useState("");
   const [space, setSpace] = useState("personal");
-  const [result, setResult] = useState<RememberResult | null>(null);
+  const [result, setResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,21 +74,10 @@ export function QuickCapture() {
           <div className="flex items-center gap-2">
             <span className="text-sage">✓</span>
             <span className="text-sm text-text">Episode captured</span>
-            <span className="ml-auto font-mono text-xs text-text-faint">
-              {result.episode_id.slice(0, 16)}…
-            </span>
           </div>
-          {result.extracted > 0 && (
-            <p className="mt-2 font-mono text-xs text-text-dim">
-              Extracted {result.extracted} claims
-              {result.quarantined > 0 && `, ${result.quarantined} quarantined`}
-            </p>
-          )}
-          {result.note && (
-            <p className="mt-1 font-mono text-xs text-text-faint">
-              {result.note}
-            </p>
-          )}
+          <p className="mt-2 whitespace-pre-wrap font-mono text-xs text-text-dim">
+            {result}
+          </p>
         </div>
       )}
 
