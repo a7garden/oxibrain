@@ -76,6 +76,10 @@ export async function readResource<T = unknown>(uri: string): Promise<T> {
 }
 
 // ── Convenience wrappers ────────────────────────────────────────────────
+//
+// The JSON keys mirror the contract tests in
+// crates/oxibrain-mcp/src/server.rs (tasks 2–4 of
+// doc/plans/2026-08-16-brain-ui-v2.md).
 
 export const api = {
   search: (query: string, space = "personal") =>
@@ -95,13 +99,14 @@ export const api = {
       start,
       space,
       depth,
+      max_nodes: 256,
     }),
-
-  contradictions: (space = "personal") =>
-    callTool<Contradiction[]>("contradictions", { space }),
 
   why: (statementId: string, space = "personal") =>
     callTool<ExplainBlock>("why", { statement_id: statementId, space }),
+
+  contradictionDetails: (space = "personal") =>
+    callTool<ContradictionDetail[]>("contradictions", { space }),
 
   remember: (content: string, space = "personal") =>
     callTool<RememberResult>("remember", { content, space }),
@@ -146,9 +151,30 @@ export const api = {
     readResource<TraversalResult>(
       `graph://${entity}?depth=${depth}&space=${space}`,
     ),
+
+  timeline: (entityId: string, space = "personal") =>
+    readResource<TimelineEntry[]>(`timeline://${entityId}?space=${space}`),
+
+  beliefs: (entityId: string, space = "personal") =>
+    readResource<Belief[]>(`entity://${entityId}?space=${space}`),
 };
 
 // ── Types ───────────────────────────────────────────────────────────────
+
+export interface EntityCard {
+  id: string;
+  surface: string;
+  type: string;
+}
+
+export interface SpaceOverview {
+  space: string;
+  space_id: string;
+  entity_count: number;
+  episode_count: number;
+  contradiction_count: number;
+  recent_entities: EntityCard[];
+}
 
 export interface SearchResult {
   entity_id: string;
@@ -163,48 +189,84 @@ export interface RecallResult {
   entities: string[];
 }
 
+/** Mirrors `oxibrain_core::knowledge::Belief` (struct wins; see brief). */
 export interface Belief {
-  predicate: string;
-  object_surface: string;
-  valid_from: string;
-  valid_to: string | null;
+  statement: string;
+  valid_from: number;
+  valid_to: number;
+  support: BeliefSupport;
   confidence: number;
-  source_episode_id: string;
+  status: "active" | "superseded" | "contradicted" | "retracted";
 }
 
+export interface BeliefSupport {
+  affirm_count: number;
+  deny_count: number;
+  distinct_episodes: number;
+  /** Serde serializes tuples as JSON arrays: ["trusted", 2] etc. */
+  trust_weights: Array<["trusted" | "semi_trusted" | "untrusted", number]>;
+}
+
+/** Mirrors `oxibrain_core::retrieval::TraversalNode`. */
 export interface GraphNode {
-  id: string;
-  surface: string;
-  entity_type: string;
+  entity: string;
+  depth: number;
+  salience: number;
 }
 
+/** Mirrors `oxibrain_core::retrieval::TraversalEdge`. */
 export interface GraphEdge {
   from: string;
   to: string;
   predicate: string;
+  statement_id: string;
+  depth: number;
 }
 
+/** Mirrors `oxibrain_core::retrieval::TraversalResult`. */
 export interface TraversalResult {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  truncated: boolean;
 }
 
-
-export interface Contradiction {
+/** Mirrors `oxibrain_store::query::ContradictionDetail`. */
+export interface ContradictionDetail {
   statement_id: string;
-  entity_surface: string;
+  subject_id: string;
+  subject_surface: string;
+  subject_type: string;
   predicate: string;
-  conflicting_values: string[];
+  object_kind: "entity" | "literal";
+  object_value: string;
+  affirm_episodes: string[];
+  deny_episodes: string[];
 }
 
+export interface AssertionDetail {
+  assertion_id: string;
+  episode_id: string;
+  extractor: string | null;
+  polarity: string;
+  confidence: number;
+  recorded_at: number;
+}
+
+/** Mirrors `oxibrain_core::knowledge::Statement` projection used by `why`. */
 export interface ExplainBlock {
-  statement_id: string;
-  assertions: Array<{
-    episode_id: string;
-    extractor_id: string;
-    mention_text: string;
-    valid_from: string;
-  }>;
+  statement: {
+    id: string;
+    subject: string;
+    predicate: string;
+    object: unknown;
+  };
+  status: string;
+  assertions: AssertionDetail[];
+  confidence_breakdown: {
+    raw_confidence: number;
+    support_count: number;
+    contradiction_count: number;
+  };
 }
 
 export interface RememberResult {
@@ -214,21 +276,54 @@ export interface RememberResult {
   note: string;
 }
 
+/** Mirrors `oxibrain_core::knowledge::EntityMerge`. */
 export interface MergeRecord {
   id: string;
-  canonical_id: string;
-  merged_id: string;
-  created_at: string;
+  loser: string;
+  winner: string;
+  /** Tagged enum from `MergeDecision` (`{kind, data?}`). */
+  decided_by: { kind: "rule" | "user" | "import"; data?: unknown };
+  provenance: string;
+  evidence: string[];
+  decided_at: number;
+  undone_at: number | null;
 }
 
-export interface SpaceOverview {
-  space: string;
-  entity_count: number;
-  episode_count: number;
-  contradictions: number;
-  recent_entities: Array<{
-    id: string;
-    surface: string;
-    entity_type: string;
-  }>;
+/** Mirrors `oxibrain_store::timeline::TimelineEntry`. */
+export interface TimelineEntry {
+  statement_id: string;
+  predicate: string;
+  object_repr: string;
+  object_entity: string | null;
+  valid_from: number;
+  valid_to: number;
+  status: string;
+  recorded_at: number;
+}
+
+// ── Pending-deletion shims ─────────────────────────────────────────────
+//
+// The pre-router views (GraphExplorer, ContradictionInbox) still reference
+// `GraphNode`/`GraphEdge`/`Contradiction` shapes from a prior contract.
+// Tasks 8–11 own their rewrites and will delete the views. Until then,
+// these aliases keep the dead files typechecking under the new server-
+// accurate types. New code MUST NOT use them.
+
+export interface LegacyGraphNode {
+  id: string;
+  surface: string;
+  entity_type: string;
+}
+
+export interface LegacyGraphEdge {
+  from: string;
+  to: string;
+  predicate: string;
+}
+
+export interface LegacyContradiction {
+  statement_id: string;
+  entity_surface: string;
+  predicate: string;
+  conflicting_values: string[];
 }

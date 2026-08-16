@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { api, type GraphNode, type GraphEdge } from "../api";
+import { api, type LegacyGraphNode, type LegacyGraphEdge } from "../api";
 import { BriefMarkdown } from "../markdown";
 
-interface SimNode extends GraphNode {
+interface SimNode extends LegacyGraphNode {
   x: number;
   y: number;
   vx: number;
@@ -20,7 +20,7 @@ const DAMPING = 0.85;
 
 export function GraphExplorer() {
   const [nodes, setNodes] = useState<SimNode[]>([]);
-  const [edges, setEdges] = useState<GraphEdge[]>([]);
+  const [edges, setEdges] = useState<LegacyGraphEdge[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [beliefs, setBeliefs] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,15 +51,19 @@ export function GraphExplorer() {
         return;
       }
       const result = await api.traverse(seeds, "personal", 2);
-      const simNodes: SimNode[] = result.nodes.map((n, i) => ({
+      // Dead view slated for deletion in Task 8. Cast the new traversal DTO
+      // to the legacy shape so the rest of this file compiles unchanged.
+      const nodes = result.nodes as unknown as LegacyGraphNode[];
+      const edges = result.edges as unknown as LegacyGraphEdge[];
+      const simNodes: SimNode[] = nodes.map((n, i) => ({
         ...n,
-        x: WIDTH / 2 + Math.cos((i / result.nodes.length) * Math.PI * 2) * 150,
-        y: HEIGHT / 2 + Math.sin((i / result.nodes.length) * Math.PI * 2) * 150,
+        x: WIDTH / 2 + Math.cos((i / nodes.length) * Math.PI * 2) * 150,
+        y: HEIGHT / 2 + Math.sin((i / nodes.length) * Math.PI * 2) * 150,
         vx: 0,
         vy: 0,
       }));
       setNodes(simNodes);
-      setEdges(result.edges);
+      setEdges(edges);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load graph");
     }
@@ -94,7 +98,7 @@ export function GraphExplorer() {
       }
 
       // Spring (edges)
-      const edgeMap = new Map<string, GraphEdge[]>();
+      const edgeMap = new Map<string, LegacyGraphEdge[]>();
       for (const e of edges) {
         const ka = `${e.from}`;
         const kb = `${e.to}`;

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { api, type Contradiction } from "../api";
+import { api, type LegacyContradiction } from "../api";
 
 export function ContradictionInbox() {
-  const [items, setItems] = useState<Contradiction[]>([]);
+  const [items, setItems] = useState<LegacyContradiction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actioning, setActioning] = useState<string | null>(null);
@@ -12,16 +12,16 @@ export function ContradictionInbox() {
     setLoading(true);
     setError(null);
     api
-      .contradictions("personal")
-      .then(setItems)
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed"))
+      .contradictionDetails("personal")
+      .then((d) => setItems(d as unknown as LegacyContradiction[]))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed"))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(load, [load]);
 
   const handleRetract = useCallback(
-    async (item: Contradiction) => {
+    async (item: LegacyContradiction) => {
       setActioning(item.statement_id);
       setFeedback(
         `Retract needs episode context. Run: oxibrain entity show ${item.entity_surface} --space personal`,
@@ -31,7 +31,7 @@ export function ContradictionInbox() {
     [],
   );
 
-  const handleDismiss = useCallback((item: Contradiction) => {
+  const handleDismiss = useCallback((item: LegacyContradiction) => {
     setItems((prev) => prev.filter((c) => c.statement_id !== item.statement_id));
     setFeedback(null);
   }, []);

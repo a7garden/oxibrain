@@ -1,160 +1,148 @@
-import { useState, useEffect, type ReactNode } from "react";
-import { api, type SpaceOverview } from "./api";
-import { GraphExplorer } from "./views/GraphExplorer";
-import { Brief } from "./views/Brief";
-import { AskProvenance } from "./views/AskProvenance";
-import { ContradictionInbox } from "./views/ContradictionInbox";
-import { QuickCapture } from "./views/QuickCapture";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { type ReactNode } from "react";
+import { fetchers, qk } from "./queries";
+import { toggleTheme } from "./theme";
 
-type ViewId = "graph" | "brief" | "ask" | "contradictions" | "capture";
+// ── Sidebar primitives (DESIGN §6.11, verbatim) ────────────────────────
 
-const NAV_ITEMS: Array<{
-  id: ViewId;
+const sidebarPrimitives = {
+  itemBase:
+    "flex items-center w-full text-sm py-2 px-2 gap-3 rounded-md transition-colors",
+  itemActive: "bg-surface-muted text-text font-medium",
+  itemInactive: "text-text-muted hover:text-text hover:bg-surface-muted/50",
+  sectionHeader:
+    "px-2 py-1.5 text-xs font-medium tracking-wider uppercase text-text-subtle",
+} as const;
+
+interface NavItem {
+  to: "/" | "/graph" | "/ask" | "/conflicts" | "/merges" | "/capture";
   label: string;
   icon: string;
-  desc: string;
-}> = [
-  { id: "graph", label: "Graph", icon: "✦", desc: "Constellation of entities" },
-  { id: "brief", label: "Page", icon: "▤", desc: "Entity page with links" },
-  { id: "ask", label: "Ask", icon: "⌕", desc: "Query with provenance" },
-  { id: "contradictions", label: "Conflicts", icon: "⚡", desc: "Contradictions inbox" },
-  { id: "capture", label: "Capture", icon: "✎", desc: "Quick note" },
-];
+}
 
-export default function App() {
-  const [view, setView] = useState<ViewId>("graph");
-  const [connected, setConnected] = useState(false);
-  const [overview, setOverview] = useState<SpaceOverview | null>(null);
+const NAV_ITEMS: readonly NavItem[] = [
+  { to: "/", label: "Overview", icon: "◐" },
+  { to: "/graph", label: "Graph", icon: "✦" },
+  { to: "/ask", label: "Ask", icon: "⌕" },
+  { to: "/conflicts", label: "Conflicts", icon: "⚡" },
+  { to: "/merges", label: "Merges", icon: "⇄" },
+  { to: "/capture", label: "Capture", icon: "✎" },
+] as const;
 
-  // Poll connection + overview
-  useEffect(() => {
-    let active = true;
-    const check = async () => {
-      try {
-        const o = await api.spaceOverview("personal");
-        if (active) {
-          setConnected(true);
-          setOverview(o);
-        }
-      } catch {
-        if (active) setConnected(false);
-      }
-    };
-    check();
-    const timer = setInterval(check, 5000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, []);
+interface AppShellProps {
+  children: ReactNode;
+}
 
-  const currentNav = NAV_ITEMS.find((n) => n.id === view);
+/** Sidebar + offline banner + outlet wrapper. */
+export function AppShell({ children }: AppShellProps) {
+  const spaceQuery = useQuery({
+    queryKey: qk.space,
+    queryFn: fetchers.space,
+    refetchInterval: 30_000,
+  });
+
+  const isOffline = spaceQuery.isError;
+  const overview = spaceQuery.data;
 
   return (
     <div className="flex h-full font-sans">
-      {/* Sidebar */}
-      <aside className="flex w-56 flex-col border-r border-line bg-ink-2">
+      <aside className="bg-surface-sunken flex w-60 flex-col border-r border-line">
         <div className="flex items-center gap-2.5 px-5 py-5">
-          <span className="text-xl text-amber">◐</span>
+          <span className="text-hue-amber text-xl" aria-hidden>
+            ◐
+          </span>
           <h1 className="font-display text-lg font-semibold tracking-tight text-text">
             oxibrain
           </h1>
         </div>
 
         <nav className="flex flex-col gap-0.5 px-3">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setView(item.id)}
-              className={`group flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
-                view === item.id
-                  ? "bg-surface text-amber"
-                  : "text-text-dim hover:bg-surface/50 hover:text-text"
-              }`}
-            >
-              <span className="w-5 text-center text-sm">{item.icon}</span>
-              <span className="text-sm font-medium">{item.label}</span>
-            </button>
-          ))}
+          <p className={sidebarPrimitives.sectionHeader}>Space</p>
+          {NAV_ITEMS.map((item) => {
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                activeProps={{ className: sidebarPrimitives.itemActive }}
+                inactiveProps={{ className: sidebarPrimitives.itemInactive }}
+                className={sidebarPrimitives.itemBase}
+                activeOptions={{ exact: item.to === "/" }}
+              >
+                <span className="w-5 text-center text-sm" aria-hidden>
+                  {item.icon}
+                </span>
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+
+          <p className={`${sidebarPrimitives.sectionHeader} mt-3`}>Session</p>
+          <button
+            onClick={() => toggleTheme()}
+            className={`${sidebarPrimitives.itemBase} ${sidebarPrimitives.itemInactive}`}
+          >
+            <span className="w-5 text-center text-sm" aria-hidden>
+              ◑
+            </span>
+            <span>Toggle theme</span>
+          </button>
         </nav>
 
-        <div className="mt-auto px-5 py-4">
+        <div className="mt-auto border-t border-line/50 px-5 py-4">
           {overview ? (
-            <div className="space-y-1 font-mono text-xs text-text-faint">
-              <div>{overview.entity_count} entities</div>
-              <div>{overview.episode_count} episodes</div>
-              {overview.contradictions > 0 && (
-                <div className="text-rose">{overview.contradictions} conflicts</div>
-              )}
-            </div>
+            <dl className="space-y-1 font-mono text-xs text-text-subtle">
+              <div className="flex justify-between">
+                <dt>entities</dt>
+                <dd className="text-text">{overview.entity_count}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt>episodes</dt>
+                <dd className="text-text">{overview.episode_count}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt>conflicts</dt>
+                <dd
+                  className={
+                    overview.contradiction_count > 0
+                      ? "text-status-error"
+                      : "text-text"
+                  }
+                >
+                  {overview.contradiction_count}
+                </dd>
+              </div>
+            </dl>
           ) : (
-            <div className="font-mono text-xs text-text-faint">—</div>
+            <div className="font-mono text-xs text-text-subtle">—</div>
           )}
           <div className="mt-3 flex items-center gap-2">
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                connected
-                  ? "bg-sage animate-pulse-amber"
-                  : "bg-rose"
+                isOffline ? "bg-status-error" : "bg-status-success"
               }`}
             />
-            <span className="font-mono text-xs text-text-faint">
-              {connected ? "connected" : "offline"}
+            <span className="font-mono text-xs text-text-subtle">
+              {isOffline ? "offline" : "connected"}
             </span>
           </div>
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex flex-1 flex-col overflow-hidden">
-        {/* Header */}
-        <header className="flex items-center justify-between border-b border-line px-8 py-4">
-          <div>
-            <h2 className="font-display text-2xl font-light tracking-tight text-text">
-              {currentNav?.label}
-            </h2>
-            <p className="font-mono text-xs text-text-faint">{currentNav?.desc}</p>
+        {isOffline && (
+          <div className="bg-status-error-subtle text-status-error-on-subtle flex items-center justify-between gap-3 px-6 py-2.5 font-mono text-xs">
+            <span>daemon unreachable</span>
+            <button
+              onClick={() => spaceQuery.refetch()}
+              className="rounded-[var(--button-radius)] border border-line/50 px-2 py-0.5 transition-colors hover:bg-status-error-subtle/80"
+            >
+              retry
+            </button>
           </div>
-        </header>
-
-        {/* View */}
-        <div className="flex-1 overflow-auto">
-          {connected ? (
-            <div key={view} className="animate-fade-in h-full">
-              {renderView(view)}
-            </div>
-          ) : (
-            <DisconnectedView />
-          )}
-        </div>
+        )}
+        <div className="flex-1 overflow-auto">{children}</div>
       </main>
-    </div>
-  );
-}
-
-function renderView(view: ViewId): ReactNode {
-  switch (view) {
-    case "graph": return <GraphExplorer />;
-    case "brief": return <Brief />;
-    case "ask": return <AskProvenance />;
-    case "contradictions": return <ContradictionInbox />;
-    case "capture": return <QuickCapture />;
-  }
-}
-
-function DisconnectedView() {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-4">
-      <div className="text-5xl text-text-faint opacity-30">◐</div>
-      <div className="text-center">
-        <p className="font-display text-xl text-text-dim">No brain found</p>
-        <p className="mt-2 font-mono text-sm text-text-faint">
-          Start the daemon:
-        </p>
-        <code className="mt-2 block rounded-lg bg-surface px-4 py-2 font-mono text-xs text-amber">
-          oxibrain serve --http 127.0.0.1:18080
-        </code>
-      </div>
     </div>
   );
 }
