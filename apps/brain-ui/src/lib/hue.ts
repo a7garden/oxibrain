@@ -53,7 +53,7 @@ function toRgba(cssColor: string): string {
   const ctx = _parseCanvas.getContext("2d");
   if (!ctx) return "#000000";
   // Some browsers reject invalid colors silently and leave the prior
-  // fillStyle. Reset to transparent so a failed parse yields alpha=0.
+  ctx.clearRect(0, 0, 1, 1);
   ctx.fillStyle = "rgba(0,0,0,0)";
   ctx.fillStyle = cssColor;
   ctx.fillRect(0, 0, 1, 1);

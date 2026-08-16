@@ -84,6 +84,7 @@ function toRgba(cssColor: string): string {
   }
   const ctx = _parseCanvas.getContext("2d");
   if (!ctx) return "#000000";
+  ctx.clearRect(0, 0, 1, 1);
   ctx.fillStyle = "rgba(0,0,0,0)";
   ctx.fillStyle = cssColor;
   ctx.fillRect(0, 0, 1, 1);
@@ -103,17 +104,19 @@ function resolveToken(name: string): string {
 
 /** Resolve `--font-sans` and pick a single concrete family name — the
  *  token value is a comma-separated stack like
- *  `"SUIT Variable", "SUIT", system-ui, …`. Sigma accepts one family. */
+ *  `"SUIT Variable", "SUIT", system-ui, …`. Sigma accepts one family.
+ *  Read the stack RAW (no rgba conversion — a font stack isn't a
+ *  color, and `resolveToken`'s canvas readback would return garbage). */
 function resolveFontFamily(): string {
-  const stack = resolveToken("--font-sans");
-  if (stack.includes("SUIT Variable")) return "SUIT Variable";
-  const quoted = stack.match(/"([^"]+)"/);
-  if (quoted) return quoted[1]!;
-  const first = stack.split(",")[0]?.trim().replace(/^["']|["']$/g, "");
-  return first && first.length > 0 ? first : "sans-serif";
-}
-
-// ── Reducers ────────────────────────────────────────────────────────────
+  const stack = getComputedStyle(document.documentElement)
+    .getPropertyValue("--font-sans")
+    .trim();
+   if (stack.includes("SUIT Variable")) return "SUIT Variable";
+   const quoted = stack.match(/"([^"]+)"/);
+   if (quoted) return quoted[1]!;
+   const first = stack.split(",")[0]?.trim().replace(/^["']|["']$/g, "");
+   return first && first.length > 0 ? first : "sans-serif";
+ }
 
 /** Map a graphology node attribute object → sigma display data. */
 function buildNodeReducer(nodeId: string | null, interactive: string) {
