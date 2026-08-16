@@ -105,14 +105,10 @@ export const api = {
   search: (query: string, space = "personal") =>
     callTool<SearchResult[]>("search", { query, space }),
 
-  recall: (query: string, space = "personal") =>
-    callTool<RecallResult>("recall", { query, space }),
-
   brief: (entityId: string, space = "personal") =>
     callTool<string>("brief", { entity_id: entityId, space }),
 
-  navigate: (from: string, link: string, space = "personal") =>
-    callTool<string>("navigate", { from, link, space }),
+
 
   traverse: (start: string[], space = "personal", depth = 2) =>
     callTool<TraversalResult>("traverse", {
@@ -147,22 +143,6 @@ export const api = {
       space,
     }),
 
-  retract: (
-    subjectSurface: string,
-    subjectType: string,
-    predicate: string,
-    objectKind: string,
-    objectValue: string,
-    episodeId: string,
-    space = "personal",
-  ) =>
-    callTool<string>("retract", {
-      subject: { surface: subjectSurface, type: subjectType },
-      predicate,
-      object: { kind: objectKind, value: objectValue },
-      episode: episodeId,
-      space,
-    }),
 
   /** Statement-first retract: the conflicts inbox holds statement ids, not
    *  resolvable surfaces or entity types — the server rebuilds the
@@ -208,11 +188,6 @@ export interface SearchResult {
   entity_type: string;
   score: number;
   snippet: string;
-}
-
-export interface RecallResult {
-  context: string;
-  entities: string[];
 }
 
 /** Mirrors `oxibrain_core::knowledge::Belief` (struct wins; see brief). */

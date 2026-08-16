@@ -897,7 +897,7 @@ fn tool_list() -> Value {
     json!({
         "tools": [
             tool("search",
-                "Search the brain via hybrid/lexical/lexical-vector/graph/community retrieval. Returns ranked results with scores, targets, and provenance. as_of (valid time) and min_confidence filter beliefs; a belief that is retracted or contradicted at as_of is excluded.",
+                "Search the brain and return entity hits: entity_id, entity_surface, entity_type, score, snippet. Statements/episodes/chunks/communities are not returned as targets. as_of (valid time) and min_confidence filter beliefs; a belief that is retracted or contradicted at as_of is excluded.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -3346,7 +3346,9 @@ mod tests {
                 "valid_to"
             ]
         );
-        assert_eq!(e["predicate"], "employed_by");
+        // The store post-pass resolves entity objects to their surface —
+        // lock the readable repr, not just the key set.
+        assert_eq!(e["object_repr"], "Acme Corp");
     }
 
     #[tokio::test]

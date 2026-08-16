@@ -311,8 +311,7 @@ pub fn retract_parts(
                 | oxibrain_core::knowledge::TypedValue::Enum(_) => {
                     return Err(BrainError::Invalid(format!(
                         "statement {statement_id} literal object kind is \
-                         Quantity or Enum and cannot be retracted via \
-                         statement_id — use the legacy surface form"
+                         Quantity or Enum, which no retract path supports"
                     )));
                 }
             };

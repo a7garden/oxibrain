@@ -211,6 +211,7 @@ function BeliefsPanel({ entityId }: { entityId: string }) {
     <div className="mt-2 space-y-1.5 rounded-[var(--card-radius)] border border-line bg-surface-raised p-4">
       {query.data.map((belief) => (
         <BeliefRow
+          key={belief.statement}
           belief={belief}
           open={whyOpen === belief.statement}
           onToggle={() =>
@@ -323,7 +324,9 @@ function WhyPanel({ statementId }: { statementId: string }) {
 }
 
 /** Compact one-line rendering for a `Statement.object` projection:
- *  entity objects carry {kind, id, surface} — prefer the surface. */
+ *  entity objects carry {kind, id, surface} — prefer the surface. Literal
+ *  objects arrive as tagged JSON ({type, value}); render the plain value
+ *  and fall back to raw JSON for exotic kinds. */
 function renderObject(object: unknown): string {
   if (typeof object !== "object" || object === null) {
     return JSON.stringify(object);
@@ -332,6 +335,9 @@ function renderObject(object: unknown): string {
   if (o.kind === "entity") {
     if (typeof o.surface === "string" && o.surface) return o.surface;
     return String(o.id);
+  }
+  if (typeof o.type === "string" && "value" in o) {
+    return String(o.value);
   }
   return JSON.stringify(object);
 }
