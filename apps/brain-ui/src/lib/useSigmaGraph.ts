@@ -10,13 +10,21 @@
  *    no re-mount.
  *  - Theme flips (`.dark` toggling on `<html>`) re-resolve resolved colors
  *    via `getComputedStyle`, write new color attributes, and refresh.
- *  - Unmount kills the instance.
+ *  - Unmount kills the instance and clears `lastNodeKeyRef` so React
+ *    StrictMode dev remounts rebuild the canvas.
  *
  *  Per ambiguity-resolution #2 (deterministic layout):
  *    - seed = mulberry32 over a sorted-id hash
  *    - initial positions on a circle
  *    - FA2 synchronous `assign` (≤100 iter, scalingRatio 10, gravity 0.5)
  *    - skip FA2 entirely for graphs with < 2 nodes
+ *
+ *  Canvas-boundary color contract: sigma's `parseColor` only understands
+ *  `#hex`, `rgb()`, `rgba()`, and CSS named colors. Our design tokens
+ *  are `oklch(...)` strings, which silently fall through to opaque black
+ *  on the canvas. `hueColor()` (in `./hue`) and `resolveToken()` (below)
+ *  both run the value through a 1×1 canvas readback before handing it
+ *  across the boundary.
  */
 
 import Graph from "graphology";
@@ -40,8 +48,6 @@ export interface UseSigmaGraphResult {
 
 // ── Deterministic PRNG ──────────────────────────────────────────────────
 
-/** FNV-1a hash of a string → 32-bit unsigned. Stable, well-distributed,
- *  cheap — used purely to seed the position PRNG from the node-id set. */
 function fnv1a(input: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
@@ -64,17 +70,53 @@ function mulberry32(seed: number): () => number {
 
 // ── Resolved-token helpers ──────────────────────────────────────────────
 
-function resolveToken(name: string): string {
-  return getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
+let _parseCanvas: HTMLCanvasElement | null = null;
+/** Convert any modern CSS color string (oklch, lab, color(), etc.) to a
+ *  hex string via a 1x1 canvas readback. Sigma's `parseColor` only
+ *  understands hex / rgb() / rgba() / named — `oklch()` resolves to
+ *  opaque black otherwise. */
+function toRgba(cssColor: string): string {
+  if (typeof document === "undefined") return "#000000";
+  if (!_parseCanvas) {
+    _parseCanvas = document.createElement("canvas");
+    _parseCanvas.width = 1;
+    _parseCanvas.height = 1;
+  }
+  const ctx = _parseCanvas.getContext("2d");
+  if (!ctx) return "#000000";
+  ctx.fillStyle = "rgba(0,0,0,0)";
+  ctx.fillStyle = cssColor;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+  return `rgba(${r}, ${g}, ${b}, ${(a ?? 255) / 255})`;
 }
 
+/** Read `--token` from `<html>` and convert to an rgba() string suitable
+ *  for sigma's canvas boundary. */
+function resolveToken(name: string): string {
+  return toRgba(
+    getComputedStyle(document.documentElement)
+      .getPropertyValue(name)
+      .trim(),
+  );
+}
+
+/** Resolve `--font-sans` and pick a single concrete family name — the
+ *  token value is a comma-separated stack like
+ *  `"SUIT Variable", "SUIT", system-ui, …`. Sigma accepts one family. */
+function resolveFontFamily(): string {
+  const stack = resolveToken("--font-sans");
+  if (stack.includes("SUIT Variable")) return "SUIT Variable";
+  const quoted = stack.match(/"([^"]+)"/);
+  if (quoted) return quoted[1]!;
+  const first = stack.split(",")[0]?.trim().replace(/^["']|["']$/g, "");
+  return first && first.length > 0 ? first : "sans-serif";
+}
+
+// ── Reducers ────────────────────────────────────────────────────────────
+
 /** Map a graphology node attribute object → sigma display data. */
-function buildNodeReducer(
-  nodeId: string | null,
-  interactive: string,
-) {
+function buildNodeReducer(nodeId: string | null, interactive: string) {
   return (id: string, data: Record<string, unknown>) => {
     const size = (data.size as number) ?? 6;
     const isSelected = nodeId !== null && id === nodeId;
@@ -84,14 +126,14 @@ function buildNodeReducer(
       label: data.label as string | undefined,
       color: isSelected ? interactive : (data.color as string),
       size: isSelected ? Math.max(size + 4, 12) : size,
-      labelColor: (data.labelColor as string | undefined) ?? "#ffffff",
+      labelColor: (data.labelColor as string | undefined) ?? "rgba(255,255,255,1)",
     };
   };
 }
 
 function buildEdgeReducer() {
   return (_id: string, data: Record<string, unknown>) => ({
-    color: (data.color as string | undefined) ?? "#666",
+    color: (data.color as string | undefined) ?? "rgba(128,128,128,1)",
     size: (data.size as number | undefined) ?? 1,
   });
 }
@@ -116,7 +158,7 @@ function placeOnCircle(graph: Graph, rand: () => number): void {
   });
 }
 
-// ── Hook ────────────────────────────────────────────────────────────────
+// ── Spread normalization ────────────────────────────────────────────────
 
 const MAX_BBOX_DIAG = 200;
 
@@ -125,7 +167,10 @@ const MAX_BBOX_DIAG = 200;
  *  around the centroid). No-op for graphs with 0–1 nodes. */
 function normalizeSpread(graph: Graph): void {
   if (graph.order < 2) return;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const id of graph.nodes()) {
     const x = graph.getNodeAttribute(id, "x") as number;
     const y = graph.getNodeAttribute(id, "y") as number;
@@ -156,7 +201,6 @@ export function useSigmaGraph({
   selectedId,
   onNodeClick,
 }: UseSigmaGraphArgs): UseSigmaGraphResult {
-  // Latest-state refs so the (stable) effect closures see fresh values.
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const selectedRef = useRef<string | null>(selectedId);
@@ -181,21 +225,25 @@ export function useSigmaGraph({
     const idSetChanged = nodeKey !== lastNodeKeyRef.current;
     lastNodeKeyRef.current = nodeKey;
 
-    // Tear down old instance on id-set change or unmount.
     if (sigmaRef.current && idSetChanged) {
       sigmaRef.current.kill();
       sigmaRef.current = null;
       graphRef.current = null;
     }
 
-    // Build (or rebuild) the graphology graph on id-set change.
     if (idSetChanged) {
       const rand = mulberry32(fnv1a(nodeKey));
-      const graph = new Graph({ multi: false, type: "directed" });
+      // multi: true — two statements can share a (from,to) pair (e.g.
+      // `alice employed_by acme` and `alice likes acme`). With
+      // multi: false, the second addEdgeWithKey throws and whitescreens
+      // the app (no error boundary above this hook). The keyed addEdge
+      // + hasEdge() dedupe already handles exact duplicates.
+      const graph = new Graph({ multi: true, type: "directed" });
 
       const interactive = resolveToken("--color-interactive-primary");
       const text = resolveToken("--color-text");
       const edgeColor = resolveToken("--color-border-strong");
+      const font = resolveFontFamily();
 
       for (const n of nodes) {
         if (graph.hasNode(n.entity)) continue;
@@ -234,27 +282,20 @@ export function useSigmaGraph({
         graph.setNodeAttribute(id, "size", 4 + t * 8);
       }
 
-      // Skip FA2 for tiny graphs.
       if (graph.order >= 2) {
         forceAtlas2.assign(graph, {
           iterations: 100,
           settings: { scalingRatio: 10, gravity: 0.5, slowDown: 10 },
         });
       }
-      // Normalize the spread so the camera auto-rescale produces a
-      // legible view even when FA2 pushes disconnected components far
-      // apart (scalingRatio 10 with a 3-node graph can spread thousands
-      // of units). Find the post-layout bounding box and linearly scale
-      // all positions so the diagonal fits within `MAX_BBOX_DIAG`. This
-      // preserves the relative geometry FA2 produced.
       normalizeSpread(graph);
 
-      // Sigma container must be empty before constructing Sigma (it
-      // creates layered canvases that share its element).
+      // Sigma container must be empty before constructing Sigma.
       container.innerHTML = "";
 
       const sigma = new Sigma(graph, container, {
         renderLabels: true,
+        labelFont: font,
         labelWeight: "500",
         labelColor: { color: text },
         defaultEdgeColor: edgeColor,
@@ -275,8 +316,6 @@ export function useSigmaGraph({
         const g = graphRef.current;
         if (!g) return;
         if (g.order < 2) return;
-        // Reset to circle seed first so the relayout is deterministic for
-        // the current node-id set.
         placeOnCircle(g, mulberry32(fnv1a(lastNodeKeyRef.current)));
         forceAtlas2.assign(g, {
           iterations: 100,
@@ -286,20 +325,20 @@ export function useSigmaGraph({
         sigmaRef.current?.refresh();
       };
     } else {
-      // Same id-set, same selection: nothing to do.
+      // Same id-set: nothing to do.
     }
 
     return () => {
-      // Tear down on unmount or before the next recreate.
+      // Tear down on unmount. Clear lastNodeKeyRef so a subsequent mount
+      // (e.g. React StrictMode dev re-run, or a hot module reload) sees
+      // idSetChanged=true and rebuilds instead of leaving the canvas blank.
       if (sigmaRef.current) {
         sigmaRef.current.kill();
         sigmaRef.current = null;
         graphRef.current = null;
       }
+      lastNodeKeyRef.current = "";
     };
-    // We intentionally key on `nodes.length` + their sorted identity so
-    // re-renders with the same data don't churn. `selectedId` flips go
-    // through a separate effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerRef, nodes.map((n) => n.entity).sort().join("|")]);
 
@@ -314,8 +353,6 @@ export function useSigmaGraph({
       buildNodeReducer(selectedId, interactive),
     );
     sigma.refresh();
-    // Also flag the node attribute so other reducers (and external
-    // observers in tests) can read it directly.
     if (selectedId && graph.hasNode(selectedId)) {
       graph.setNodeAttribute(selectedId, "selected", true);
       for (const id of graph.nodes()) {
@@ -332,8 +369,10 @@ export function useSigmaGraph({
     }
   }, [selectedId]);
 
-  // Effect: theme flip — re-resolve token colors, push to attributes,
-  // refresh.
+  // Effect: theme flip — re-resolve ALL token colors fed to sigma
+  // (label color, per-node fill, per-edge stroke). The `defaultEdgeColor`
+  // setting is a no-op when every edge has an explicit `color` attr, so
+  // we explicitly write the new color onto each edge.
   useEffect(() => {
     const observer = new MutationObserver(() => {
       const sigma = sigmaRef.current;
@@ -342,11 +381,15 @@ export function useSigmaGraph({
       const interactive = resolveToken("--color-interactive-primary");
       const text = resolveToken("--color-text");
       const edgeColor = resolveToken("--color-border-strong");
+      const nodeFill = hueColor("Entity");
       for (const id of graph.nodes()) {
+        graph.setNodeAttribute(id, "color", nodeFill);
         graph.setNodeAttribute(id, "labelColor", text);
       }
+      for (const e of graph.edges()) {
+        graph.setEdgeAttribute(e, "color", edgeColor);
+      }
       sigma.setSetting("labelColor", { color: text });
-      sigma.setSetting("defaultEdgeColor", edgeColor);
       sigma.setSetting(
         "nodeReducer",
         buildNodeReducer(selectedRef.current, interactive),

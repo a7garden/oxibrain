@@ -38,10 +38,36 @@ export const HUE_CHIP: Record<Hue, string> = {
   purple: "bg-hue-purple/10 text-hue-purple",
 };
 
-/** Resolved CSS color string for the hue token — read live so dark-mode flips
- *  propagate without re-mounting components. */
+/** Convert any modern CSS color string (oklch, lab, color(), etc.) to a
+ *  hex string via a 1x1 canvas readback. Sigma's `parseColor` only
+ *  understands hex / rgb() / rgba() / named — `oklch()` resolves to
+ *  opaque black otherwise. The canvas is created lazily and reused. */
+let _parseCanvas: HTMLCanvasElement | null = null;
+function toRgba(cssColor: string): string {
+  if (typeof document === "undefined") return "#000000";
+  if (!_parseCanvas) {
+    _parseCanvas = document.createElement("canvas");
+    _parseCanvas.width = 1;
+    _parseCanvas.height = 1;
+  }
+  const ctx = _parseCanvas.getContext("2d");
+  if (!ctx) return "#000000";
+  // Some browsers reject invalid colors silently and leave the prior
+  // fillStyle. Reset to transparent so a failed parse yields alpha=0.
+  ctx.fillStyle = "rgba(0,0,0,0)";
+  ctx.fillStyle = cssColor;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+  return `rgba(${r}, ${g}, ${b}, ${a / 255})`;
+}
+
+/** Resolved CSS color string for the hue token — read live so dark-mode
+ *  flips propagate without re-mounting components. Returned as `rgba()`
+ *  so canvas consumers (sigma, graphology) accept it. */
 export function hueColor(type: string): string {
-  return getComputedStyle(document.documentElement)
-    .getPropertyValue(`--color-hue-${hueForType(type)}`)
-    .trim();
+  return toRgba(
+    getComputedStyle(document.documentElement)
+      .getPropertyValue(`--color-hue-${hueForType(type)}`)
+      .trim(),
+  );
 }
