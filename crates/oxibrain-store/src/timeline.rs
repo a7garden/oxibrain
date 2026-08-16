@@ -9,11 +9,8 @@ use serde::{Deserialize, Serialize};
 pub struct TimelineEntry {
     pub statement_id: String,
     pub predicate: String,
-    /// Rendered object (surface name for entity objects, literal text otherwise).
-    /// Always populated — if the SQL row has only `object_entity`, the caller is
-    /// expected to resolve it to a surface via `brief::surface_of` or similar.
-    /// (`object_entity` is set alongside so callers can choose to render a
-    /// followable link instead of the bare surface.)
+    /// Rendered object: the object entity's surface for entity objects, the
+    /// plain literal value for literals.
     pub object_repr: String,
     /// Raw entity id when the object is an entity reference, else `None`.
     /// `None` for literal objects.
@@ -29,6 +26,32 @@ pub struct DiffResult {
     pub added: Vec<TimelineEntry>,
     pub removed: Vec<TimelineEntry>,
     pub changed: Vec<TimelineEntry>,
+}
+
+/// Human-readable object text for a timeline row: the object entity's
+/// canonical surface (merge-chain aware) for entity objects, or the plain
+/// literal value for literals (the column stores tagged JSON). Falls back
+/// to the raw column contents when resolution or parsing fails — a
+/// timeline must never fail on display grounds.
+fn object_display(
+    conn: &Connection,
+    object_entity: Option<String>,
+    object_literal: Option<String>,
+) -> String {
+    if let Some(id) = &object_entity {
+        return crate::brief::surface_of(conn, id).unwrap_or_else(|_| id.clone());
+    }
+    let Some(lit) = &object_literal else {
+        return String::new();
+    };
+    match serde_json::from_str::<oxibrain_core::TypedValue>(lit) {
+        Ok(oxibrain_core::TypedValue::Text(v)) => v,
+        Ok(oxibrain_core::TypedValue::Date(v)) => v,
+        Ok(oxibrain_core::TypedValue::DateTime(v)) => v,
+        Ok(oxibrain_core::TypedValue::Number(n)) => n.to_string(),
+        Ok(oxibrain_core::TypedValue::Bool(b)) => b.to_string(),
+        _ => lit.clone(),
+    }
 }
 
 /// Belief intervals for an entity over [from, to].
@@ -73,6 +96,15 @@ pub fn timeline(
     let mut results = Vec::new();
     for entry in entries {
         results.push(entry.map_err(sql_err)?);
+    }
+    for entry in &mut results {
+        // Resolve surfaces/literals after collection — the row closure
+        // cannot touch `conn` while the statement borrow is live.
+        entry.object_repr = object_display(
+            conn,
+            entry.object_entity.clone(),
+            Some(entry.object_repr.clone()),
+        );
     }
     Ok(results)
 }
@@ -162,6 +194,14 @@ fn beliefs_at(
     let mut results = Vec::new();
     for entry in entries {
         results.push(entry.map_err(sql_err)?);
+    }
+    for entry in &mut results {
+        // Same post-pass as `timeline` above.
+        entry.object_repr = object_display(
+            conn,
+            entry.object_entity.clone(),
+            Some(entry.object_repr.clone()),
+        );
     }
     Ok(results)
 }

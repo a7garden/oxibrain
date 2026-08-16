@@ -76,12 +76,24 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     if (open && !wasOpen.current) {
       setQuery("");
       setDebounced("");
-      setActive(0);
+      lastResultCount.current = 0;
       // Defer focus so the panel has measured its layout first.
       window.setTimeout(() => inputRef.current?.focus(), 0);
     }
     wasOpen.current = open;
   }, [open]);
+
+  // When entity results arrive for a typed query, move the active row to
+  // the first hit — a typed query means the user is looking for an entity,
+  // and leaving the active row on a static action makes Enter land on
+  // Overview (a footgun observed twice during the T13 sweep).
+  const lastResultCount = useRef(0);
+  useEffect(() => {
+    if (entityResults.length > 0 && lastResultCount.current === 0) {
+      setActive(actions.length);
+    }
+    lastResultCount.current = entityResults.length;
+  }, [entityResults.length, actions.length]);
 
   // If the list shape changes (results arrive) keep the active index in
   // bounds.

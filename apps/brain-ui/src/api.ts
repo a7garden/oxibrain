@@ -320,30 +320,3 @@ export interface TimelineEntry {
   status: string;
   recorded_at: number;
 }
-
-// ── Pending-deletion shims ─────────────────────────────────────────────
-//
-// The pre-router views (GraphExplorer, ContradictionInbox) still reference
-// `GraphNode`/`GraphEdge`/`Contradiction` shapes from a prior contract.
-// Tasks 8–11 own their rewrites and will delete the views. Until then,
-// these aliases keep the dead files typechecking under the new server-
-// accurate types. New code MUST NOT use them.
-
-export interface LegacyGraphNode {
-  id: string;
-  surface: string;
-  entity_type: string;
-}
-
-export interface LegacyGraphEdge {
-  from: string;
-  to: string;
-  predicate: string;
-}
-
-export interface LegacyContradiction {
-  statement_id: string;
-  entity_surface: string;
-  predicate: string;
-  conflicting_values: string[];
-}

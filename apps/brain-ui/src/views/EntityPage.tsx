@@ -253,8 +253,14 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-/** Render epoch-ms as `YYYY-MM-DD`. Far-future `valid_to` values render as a
- * real date — that's acceptable; the timeline shows the literal bound. */
+/** Max representable JS date (8.64e15 ms). The server's TIME_MAX sentinel
+ * (Number.MAX_SAFE_INTEGER) exceeds it — `new Date(TIME_MAX)` is an Invalid
+ * Date and `.toISOString()` would throw and blank the whole view. */
+const MAX_EPOCH_MS = 8_640_000_000_000_000;
+
+/** Render epoch-ms as `YYYY-MM-DD`; the far-future sentinel renders as
+ * `present` (an open-ended statement has no real end date to show). */
 function formatDate(ms: number): string {
+  if (ms >= MAX_EPOCH_MS) return "present";
   return new Date(ms).toISOString().slice(0, 10);
 }
