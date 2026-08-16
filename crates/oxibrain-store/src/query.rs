@@ -3,7 +3,7 @@
 
 use crate::knowledge as kcrud;
 use crate::sql_err;
-use oxibrain_core::knowledge::Object;
+use oxibrain_core::knowledge::{Object, Polarity};
 
 use oxibrain_core::rank::{
     Channel as RankChannel, ChannelResult, LexIndex, RankingResult, Retrieval, RetrievalInput,
@@ -167,6 +167,76 @@ pub fn contradictions(conn: &Connection, space: &str) -> Result<Vec<Statement>, 
         result.push(row.map_err(sql_err)?);
     }
     Ok(result)
+}
+
+/// One contradicted value with everything the MCP `contradictions` DTO and a
+/// one-click retract need: subject surface/type, object kind/value, and the
+/// episodes supporting each side (P9: pure fetch, no decisions here).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ContradictionDetail {
+    pub statement_id: String,
+    pub subject_id: String,
+    pub subject_surface: String,
+    pub subject_type: String,
+    pub predicate: String,
+    pub object_kind: String,
+    pub object_value: String,
+    pub affirm_episodes: Vec<String>,
+    pub deny_episodes: Vec<String>,
+}
+
+/// Contradicted statements enriched with surfaces and supporting episodes.
+pub fn contradiction_details(
+    conn: &Connection,
+    space: &str,
+) -> Result<Vec<ContradictionDetail>, BrainError> {
+    let stmts = contradictions(conn, space)?;
+    let mut out = Vec::with_capacity(stmts.len());
+    for s in stmts {
+        let subject_surface = crate::brief::surface_of(conn, &s.subject)?;
+        let (object_kind, object_value) = match &s.object {
+            Object::Entity(eid) => {
+                ("entity".to_string(), crate::brief::surface_of(conn, eid)?)
+            }
+            Object::Literal(tv) => {
+                ("literal".to_string(), crate::brief::literal_repr(tv))
+            }
+        };
+        let entity = conn
+            .query_row(
+                "SELECT type_name FROM entities WHERE id = ?1",
+                rusqlite::params![s.subject],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(sql_err)?;
+        let assertions = kcrud::get_assertions_for_statement(conn, &s.id)?;
+        let mut affirm = Vec::new();
+        let mut deny = Vec::new();
+        for a in &assertions {
+            match a.polarity {
+                Polarity::Affirm => affirm.push(a.episode.clone()),
+                Polarity::Deny => deny.push(a.episode.clone()),
+            }
+        }
+        affirm.sort();
+        affirm.dedup();
+        deny.sort();
+        deny.dedup();
+        out.push(ContradictionDetail {
+            statement_id: s.id.clone(),
+            subject_id: s.subject.clone(),
+            subject_surface,
+            subject_type: entity,
+            predicate: s.predicate.clone(),
+            object_kind,
+            object_value,
+            affirm_episodes: affirm,
+            deny_episodes: deny,
+        });
+    }
+    out.sort_by(|a, b| (&a.subject_surface, &a.predicate, &a.object_value)
+        .cmp(&(&b.subject_surface, &b.predicate, &b.object_value)));
+    Ok(out)
 }
 
 /// Collect all entity ids in the merge group of `entity` (the entity itself

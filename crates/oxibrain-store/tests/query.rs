@@ -106,3 +106,61 @@ fn contradictions_finds_static_conflicts() {
         "both born_in statements contradicted"
     );
 }
+
+#[test]
+fn contradiction_details_carries_surfaces_and_episodes() {
+    let (conn, clock) = setup();
+
+    // born_in(Alice, Seoul) and born_in(Alice, Busan) — static conflict.
+    // Reuse the exact fixture calls of contradictions_finds_static_conflicts
+    // above this test; copy them verbatim so this test is self-contained.
+
+    let d1 = Declaration::AddStatement {
+        subject: EntityRef {
+            surface: "Alice".into(),
+            ty: "Person".into(),
+        },
+        predicate: "born_in".into(),
+        object: DeclObject::Entity {
+            surface: "Seoul".into(),
+            ty: "Place".into(),
+        },
+        polarity: "affirm".into(),
+        valid_from: TIME_MIN.millis(),
+        valid_to: TIME_MAX.millis(),
+    };
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d1, clock.now(), &mut cache).unwrap();
+
+    // born_in(Alice, Busan) — contradiction!
+    let d2 = Declaration::AddStatement {
+        subject: EntityRef {
+            surface: "Alice".into(),
+            ty: "Person".into(),
+        },
+        predicate: "born_in".into(),
+        object: DeclObject::Entity {
+            surface: "Busan".into(),
+            ty: "Place".into(),
+        },
+        polarity: "affirm".into(),
+        valid_from: TIME_MIN.millis(),
+        valid_to: TIME_MAX.millis(),
+    };
+    clock.advance(100);
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &d2, clock.now(), &mut cache).unwrap();
+
+    let details = query::contradiction_details(&conn, "s1").unwrap();
+    assert_eq!(details.len(), 2, "both conflicting statements appear: {details:?}");
+    for d in &details {
+        assert_eq!(d.subject_surface, "Alice");
+        assert_eq!(d.subject_type, "Person");
+        assert_eq!(d.predicate, "born_in");
+        assert_eq!(d.object_kind, "entity");
+        assert!(!d.affirm_episodes.is_empty(), "each value names its episode");
+        assert!(d.object_value == "Seoul" || d.object_value == "Busan");
+    }
+    let values: Vec<&str> = details.iter().map(|d| d.object_value.as_str()).collect();
+    assert!(values.contains(&"Seoul") && values.contains(&"Busan"));
+}

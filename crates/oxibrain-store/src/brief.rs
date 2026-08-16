@@ -272,7 +272,8 @@ fn build_neighbours(
 }
 
 /// Canonical surface for an entity id (the display name used in links).
-fn surface_of(conn: &Connection, entity_id: &str) -> Result<String, BrainError> {
+pub(crate) fn surface_of(conn: &Connection, entity_id: &str) -> Result<String, BrainError> {
+
     crate::index_ops::entity_surface(conn, entity_id)
 }
 
@@ -343,7 +344,7 @@ fn load_contradictions(
     Ok(out)
 }
 
-fn literal_repr(tv: &TypedValue) -> String {
+pub(crate) fn literal_repr(tv: &TypedValue) -> String {
     match tv {
         TypedValue::Text(s) | TypedValue::Date(s) | TypedValue::DateTime(s) => s.clone(),
         TypedValue::Enum(s) => s.clone(),
