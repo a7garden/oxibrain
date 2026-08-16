@@ -332,6 +332,22 @@ impl Brain {
             query::hybrid_query(conn, &q, embedder.as_deref())
         })
     }
+    /// Hybrid (or mode-specific) query, projected to UI-ready search hits.
+    /// Mirrors `query()` but enriches entity targets with surface + type
+    /// from the entities / entity_keys tables and drops the rest of the
+    /// ranking envelope (dropped, total_candidates, spec) — the UI's
+    /// `/ask` page only needs the flat hit list (§14.2 ask surface).
+    pub async fn search(
+        &self,
+        q: oxibrain_core::retrieval::Query,
+    ) -> Result<Vec<oxibrain_store::query::SearchResult>, BrainError> {
+        let embedder = self.embedder.clone();
+        let space = q.space.clone();
+        read_op!(self.handle, |conn| {
+            let ranking = query::hybrid_query(conn, &q, embedder.as_deref())?;
+            query::search_results(conn, &space, &ranking)
+        })
+    }
     pub async fn rebuild_indexes(&self, space: &str) -> Result<(), BrainError> {
         let h = self.handle.clone();
         let space = space.to_string();

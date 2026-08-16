@@ -239,6 +239,73 @@ pub fn contradiction_details(
     });
     Ok(out)
 }
+/// One ranked entity, projected for the `/ask` UI list.
+/// `entity_id` is the canonical entity id; `entity_surface` and
+/// `entity_type` come from the entities + entity_keys tables (falling
+/// back to the id / "Unknown" if the row was deleted between rank and
+/// projection). `score` is the ranker's fused score. `snippet` carries
+/// the matched predicate as a one-line cue — the UI uses it as a stand-in
+/// for the full snippet line until the user expands the result.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchResult {
+    pub entity_id: String,
+    pub entity_surface: String,
+    pub entity_type: String,
+    pub score: f64,
+    pub snippet: String,
+}
+
+/// Project a `RankingResult` to entity search hits the UI can render.
+/// Entity targets get surface + type enrichment; statement / episode
+/// targets surface as their raw id (the UI filters non-entity rows
+/// today, but the projection keeps the contract uniform). The result
+/// preserves the ranker's order — callers (the MCP `search` tool) wrap
+/// it as the JSON-RPC tool response.
+pub fn search_results(
+    conn: &Connection,
+    space: &str,
+    result: &RankingResult,
+) -> Result<Vec<SearchResult>, BrainError> {
+    let mut out = Vec::with_capacity(result.items.len());
+    for item in &result.items {
+        let (entity_id, snippet) = match &item.target {
+            TargetId::Entity { id } => (
+                id.clone(),
+                if item.facts.predicate.is_empty() {
+                    String::new()
+                } else {
+                    format!("matched: {}", item.facts.predicate)
+                },
+            ),
+            TargetId::Statement { id } => (id.clone(), String::new()),
+            TargetId::Episode { id } => (id.clone(), String::new()),
+            TargetId::Chunk { id } => (id.clone(), String::new()),
+            TargetId::Community { id } => (id.clone(), String::new()),
+        };
+        // Surface + type lookup is best-effort: a missing row falls back
+        // to the id and "Unknown" so a transient delete doesn't abort
+        // the whole list. Space scoping keeps type_name accurate even
+        // when the same id exists in two spaces (M7 §11.5).
+        let entity_surface =
+            crate::brief::surface_of(conn, &entity_id).unwrap_or_else(|_| entity_id.clone());
+        let entity_type: String = conn
+            .query_row(
+                "SELECT type_name FROM entities
+                 WHERE id = ?1 AND space_id = ?2",
+                rusqlite::params![entity_id, space],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap_or_else(|_| "Unknown".to_string());
+        out.push(SearchResult {
+            entity_id,
+            entity_surface,
+            entity_type,
+            score: item.fused_score,
+            snippet,
+        });
+    }
+    Ok(out)
+}
 
 /// Collect all entity ids in the merge group of `entity` (the entity itself
 /// plus all entities that merged into it, transitively).

@@ -272,7 +272,7 @@ fn build_neighbours(
 }
 
 /// Canonical surface for an entity id (the display name used in links).
-pub(crate) fn surface_of(conn: &Connection, entity_id: &str) -> Result<String, BrainError> {
+pub fn surface_of(conn: &Connection, entity_id: &str) -> Result<String, BrainError> {
     crate::index_ops::entity_surface(conn, entity_id)
 }
 

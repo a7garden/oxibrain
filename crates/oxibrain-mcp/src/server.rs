@@ -254,10 +254,9 @@ impl BrainServer {
             limit,
             min_confidence: f32_arg_or(args, "min_confidence", 0.0),
         };
-        let result = self.brain.query(q).await.map_err(ToolErr::run)?;
+        let result = self.brain.search(q).await.map_err(ToolErr::run)?;
         to_json(&result)
     }
-
     async fn tool_recall(&self, args: &Value) -> Result<String, ToolErr> {
         let query = str_arg(args, "query")?;
         let space_id = self.ensure_space(&space_arg(args)).await?;
@@ -415,9 +414,32 @@ impl BrainServer {
             .why(&space_id, statement_id)
             .await
             .map_err(ToolErr::run)?;
-        to_json(&explain)
+        // `Statement.object` is `Object::Entity(EntityId) | Object::Literal(TypedValue)` —
+        // serde's internally-tagged newtype-with-primitive form fails to serialize, so
+        // we project the explain block to a JSON Value with a flat object shape that
+        // matches the TypeScript `ExplainBlock` interface (statement.object: unknown).
+        let object_json = match &explain.statement.object {
+            oxibrain_core::knowledge::Object::Entity(id) => {
+                serde_json::json!({"kind": "entity", "id": id})
+            }
+            oxibrain_core::knowledge::Object::Literal(tv) => {
+                serde_json::to_value(tv).unwrap_or(serde_json::Value::Null)
+            }
+        };
+        let payload = serde_json::json!({
+            "statement": {
+                "id": explain.statement.id,
+                "space": explain.statement.space,
+                "subject": explain.statement.subject,
+                "predicate": explain.statement.predicate,
+                "object": object_json,
+            },
+            "status": explain.status,
+            "assertions": explain.assertions,
+            "confidence_breakdown": explain.confidence_breakdown,
+        });
+        serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
     }
-
     async fn tool_contradictions(&self, args: &Value) -> Result<String, ToolErr> {
         let space_id = self.ensure_space(&space_arg(args)).await?;
         let details = self
@@ -1760,10 +1782,21 @@ mod tests {
         let result = resp["result"]["content"][0]["text"]
             .as_str()
             .expect("result text payload");
-        let parsed: serde_json::Value = serde_json::from_str(result).unwrap();
+        // v1.x DTO contract: the search tool serves UI-ready search hits
+        // (entity_id + surface + type + score + snippet) directly. The
+        // ranker's envelope (items/dropped/total_candidates/spec) is
+        // hidden behind the MCP tool — callers that need envelope
+        // diagnostics use the Brain::query facade method directly.
+        let parsed: Vec<serde_json::Value> =
+            serde_json::from_str(result).expect("search response is a JSON array");
         assert!(
-            parsed["items"].is_array(),
-            "items must be an array, got {parsed:?}"
+            parsed.is_empty()
+                || parsed[0].get("entity_id").is_some()
+                    && parsed[0].get("entity_surface").is_some()
+                    && parsed[0].get("entity_type").is_some()
+                    && parsed[0].get("score").is_some()
+                    && parsed[0].get("snippet").is_some(),
+            "search hits must carry the SearchResult DTO keys, got: {parsed:?}"
         );
     }
 
@@ -1832,6 +1865,74 @@ mod tests {
             text.contains("active"),
             "belief status is rendered:\n{text}"
         );
+    }
+
+    #[tokio::test]
+    async fn why_tool_returns_dto_contract() {
+        // The why tool's text payload must serialize as a single ExplainBlock
+        // object — not an error envelope. `Statement.object` is the
+        // tagged-newtype-with-primitive `Object::Entity(EntityId)`, which
+        // serde refuses to serialize as JSON, so we project it to
+        // `{"kind": "entity", "id": "..."}` (and the literal variant to its
+        // TypedValue JSON shape) before returning. This test locks the
+        // projection in.
+        let (_dir, server) = fresh_server().await;
+        let (_ep, _alice) = declare_alice(&server, "t").await;
+        let space_id = server.brain.ensure_space("t").await.unwrap();
+        // Find a belief's statement id for Alice.
+        let alice = server
+            .brain
+            .resolve_entity_id(&space_id, "Person", "Alice")
+            .await
+            .unwrap()
+            .expect("Alice exists");
+        let beliefs = server.brain.beliefs(&space_id, &alice).await.unwrap();
+        let statement_id = beliefs[0].statement.clone();
+
+        let resp = server
+            .handle(msg(
+                3,
+                "tools/call",
+                Some(json!({
+                    "name": "why",
+                    "arguments": { "space": "t", "statement_id": statement_id }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            resp.get("error").is_none(),
+            "why must succeed, got {resp:?}"
+        );
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(text).expect("why response is JSON");
+        // Top-level keys match the TypeScript `ExplainBlock` interface.
+        let keys: Vec<&str> = parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["assertions", "confidence_breakdown", "statement", "status"],
+            "ExplainBlock DTO keys, got: {keys:?}"
+        );
+        // statement.object is projected to {kind, id} for entity objects.
+        let obj = &parsed["statement"]["object"];
+        assert_eq!(obj["kind"], "entity");
+        assert!(
+            obj["id"].is_string() && !obj["id"].as_str().unwrap().is_empty(),
+            "object.id must be a non-empty entity id, got: {obj}"
+        );
+        // confidence_breakdown carries the support + contradict counts.
+        let breakdown = &parsed["confidence_breakdown"];
+        assert!(breakdown["support_count"].is_number());
+        assert!(breakdown["contradiction_count"].is_number());
+        // assertions carry the declaring episode id (the wire field that
+        // the UI's `/ask` page renders in each why row).
+        let first_episode = parsed["assertions"][0]["episode_id"].as_str().unwrap();
+        assert!(!first_episode.is_empty(), "assertion must name its episode");
     }
 
     #[tokio::test]
