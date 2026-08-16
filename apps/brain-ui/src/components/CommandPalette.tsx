@@ -25,6 +25,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // Reset state every time we open — keeps the palette from leaking the
   // prior query across sessions.
   const wasOpen = useRef(false);
@@ -87,6 +88,12 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   useEffect(() => {
     if (active >= total) setActive(total === 0 ? 0 : total - 1);
   }, [total, active]);
+
+  // Keep the active row visible when the list overflows `max-h-[55vh]`.
+  // `block: "nearest"` only scrolls when the row is outside the viewport.
+  useEffect(() => {
+    rowRefs.current[active]?.scrollIntoView({ block: "nearest" });
+  }, [active]);
 
   // Dialog-scoped key handler. The useHotkeys hook already suppresses
   // single-key combos while the palette input is focused, so we own the
@@ -153,6 +160,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       params: { entityId: hit.entity_id },
       search: { tab: "brief" },
     });
+    onClose();
   }
 
   if (!open) return null;
@@ -170,7 +178,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         aria-modal="true"
         aria-label="Command palette"
         onKeyDown={onDialogKey}
-        className="bg-surface-raised text-text w-full max-w-lg rounded-[var(--popover-radius)] shadow-lg overflow-hidden"
+        className="bg-surface-raised text-text w-full max-w-lg rounded-[var(--dialog-radius)] shadow-lg overflow-hidden"
       >
         <div className="border-b border-line px-3.5 py-3">
           <input
@@ -199,6 +207,9 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             return (
               <li key={action.label}>
                 <button
+                  ref={(el) => {
+                    rowRefs.current[i] = el;
+                  }}
                   type="button"
                   onMouseEnter={() => setActive(i)}
                   onClick={commit}
@@ -248,6 +259,9 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                   return (
                     <li key={hit.entity_id}>
                       <button
+                        ref={(el) => {
+                          rowRefs.current[idx] = el;
+                        }}
                         type="button"
                         onMouseEnter={() => setActive(idx)}
                         onClick={commit}
