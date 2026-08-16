@@ -8,22 +8,7 @@ use rusqlite::Connection;
 fn setup() -> (Connection, FakeClock) {
     oxibrain_store::migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(include_str!("../src/migrations/v1.sql"))
-        .unwrap();
-    conn.execute_batch(include_str!("../src/migrations/v2.sql"))
-        .unwrap();
-    conn.execute_batch(include_str!("../src/migrations/v3.sql"))
-        .unwrap();
-    conn.execute_batch(include_str!("../src/migrations/v4.sql"))
-        .unwrap();
-    conn.execute_batch(include_str!("../src/migrations/v5.sql"))
-        .unwrap();
-    conn.execute_batch(include_str!("../src/migrations/v6.sql"))
-        .unwrap();
-    conn.execute_batch(include_str!("../src/migrations/v7.sql"))
-        .unwrap();
-    conn.execute_batch(include_str!("../src/migrations/v8.sql"))
-        .unwrap();
+    oxibrain_store::migration::run(&conn).unwrap();
     oxibrain_store::registry::seed_core_v1(&conn).unwrap();
     conn.execute(
         "INSERT INTO spaces (id, name, created_at) VALUES ('s1', 'test', 0)",

@@ -87,6 +87,62 @@ pub fn index_episode_fts(
     Ok(())
 }
 
+/// Incrementally refresh the entity-surface rows of both FTS indexes for the
+/// given entity ids — the per-declaration counterpart of the entity pass in
+/// [`rebuild_fts`]. Declarations create entities outside the ingest path, so
+/// without this hook freshly declared entities stay unsearchable until a
+/// full `rebuild_indexes`. Idempotent: each id's rows are deleted before
+/// re-inserting every `entity_keys` surface, so the content always equals
+/// what a rebuild would produce (P1: the ranking half stays a pure
+/// projection of `entity_keys`).
+pub fn index_entities_fts(
+    conn: &Connection,
+    space: &str,
+    entity_ids: &[String],
+) -> Result<(), BrainError> {
+    for id in entity_ids {
+        conn.execute(
+            "DELETE FROM fts_word
+             WHERE space_id = ?1 AND target_kind = 'entity' AND target_id = ?2",
+            params![space, id],
+        )
+        .map_err(sql_err)?;
+        conn.execute(
+            "DELETE FROM fts_ngram
+             WHERE space_id = ?1 AND target_kind = 'entity' AND target_id = ?2",
+            params![space, id],
+        )
+        .map_err(sql_err)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT surface FROM entity_keys
+                 WHERE space_id = ?1 AND entity_id = ?2",
+            )
+            .map_err(sql_err)?;
+        let surfaces: Vec<String> = stmt
+            .query_map(params![space, id], |r| r.get::<_, String>(0))
+            .map_err(sql_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_err)?;
+        drop(stmt);
+        for surface in &surfaces {
+            conn.execute(
+                "INSERT INTO fts_word (body, space_id, target_kind, target_id)
+                 VALUES (?1, ?2, 'entity', ?3)",
+                params![surface, space, id],
+            )
+            .map_err(sql_err)?;
+            conn.execute(
+                "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
+                 VALUES (?1, ?2, 'entity', ?3)",
+                params![surface, space, id],
+            )
+            .map_err(sql_err)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
     conn.execute("DELETE FROM fts_word WHERE space_id = ?1", params![space])
         .map_err(sql_err)?;

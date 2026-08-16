@@ -7,13 +7,12 @@ use tempfile::TempDir;
 
 fn setup() -> (TempDir, Connection, FakeClock) {
     let dir = TempDir::new().unwrap();
-    // We need a connection with migrations applied. Use Store::open then take conn.
-    // For tests, open in-memory with migrations.
+    // Full migration set — the store project_declaration runs against in
+    // production. (v1+v2 alone would leave the ranking-half tables absent,
+    // and declarations now refresh entity FTS rows incrementally.)
+    oxibrain_store::migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
-    let v1 = include_str!("../src/migrations/v1.sql");
-    let v2 = include_str!("../src/migrations/v2.sql");
-    conn.execute_batch(v1).unwrap();
-    conn.execute_batch(v2).unwrap();
+    oxibrain_store::migration::run(&conn).unwrap();
     oxibrain_store::registry::seed_core_v1(&conn).unwrap();
     conn.execute(
         "INSERT INTO spaces (id, name, created_at) VALUES ('s1', 'test', 0)",

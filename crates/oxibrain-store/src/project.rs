@@ -492,6 +492,10 @@ pub fn project_declaration(
     ledger::insert_episode(conn, &mut episode)?;
     let ep_id = episode.id.clone();
 
+    // Entities whose keys this declaration creates or touches — their FTS
+    // rows are refreshed at the end so they are searchable immediately.
+    let mut touched: Vec<String> = Vec::new();
+
     // 2. Process the declaration.
     match decl {
         Declaration::AddStatement {
@@ -511,6 +515,7 @@ pub fn project_declaration(
             // Resolve subject entity.
             let (subj_id, subj_method) =
                 resolve_or_create(conn, space, subject, &ep_id, 0, now, &[], cache)?;
+            touched.push(subj_id.clone());
 
             // Resolve object with the subject as graph context (§10.2).
             let obj_resolved = resolve_object(
@@ -523,6 +528,9 @@ pub fn project_declaration(
                 &[subj_id.clone()],
                 cache,
             )?;
+            if let Some((obj_id, _)) = &obj_resolved.entity {
+                touched.push(obj_id.clone());
+            }
 
             // Create statement (idempotent).
             let subj_for_hash = &subj_id;
@@ -627,6 +635,8 @@ pub fn project_declaration(
                 },
             )?;
             kcrud::set_merged_into(conn, &loser_id, &winner_id)?;
+            touched.push(loser_id.clone());
+            touched.push(winner_id.clone());
         }
         Declaration::Retract {
             subject,
@@ -646,6 +656,11 @@ pub fn project_declaration(
                 &[subj_id.clone()],
                 cache,
             )?;
+            touched.push(subj_id.clone());
+            if let Some((obj_id, _)) = &obj_resolved.entity {
+                touched.push(obj_id.clone());
+            }
+
             let stmt_id = statement_id(space, &subj_id, predicate, &obj_resolved.object);
 
             // Set retracted_at on ALL matching assertions (the retract is a
@@ -672,6 +687,7 @@ pub fn project_declaration(
             }
         }
     }
+    crate::index_ops::index_entities_fts(conn, space, &touched)?;
 
     Ok(ep_id)
 }

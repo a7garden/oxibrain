@@ -1936,6 +1936,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_finds_declared_entity_without_rebuild() {
+        // The /ask golden path: an entity created by `declare` must be
+        // findable by `search` immediately — no `rebuild_indexes` in
+        // between. Declarations index their touched entity surfaces
+        // incrementally (index_ops::index_entities_fts); this locks that
+        // hook in so it cannot silently regress to rebuild-only.
+        let (_dir, server) = fresh_server().await;
+        let (_ep, alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "search",
+                    "arguments": { "space": "t", "query": "Alice" }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            resp.get("error").is_none(),
+            "search must succeed, got {resp:?}"
+        );
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let hits: Vec<serde_json::Value> =
+            serde_json::from_str(text).expect("search response is a JSON array");
+        let alice_hit = hits
+            .iter()
+            .find(|h| h["entity_id"].as_str() == Some(alice.as_str()))
+            .expect("declared Alice must be searchable without a rebuild");
+        assert_eq!(alice_hit["entity_surface"], "Alice");
+        assert_eq!(alice_hit["entity_type"], "Person");
+    }
+
+    #[tokio::test]
     async fn ingest_creates_episode() {
         let (_dir, server) = fresh_server().await;
         let resp = server
