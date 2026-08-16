@@ -434,13 +434,13 @@ function MergesTable({ records }: MergesTableProps) {
               <td className="px-4 py-3">
                 <DecisionBadge kind={record.decided_by.kind} />
               </td>
-              <td className="px-4 py-3 font-mono text-xs text-text-dim">
+              <td className="px-4 py-3 font-mono text-xs text-text-subtle">
                 {new Date(record.decided_at).toISOString().slice(0, 10)}
               </td>
               <td className="px-4 py-3">
                 {record.provenance ? (
                   <span
-                    className="font-mono text-xs text-text-dim"
+                    className="font-mono text-xs text-text-subtle"
                     title={record.provenance}
                   >
                     {truncateEntityId(record.provenance)}

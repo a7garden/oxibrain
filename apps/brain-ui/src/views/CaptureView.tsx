@@ -33,11 +33,16 @@ export function CaptureView() {
     },
   });
 
-  // Auto-focus the textarea on mount — this is the page's primary affordance.
+  // Auto-focus the textarea whenever the form is (re)shown — mount and
+  // after "capture another". Keyed on form visibility because the textarea
+  // unmounts while the success card is up (ref is null synchronously in
+  // the click handler, so focusing there would no-op).
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
-    textareaRef.current?.focus();
-  }, []);
+    if (!lastServerText) {
+      textareaRef.current?.focus();
+    }
+  }, [lastServerText]);
 
   const canSubmit = !mutation.isPending && text.trim().length > 0;
 
@@ -61,7 +66,6 @@ export function CaptureView() {
           serverText={lastServerText}
           onCaptureAnother={() => {
             setLastServerText(null);
-            textareaRef.current?.focus();
           }}
         />
       ) : (
@@ -128,7 +132,7 @@ function SuccessCard({ serverText, onCaptureAnother }: SuccessCardProps) {
         </p>
       )}
       <p className="mt-3 font-mono text-xs text-text-subtle">server response</p>
-      <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-text-dim">
+      <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-text-subtle">
         {serverText}
       </p>
       <div className="mt-5 flex justify-end">
