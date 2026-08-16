@@ -453,7 +453,7 @@ fn resolve_claim_object(
         ClaimObject::Literal {
             literal_type,
             value,
-            span: _,
+            ..
         } => {
             let tv = parse_claim_literal(literal_type, value)?;
             Ok(ResolvedClaimObject {

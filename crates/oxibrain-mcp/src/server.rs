@@ -372,7 +372,7 @@ impl BrainServer {
         let llm = std::sync::Arc::new(crate::sampling::SamplingLlmPort::new(handle.clone()));
         let config = oxibrain_core::extraction::ExtractorConfig {
             model_id: "mcp-sampling".into(),
-            prompt_version: 1,
+            prompt_version: 2, // v2: quote-based mentions (ADR-006)
             registry_major: oxibrain_core::registry::CORE_V1_MAJOR,
             mechanism: oxibrain_core::extraction::ExtractMechanism::ToolCall,
             max_tokens: 8192,

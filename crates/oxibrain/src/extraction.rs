@@ -27,10 +27,16 @@ impl Brain {
             .await?
             .ok_or_else(|| BrainError::NotFound(format!("episode {episode_id}")))?;
 
-        // 2. Generate schema + prompt [pure].
+        // 2. Generate schema + prompt [pure]. The system prompt carries the
+        //    quote contract (ADR-006) plus the k most similar built-in
+        //    few-shot examples (§9.6, 10.8) — selection is trigram Jaccard,
+        //    language-independent (P11), deterministic.
         let predicates = oxibrain_core::registry::core_v1();
         let schema = oxibrain_core::extraction::schema_from_registry(predicates);
-        let system = oxibrain_core::extraction::build_extraction_prompt(predicates);
+        let mut system = oxibrain_core::extraction::build_extraction_prompt(predicates);
+        let corpus = oxibrain_core::extraction::default_few_shot_corpus();
+        let selected = oxibrain_core::extraction::few_shot_examples(&episode.content, &corpus, 2);
+        system.push_str(&oxibrain_core::extraction::format_few_shot(&selected));
 
         // 3. Call LLM [async, off-actor]. Grammar-capable adapters (the local
         //    GGUF path, §9.4 D28) get a GBNF grammar generated from the
@@ -85,7 +91,9 @@ impl Brain {
                 .flat_map(|(_, errs)| errs.iter())
                 .collect();
             let repair_prompt = format!(
-                "{}\n\nPrevious extraction had these errors: {:?}\nPlease re-extract, fixing these issues.",
+                "{}\n\nPrevious extraction had these errors: {:?}\nPlease re-extract, fixing \
+                 these issues. Every mention — subject AND object — needs a non-empty quote \
+                 copied EXACTLY from the text, containing the surface verbatim.",
                 episode.content, errors_summary
             );
             let repair_req = LlmRequest {

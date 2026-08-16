@@ -1,6 +1,5 @@
 # oxibrain — Architecture
-
-> **Version:** v2.3 · **Date:** 2026-08-16 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.4 · **Date:** 2026-08-16 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
@@ -1201,6 +1200,21 @@ like `extractions`.
   entity mention not present verbatim in the episode**.
 - **Repair loop**: one retry with validator errors appended, then partial acceptance — valid
   statements kept, invalid ones filed in `extraction_failures` with the raw response.
+
+**Quote-based mention evidence (contract v2, ADR-006).** The model does not provide numeric
+spans — measured on the default local extractor (2026-08-16), small models hallucinate byte
+offsets even under grammar constraints, and the injection suite correctly forbids relocating a
+wrong span to another occurrence. Instead each mention (and literal value) carries a `quote`:
+a short snippet **copied verbatim** from the episode containing the surface. The server locates
+the quote (first occurrence, exact bytes), requires the surface inside that window
+(ASCII-case-insensitive fallback canonicalizes the surface to the source), and **derives the
+byte span server-side**. Every gate survives: a fabricated surface has no copyable quote; a
+quote that does not contain its surface is rejected outright; stored spans remain byte-exact
+provenance; and instruction-shaped text that genuinely occurs in an episode stays data
+(`injection_suite` variant B). Legacy span-format responses (cached extractions, older
+providers) keep the span ladder: exact bytes → char-index → casing drift. `prompt_version`
+bumped 1 → 2, so the two contracts never share an extraction cache.
+
 
 **Why constrained decoding is primary now.** Owning the sampler makes schema validity a
 token-level guarantee: the model cannot emit a token that would break the schema. That is

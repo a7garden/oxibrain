@@ -62,7 +62,7 @@ fn triple(p: &str, s: &str, o: &str) -> ExtractedTriple {
 fn test_extractor() -> ExtractorConfig {
     ExtractorConfig {
         model_id: "test-model".into(),
-        prompt_version: 1,
+        prompt_version: 2, // v2: quote-based mentions (ADR-006); fixtures replay legacy spans via the compat ladder
         registry_major: 1,
         mechanism: ExtractMechanism::JsonSchema,
         max_tokens: 4096,

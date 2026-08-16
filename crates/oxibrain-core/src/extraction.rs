@@ -68,11 +68,26 @@ impl ExtractorConfig {
 // ─── Extraction types ────────────────────────────────────────────────────────
 
 /// A reference to an entity mention in the episode text.
-/// `surface` must appear verbatim at `[span.0, span.1)` (the fabricated-entity gate).
+///
+/// Extraction contract v2 (ADR-006): the model provides a verbatim `quote`
+/// copied from the episode containing the `surface`; the byte `span` is
+/// derived server-side from the located quote. Legacy responses without a
+/// quote keep the span-verbatim ladder below. Either way, a valid mention's
+/// `surface` appears verbatim at `[span.0, span.1)` — the fabricated-entity
+/// gate is unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MentionRef {
     pub surface: String,
     pub entity_type: String,
+    /// Verbatim snippet copied from the episode containing `surface`.
+    /// When present, the model-provided `span` is ignored and the span is
+    /// derived by locating the quote (first occurrence, exact bytes).
+    #[serde(default)]
+    pub quote: Option<String>,
+    /// Byte span `[start, end)` into the episode. Server-derived when
+    /// `quote` is present; otherwise checked against the content by the
+    /// legacy ladder. Defaults to `(0, 0)` when the model omits it.
+    #[serde(default)]
     pub span: (u32, u32),
 }
 
@@ -86,6 +101,12 @@ pub enum ClaimObject {
     Literal {
         literal_type: String,
         value: String,
+        /// Verbatim snippet containing the `value` (ADR-006). When present,
+        /// the span is derived server-side; the value must occur inside the
+        /// located quote — stronger than the legacy bounds-only check.
+        #[serde(default)]
+        quote: Option<String>,
+        #[serde(default)]
         span: (u32, u32),
     },
 }
@@ -311,8 +332,29 @@ pub fn validate_claims(
                 });
             }
         }
-        if let ClaimObject::Literal { span, .. } = &repaired.object {
-            check_span(span, content, &mut errors);
+        if let ClaimObject::Literal {
+            quote, value, span, ..
+        } = &mut repaired.object
+        {
+            // ADR-006: a quoted literal derives its span server-side and
+            // the value must occur inside the located quote — stronger than
+            // the legacy bounds-only check.
+            match quote.as_deref() {
+                Some(q) => match locate_in_quote(content, q, value) {
+                    Some((derived, canonical)) => {
+                        if canonical != *value {
+                            *value = canonical;
+                        }
+                        *span = derived;
+                    }
+                    None => errors.push(ValidationError::SurfaceNotVerbatim {
+                        surface: value.clone(),
+                        span: *span,
+                        found: String::new(),
+                    }),
+                },
+                None => check_span(span, content, &mut errors),
+            }
         }
 
         if errors.is_empty() {
@@ -338,15 +380,29 @@ fn check_span(span: &(u32, u32), content: &str, errors: &mut Vec<ValidationError
 /// Resolve a mention against the content, repairing span-interpretation drift
 /// in place. Returns `true` when the surface is verbatim-present at the span.
 ///
-/// Repair ladder — every step keeps the fabricated-entity gate intact: the
-/// bytes at the (final) span must spell the surface. Relocating a surface to
-/// a *different* span is deliberately NOT done: the injection suite
-/// (oxibrain-store/tests/injection_suite.rs) requires that a span citing the
-/// wrong bytes is rejected even when the surface occurs elsewhere.
+/// Resolution ladder (ADR-006) — every step keeps the fabricated-entity gate
+/// intact: the bytes at the (final) span must spell the surface. Relocating a
+/// model-provided span to a *different* location is deliberately NOT done:
+/// the injection suite (oxibrain-store/tests/injection_suite.rs) requires
+/// that a span citing the wrong bytes is rejected even when the surface
+/// occurs elsewhere. The quote step does not relocate a span — it *derives*
+/// one from verbatim evidence the model copied.
+/// 0. Quote — locate the copied snippet, derive the span server-side.
 /// 1. Exact byte span.
 /// 2. Char-index span — models count chars on multibyte (Korean/CJK) text.
 /// 3. Casing drift at the same span — canonicalize surface to the source text.
 fn resolve_mention(m: &mut MentionRef, content: &str) -> bool {
+    // 0. Quote-based evidence (extraction contract v2).
+    if let Some(quote) = m.quote.as_deref() {
+        return match locate_in_quote(content, quote, &m.surface) {
+            Some((span, canonical)) => {
+                m.surface = canonical;
+                m.span = span;
+                true
+            }
+            None => false,
+        };
+    }
     let (a, b) = (m.span.0 as usize, m.span.1 as usize);
     // 1. Exact byte span.
     if content.get(a..b) == Some(m.surface.as_str()) {
@@ -367,6 +423,45 @@ fn resolve_mention(m: &mut MentionRef, content: &str) -> bool {
         }
     }
     false
+}
+
+/// Locate `needle` (a surface or literal value) inside a verbatim `quote`
+/// window in `content` (ADR-006). First occurrences everywhere; exact bytes
+/// first, ASCII-case-insensitive fallback canonicalizes the needle to the
+/// source text. Returns `Some((byte_span, canonical_needle))`.
+///
+/// Pure and deterministic. An empty needle never resolves; an empty quote
+/// window contains nothing, so degenerate "surface anywhere" holes cannot
+/// open. This is evidence the model *copied*, not offsets it *counted*.
+fn locate_in_quote(content: &str, quote: &str, needle: &str) -> Option<((u32, u32), String)> {
+    if needle.is_empty() {
+        return None;
+    }
+    let q0 = content.find(quote)?;
+    let window = &content[q0..q0 + quote.len()];
+    if let Some(off) = window.find(needle) {
+        let span = ((q0 + off) as u32, (q0 + off + needle.len()) as u32);
+        return Some((span, needle.to_string()));
+    }
+    // Casing fallback: the content is the source of truth.
+    let lowered = needle.to_ascii_lowercase();
+    for (off, _) in window.char_indices() {
+        let candidate = &window[off..];
+        if candidate.len() < needle.len() {
+            break;
+        }
+        // `needle.len()` may land mid-character (multibyte window); such
+        // offsets cannot match — skip them, later offsets still can.
+        let Some(head) = candidate.get(..needle.len()) else {
+            continue;
+        };
+        if head.to_ascii_lowercase() == lowered {
+            let found = head.to_string();
+            let span = ((q0 + off) as u32, (q0 + off + needle.len()) as u32);
+            return Some((span, found));
+        }
+    }
+    None
 }
 
 /// Convert a (char_index_start, char_index_end) span to a byte range.
@@ -430,15 +525,12 @@ pub fn schema_from_registry(predicates: &[PredicateDef]) -> serde_json::Value {
         "properties": {
             "surface": { "type": "string", "description": "Verbatim text from the episode" },
             "entity_type": { "type": "string", "enum": entity_types },
-            "span": {
-                "type": "array",
-                "items": { "type": "integer" },
-                "minItems": 2,
-                "maxItems": 2,
-                "description": "Byte offset [start, end) into the episode text"
+            "quote": {
+                "type": "string",
+                "description": "A short snippet copied EXACTLY from the episode that contains the surface"
             }
         },
-        "required": ["surface", "entity_type", "span"]
+        "required": ["surface", "entity_type", "quote"]
     });
 
     let object_schema = serde_json::json!({
@@ -460,14 +552,12 @@ pub fn schema_from_registry(predicates: &[PredicateDef]) -> serde_json::Value {
                     "kind": { "const": "literal" },
                     "literal_type": { "type": "string", "enum": ["text", "date", "datetime", "number", "bool", "quantity"] },
                     "value": { "type": "string" },
-                    "span": {
-                        "type": "array",
-                        "items": { "type": "integer" },
-                        "minItems": 2,
-                        "maxItems": 2
+                    "quote": {
+                        "type": "string",
+                        "description": "A short snippet copied EXACTLY from the episode that contains the value"
                     }
                 },
-                "required": ["literal_type", "value", "span"]
+                "required": ["literal_type", "value", "quote"]
             }
         ]
     });
@@ -565,15 +655,16 @@ claim ::= "{{" ws "\"predicate\"" ws ":" ws predicate ws "," ws "\"subject\"" ws
 valid-from-opt ::= ("\"valid_from\"" ws ":" ws temporal-val ws "," ws)?
 valid-to-opt ::= ("\"valid_to\"" ws ":" ws temporal-val ws "," ws)?
 temporal-val ::= "null" | integer
-mention ::= "{{" ws "\"surface\"" ws ":" ws string ws "," ws "\"entity_type\"" ws ":" ws entity-type ws "," ws "\"span\"" ws ":" ws "[" ws integer ws "," ws integer ws "]" ws "}}"
+mention ::= "{{" ws "\"surface\"" ws ":" ws string ws "," ws "\"entity_type\"" ws ":" ws entity-type ws "," ws "\"quote\"" ws ":" ws nonempty-string ws "}}"
 object-union ::= entity-object | literal-object
 entity-object ::= "{{" ws "\"kind\"" ws ":" ws "\"entity\"" ws "," ws "\"mention\"" ws ":" ws mention ws "}}"
-literal-object ::= "{{" ws "\"kind\"" ws ":" ws "\"literal\"" ws "," ws "\"literal_type\"" ws ":" ws literal-type ws "," ws "\"value\"" ws ":" ws string ws "," ws "\"span\"" ws ":" ws "[" ws integer ws "," ws integer ws "]" ws "}}"
+literal-object ::= "{{" ws "\"kind\"" ws ":" ws "\"literal\"" ws "," ws "\"literal_type\"" ws ":" ws literal-type ws "," ws "\"value\"" ws ":" ws string ws "," ws "\"quote\"" ws ":" ws nonempty-string ws "}}"
 entity-type ::= {etype_alts}
 literal-type ::= "\"text\"" | "\"date\"" | "\"datetime\"" | "\"number\"" | "\"bool\"" | "\"quantity\""
 predicate ::= {pred_alts}
 polarity ::= "\"affirm\"" | "\"deny\""
 string ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\"" ws
+nonempty-string ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))+ "\"" ws
 number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
 integer ::= "-"? ([0-9] | [1-9] [0-9]*) ws
 ws ::= [ \t\n]*
@@ -582,12 +673,14 @@ ws ::= [ \t\n]*
 }
 
 /// Build the extraction system prompt from the registry (P4: no hard-coded predicates).
-/// Pure function.
+/// Pure function. Contract v2 (ADR-006): mentions carry a verbatim `quote`
+/// copied from the episode; the server derives byte spans. The model is never
+/// asked to count offsets — it is asked to copy.
 pub fn build_extraction_prompt(predicates: &[PredicateDef]) -> String {
     let mut s = String::new();
     s.push_str(
         "You are a knowledge extraction engine. Extract structured claims from the given text. \
-         Each claim references entities by their VERBATIM surface form and byte span in the text.\n\n\
+         Each claim references entities by their VERBATIM surface form and a quote copied from the text.\n\n\
          Available predicates:\n",
     );
     for p in predicates {
@@ -602,21 +695,21 @@ pub fn build_extraction_prompt(predicates: &[PredicateDef]) -> String {
         }
     }
     s.push_str(
-        "\nReturn JSON matching the provided schema. For each entity mention, provide the surface \
-         text exactly as it appears in the episode, its type, and the byte offset range \
-         [start, end) where it appears in the text. Byte offsets are relative to the start of \
-         the episode text (offset 0 = first byte).\n\n\
+        "\nReturn JSON matching the provided schema. For each entity mention and each literal \
+         value, provide:\n\
+         - surface: the text exactly as it appears in the episode.\n\
+         - quote: a short snippet (up to ~120 characters) copied EXACTLY from the episode, \
+         character for character, taken from the SAME sentence where the surface appears. \
+         Copy it — do not paraphrase, do not count character positions. The quote is \
+         REQUIRED for every mention, including subjects; an empty quote is an error.\n\n\
          Rules:\n\
-         - Entity surfaces MUST appear verbatim in the text at the given byte span.\n\
-         - Only use predicates from the list above.\n\
+         - The surface MUST occur inside your quote, and the quote MUST occur in the episode.\n\
          - Subject and object types must match the predicate's definition.\n\
          - Set confidence to your confidence in the claim (0.0 to 1.0).\n\
          - Use valid_from/valid_to for time-bounded claims. Use null for 'always true' or 'still true'.\n",
     );
     s
 }
-
-// ─── Few-shot selection (§9.6, 10.8) ──────────────────────────────────────
 
 /// A golden-corpus example for few-shot extraction (§9.6, 10.8).
 /// The `text` is the episode content; `claims_json` is the expected
@@ -626,7 +719,6 @@ pub struct FewShotExample {
     pub text: String,
     pub claims_json: String,
 }
-
 /// Select the k most similar golden episodes to the target text, using
 /// character trigram Jaccard similarity (§9.6, 10.8). Language-independent
 /// by construction (P11).
@@ -673,6 +765,61 @@ pub fn format_few_shot(examples: &[&FewShotExample]) -> String {
     out
 }
 
+/// Built-in few-shot corpus for the extraction prompt (§9.6, 10.8, ADR-006).
+///
+/// Multilingual by design (P11): an English person-facts note, a Korean note,
+/// and a literal-value note. Every example is validated against `core_v1()`
+/// and the quote contract by `few_shot_corpus_examples_validate` — a broken
+/// example teaches the model the wrong contract, so the test is load-bearing.
+/// Selection is language-independent (trigram Jaccard, see [`few_shot_examples`]).
+pub fn default_few_shot_corpus() -> Vec<FewShotExample> {
+    vec![
+        FewShotExample {
+            text: "Alice works on ProjectX at Acme Corp. Bob knows Carol.".into(),
+            claims_json: r#"{"claims":[
+  {"predicate":"works_on",
+   "subject":{"surface":"Alice","entity_type":"Person","quote":"Alice works on ProjectX"},
+   "object":{"kind":"entity","mention":{"surface":"ProjectX","entity_type":"Project","quote":"Alice works on ProjectX"}},
+   "polarity":"affirm","confidence":0.95},
+  {"predicate":"employed_by",
+   "subject":{"surface":"Alice","entity_type":"Person","quote":"Alice works on ProjectX at Acme Corp"},
+   "object":{"kind":"entity","mention":{"surface":"Acme Corp","entity_type":"Organization","quote":"at Acme Corp"}},
+   "polarity":"affirm","confidence":0.9},
+  {"predicate":"knows",
+   "subject":{"surface":"Bob","entity_type":"Person","quote":"Bob knows Carol"},
+   "object":{"kind":"entity","mention":{"surface":"Carol","entity_type":"Person","quote":"Bob knows Carol"}},
+   "polarity":"affirm","confidence":0.9}
+]}"#.into(),
+        },
+        FewShotExample {
+            text: "김민수는 Acme Corp에 다니고 있다. 이서연은 brain-ui 프로젝트를 진행한다.".into(),
+            claims_json: r#"{"claims":[
+  {"predicate":"employed_by",
+   "subject":{"surface":"김민수","entity_type":"Person","quote":"김민수는 Acme Corp에 다니고 있다"},
+   "object":{"kind":"entity","mention":{"surface":"Acme Corp","entity_type":"Organization","quote":"Acme Corp에 다니고 있다"}},
+   "polarity":"affirm","confidence":0.9},
+  {"predicate":"works_on",
+   "subject":{"surface":"이서연","entity_type":"Person","quote":"이서연은 brain-ui 프로젝트를 진행한다"},
+   "object":{"kind":"entity","mention":{"surface":"brain-ui","entity_type":"Project","quote":"brain-ui 프로젝트를 진행한다"}},
+   "polarity":"affirm","confidence":0.9}
+]}"#.into(),
+        },
+        FewShotExample {
+            text: "Alice's full name is Alice Smith. She was born in Seoul.".into(),
+            claims_json: r#"{"claims":[
+  {"predicate":"full_name",
+   "subject":{"surface":"Alice","entity_type":"Person","quote":"Alice's full name is Alice Smith"},
+   "object":{"kind":"literal","literal_type":"text","value":"Alice Smith","quote":"full name is Alice Smith"},
+   "polarity":"affirm","confidence":0.95},
+  {"predicate":"born_in",
+   "subject":{"surface":"Alice","entity_type":"Person","quote":"Alice's full name"},
+   "object":{"kind":"entity","mention":{"surface":"Seoul","entity_type":"Place","quote":"born in Seoul"}},
+   "polarity":"affirm","confidence":0.9}
+]}"#.into(),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,6 +864,7 @@ mod tests {
         let mut m = MentionRef {
             surface: "the user".into(),
             entity_type: "person".into(),
+            quote: None,
             span: (0, 8),
         };
         assert!(resolve_mention(&mut m, content));
@@ -727,6 +875,7 @@ mod tests {
         let mut m = MentionRef {
             surface: "Rust".into(),
             entity_type: "technology".into(),
+            quote: None,
             span: (0, 4),
         };
         assert!(!resolve_mention(&mut m, content));
@@ -738,6 +887,7 @@ mod tests {
         let mut m = MentionRef {
             surface: "Python".into(),
             entity_type: "technology".into(),
+            quote: None,
             span: (0, 6),
         };
         assert!(!resolve_mention(&mut m, content));
@@ -848,6 +998,71 @@ mod tests {
         assert!(prompt.contains("VERBATIM"));
     }
 
+    #[test]
+    fn prompt_v2_teaches_quotes_not_offsets() {
+        let prompt = build_extraction_prompt(crate::registry::core_v1());
+        assert!(
+            prompt.contains("quote"),
+            "v2 prompt must teach quote copying"
+        );
+        assert!(
+            !prompt.contains("byte offset"),
+            "v2 prompt must not demand offset arithmetic"
+        );
+    }
+
+    #[test]
+    fn grammar_uses_quotes_not_spans() {
+        let g = grammar_from_registry(crate::registry::core_v1());
+        let norm: String = g.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            norm.contains("\"\\\"quote\\\"\""),
+            "mention and literal rules must require a quote"
+        );
+        assert!(
+            !norm.contains("\"span\""),
+            "model-facing grammar must not ask for numeric spans (ADR-006)"
+        );
+    }
+
+    #[test]
+    fn schema_uses_quotes_not_spans() {
+        let s = schema_from_registry(crate::registry::core_v1());
+        let mention = &s["properties"]["claims"]["items"]["properties"]["subject"];
+        assert!(
+            mention["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "quote"),
+            "mention must require quote"
+        );
+        assert!(
+            !mention["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key("span"),
+            "model-facing schema must not ask for numeric spans"
+        );
+    }
+
+    #[test]
+    fn few_shot_corpus_examples_validate() {
+        // Every built-in few-shot example must be a fully valid extraction
+        // under the current registry and the quote contract — the examples
+        // teach the contract; a broken example teaches the wrong thing.
+        for ex in default_few_shot_corpus() {
+            let parsed: ExtractionResponse = serde_json::from_str(&ex.claims_json)
+                .unwrap_or_else(|e| panic!("corpus example not parseable: {e}"));
+            let result = validate_claims(&parsed.claims, &ex.text, crate::registry::core_v1());
+            assert!(
+                result.valid.len() == parsed.claims.len() && result.invalid.is_empty(),
+                "corpus example invalid: {:#?}",
+                result.invalid
+            );
+        }
+    }
+
     fn make_claim(
         predicate: &str,
         subj_surface: &str,
@@ -862,12 +1077,14 @@ mod tests {
             subject: MentionRef {
                 surface: subj_surface.into(),
                 entity_type: subj_type.into(),
+                quote: None,
                 span: subj_span,
             },
             object: ClaimObject::Entity {
                 mention: MentionRef {
                     surface: obj_surface.into(),
                     entity_type: obj_type.into(),
+                    quote: None,
                     span: obj_span,
                 },
             },
@@ -1014,6 +1231,210 @@ mod tests {
         ));
     }
 
+    // ─── quote-based evidence (ADR-006) ──────────────────────────────────
+
+    fn make_claim_with_quote(
+        predicate: &str,
+        subj_surface: &str,
+        subj_type: &str,
+        subj_quote: &str,
+        obj_surface: &str,
+        obj_type: &str,
+        obj_quote: &str,
+    ) -> Claim {
+        Claim {
+            predicate: predicate.into(),
+            subject: MentionRef {
+                surface: subj_surface.into(),
+                entity_type: subj_type.into(),
+                quote: Some(subj_quote.into()),
+                span: (0, 0), // deliberately wrong: quotes replace model spans
+            },
+            object: ClaimObject::Entity {
+                mention: MentionRef {
+                    surface: obj_surface.into(),
+                    entity_type: obj_type.into(),
+                    quote: Some(obj_quote.into()),
+                    span: (0, 0),
+                },
+            },
+            polarity: Polarity::Affirm,
+            valid_from: None,
+            valid_to: None,
+            confidence: 0.9,
+        }
+    }
+
+    #[test]
+    fn quote_locates_and_derives_span_multilingual() {
+        // Small models cannot count bytes; they can copy. The server derives
+        // the span from the located quote — Korean included.
+        let content = "김민수는 Acme Corp에 다니고 있다. 이서연은 brain-ui를 진행한다.";
+        let claim = make_claim_with_quote(
+            "employed_by",
+            "김민수",
+            "Person",
+            "김민수는 Acme Corp에 다니고 있다",
+            "Acme Corp",
+            "Organization",
+            "Acme Corp에 다니고 있다",
+        );
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert_eq!(result.valid.len(), 1, "errors: {:?}", result.invalid);
+        let start = content.find("김민수").unwrap() as u32;
+        assert_eq!(
+            result.valid[0].subject.span,
+            (start, start + "김민수".len() as u32)
+        );
+    }
+
+    #[test]
+    fn quote_disambiguates_multiple_occurrences() {
+        // "Alice" occurs twice; the quote picks the mention the model read.
+        let content = "Alice met Bob. Later Alice left.";
+        let claim = make_claim_with_quote(
+            "knows",
+            "Alice",
+            "Person",
+            "Alice met Bob",
+            "Bob",
+            "Person",
+            "Alice met Bob",
+        );
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert_eq!(result.valid.len(), 1, "errors: {:?}", result.invalid);
+        assert_eq!(result.valid[0].subject.span, (0, 5)); // first Alice
+    }
+
+    #[test]
+    fn quote_not_found_rejects() {
+        // A fabricated quote (not copied from the episode) is the new
+        // fabricated-entity gate: nothing to locate.
+        let content = "Alice works on ProjectX.";
+        let claim = make_claim_with_quote(
+            "works_on",
+            "Alice",
+            "Person",
+            "Alice works on SecreTProJect", // not verbatim in content
+            "ProjectX",
+            "Project",
+            "works on ProjectX",
+        );
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert!(result.valid.is_empty(), "fabricated quote must be rejected");
+        assert!(matches!(
+            result.invalid[0].1[0],
+            ValidationError::SurfaceNotVerbatim { .. }
+        ));
+    }
+
+    #[test]
+    fn quote_without_surface_rejects() {
+        // The quote is real, but the surface does not occur inside it —
+        // the evidence does not support the mention.
+        let content = "Alice works on ProjectX. Bob knows Carol.";
+        let claim = make_claim_with_quote(
+            "works_on",
+            "Bob",
+            "Person",
+            "Alice works on ProjectX", // quote exists, Bob is not in it
+            "ProjectX",
+            "Project",
+            "Alice works on ProjectX",
+        );
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert!(result.valid.is_empty(), "surface absent from quote");
+        assert!(matches!(
+            result.invalid[0].1[0],
+            ValidationError::SurfaceNotVerbatim { .. }
+        ));
+    }
+
+    #[test]
+    fn quote_casing_canonicalizes_surface() {
+        let content = "Alice works on ProjectX at Acme Corp.";
+        let claim = make_claim_with_quote(
+            "employed_by",
+            "alice",
+            "Person",
+            "Alice works on ProjectX at Acme Corp",
+            "acme corp",
+            "Organization",
+            "at Acme Corp",
+        );
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert_eq!(result.valid.len(), 1, "errors: {:?}", result.invalid);
+        assert_eq!(result.valid[0].subject.surface, "Alice");
+    }
+
+    #[test]
+    fn quote_casing_fallback_survives_multibyte_window() {
+        // Regression: the ASCII-case fallback slices `candidate[..needle.len()]`;
+        let content = "김민수는 한국 지사 Acme Corp에서 일한다. 본사는 미국에 있다.";
+        // panic BEFORE the loop ever reaches the real (ASCII) occurrence.
+        // The fallback must skip non-boundary offsets, not crash.
+        let claim = make_claim_with_quote(
+            "employed_by",
+            "김민수",
+            "Person",
+            "김민수는 한국 지사 Acme Corp에서 일한다",
+            "ACME",
+            "Organization",
+            "한국 지사 Acme Corp에서",
+        );
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert_eq!(result.valid.len(), 1, "errors: {:?}", result.invalid);
+        // The object surface canonicalizes to the source casing.
+        assert_eq!(
+            result.valid[0].subject.surface, "김민수",
+            "exact-match subject must pass untouched"
+        );
+        if let ClaimObject::Entity { mention } = &result.valid[0].object {
+            assert_eq!(
+                mention.surface, "Acme",
+                "casing must canonicalize to source"
+            );
+            let start = content.find("Acme").unwrap() as u32;
+            assert_eq!(mention.span, (start, start + "Acme".len() as u32));
+        } else {
+            panic!("expected entity object");
+        }
+    }
+
+    #[test]
+    fn literal_quote_derives_span() {
+        // Literal objects carry quotes too; the value must occur inside the
+        // located quote (stronger than the old bounds-only check).
+        let content = "Alice's full name is Alice Smith.";
+        let claim = Claim {
+            predicate: "full_name".into(),
+            subject: MentionRef {
+                surface: "Alice".into(),
+                entity_type: "Person".into(),
+                quote: Some("full name is Alice Smith".into()),
+                span: (0, 0),
+            },
+            object: ClaimObject::Literal {
+                literal_type: "text".into(),
+                value: "Alice Smith".into(),
+                quote: Some("full name is Alice Smith".into()),
+                span: (0, 0),
+            },
+            polarity: Polarity::Affirm,
+            valid_from: None,
+            valid_to: None,
+            confidence: 0.9,
+        };
+        let result = validate_claims(&[claim], content, crate::registry::core_v1());
+        assert_eq!(result.valid.len(), 1, "errors: {:?}", result.invalid);
+        let start = content.find("Alice Smith").unwrap() as u32;
+        if let ClaimObject::Literal { span, .. } = &result.valid[0].object {
+            assert_eq!(*span, (start, start + "Alice Smith".len() as u32));
+        } else {
+            panic!("expected literal object");
+        }
+    }
+
     // ─── grammar_from_registry tests ──────────────────────────────────────
 
     #[test]
@@ -1045,8 +1466,26 @@ mod tests {
     }
 
     #[test]
+    fn grammar_forbids_empty_quotes() {
+        // Measured on qwen2.5-1.5b: the model lazily emits "quote":"" for
+        // subjects. An empty quote is no evidence — the grammar must force
+        // at least one character, so the model has to copy something.
+        let g = grammar_from_registry(crate::registry::core_v1());
+        let norm: String = g.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            norm.contains("nonempty-string ::="),
+            "a nonempty-string rule must exist"
+        );
+        assert!(
+            norm.contains("\"\\\"quote\\\"\" ws \":\" ws nonempty-string"),
+            "quote fields must use nonempty-string"
+        );
+    }
+
+    #[test]
     fn grammar_and_schema_agree_on_predicates() {
         let preds = crate::registry::core_v1();
+
         let grammar = grammar_from_registry(preds);
         let schema = schema_from_registry(preds);
 

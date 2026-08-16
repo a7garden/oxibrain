@@ -196,7 +196,7 @@ pub fn config(
     use oxibrain_core::registry::CORE_V1_MAJOR;
     oxibrain_core::extraction::ExtractorConfig {
         model_id,
-        prompt_version: 1,
+        prompt_version: 2, // v2: quote-based mentions (ADR-006)
         registry_major: CORE_V1_MAJOR,
         mechanism,
         max_tokens: 8192,
