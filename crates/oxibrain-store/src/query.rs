@@ -256,11 +256,10 @@ pub struct SearchResult {
 }
 
 /// Project a `RankingResult` to entity search hits the UI can render.
-/// Entity targets get surface + type enrichment; statement / episode
-/// targets surface as their raw id (the UI filters non-entity rows
-/// today, but the projection keeps the contract uniform). The result
-/// preserves the ranker's order — callers (the MCP `search` tool) wrap
-/// it as the JSON-RPC tool response.
+/// Only `TargetId::Entity` items pass — the `/ask` surface is an entity
+/// list (§14.2); statement / episode / chunk / community targets stay in
+/// the raw `RankingResult` envelope for callers that want them. The
+/// result preserves the ranker's order.
 pub fn search_results(
     conn: &Connection,
     space: &str,
@@ -268,19 +267,14 @@ pub fn search_results(
 ) -> Result<Vec<SearchResult>, BrainError> {
     let mut out = Vec::with_capacity(result.items.len());
     for item in &result.items {
-        let (entity_id, snippet) = match &item.target {
-            TargetId::Entity { id } => (
-                id.clone(),
-                if item.facts.predicate.is_empty() {
-                    String::new()
-                } else {
-                    format!("matched: {}", item.facts.predicate)
-                },
-            ),
-            TargetId::Statement { id } => (id.clone(), String::new()),
-            TargetId::Episode { id } => (id.clone(), String::new()),
-            TargetId::Chunk { id } => (id.clone(), String::new()),
-            TargetId::Community { id } => (id.clone(), String::new()),
+        let entity_id = match &item.target {
+            TargetId::Entity { id } => id.clone(),
+            _ => continue,
+        };
+        let snippet = if item.facts.predicate.is_empty() {
+            String::new()
+        } else {
+            format!("matched: {}", item.facts.predicate)
         };
         // Surface + type lookup is best-effort: a missing row falls back
         // to the id and "Unknown" so a transient delete doesn't abort

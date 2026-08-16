@@ -283,6 +283,17 @@ impl Brain {
         })
     }
 
+    /// Canonical display surface for an entity id (follows merge chain).
+    /// Used by MCP projections that render human-readable object names.
+    pub async fn entity_surface(&self, space: &str, entity_id: &str) -> Result<String, BrainError> {
+        let space = space.to_string();
+        let entity_id = entity_id.to_string();
+        read_op!(self.handle, |conn| {
+            oxibrain_store::brief::surface_of(conn, &entity_id)
+                .map_err(|_| BrainError::NotFound(format!("entity {entity_id} in {space}")))
+        })
+    }
+
     /// Beliefs as of a valid-time point.
     pub async fn beliefs_as_of(
         &self,

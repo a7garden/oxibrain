@@ -420,7 +420,14 @@ impl BrainServer {
         // matches the TypeScript `ExplainBlock` interface (statement.object: unknown).
         let object_json = match &explain.statement.object {
             oxibrain_core::knowledge::Object::Entity(id) => {
-                serde_json::json!({"kind": "entity", "id": id})
+                // Include the display surface so the UI renders
+                // "employed_by → Acme Corp" instead of a hash id.
+                let surface = self
+                    .brain
+                    .entity_surface(&space_id, id)
+                    .await
+                    .unwrap_or_else(|_| id.clone());
+                serde_json::json!({"kind": "entity", "id": id, "surface": surface})
             }
             oxibrain_core::knowledge::Object::Literal(tv) => {
                 serde_json::to_value(tv).unwrap_or(serde_json::Value::Null)
@@ -1918,9 +1925,14 @@ mod tests {
             vec!["assertions", "confidence_breakdown", "statement", "status"],
             "ExplainBlock DTO keys, got: {keys:?}"
         );
-        // statement.object is projected to {kind, id} for entity objects.
+        // statement.object carries {kind, id, surface} for entity objects —
+        // the surface is what the UI renders.
         let obj = &parsed["statement"]["object"];
         assert_eq!(obj["kind"], "entity");
+        assert_eq!(
+            obj["surface"], "Acme Corp",
+            "entity object must carry its display surface, got {obj}"
+        );
         assert!(
             obj["id"].is_string() && !obj["id"].as_str().unwrap().is_empty(),
             "object.id must be a non-empty entity id, got: {obj}"
