@@ -386,6 +386,20 @@ impl Brain {
             oxibrain_store::knowledge::list_entities(conn, &space, limit)
         })
     }
+
+    /// Entities with canonical surfaces resolved, for the `space://` resource.
+    /// One SQL join — no N+1.
+    pub async fn list_entity_cards(
+        &self,
+        space: &str,
+        limit: usize,
+    ) -> Result<Vec<oxibrain_store::knowledge::EntityCard>, BrainError> {
+        let space = space.to_string();
+        read_op!(self.handle, |conn| {
+            oxibrain_store::knowledge::list_entity_cards(conn, &space, limit)
+        })
+    }
+
     /// List merge records in a space, most recent first.
     /// Used by the `review_merges` MCP tool.
     pub async fn list_merges(

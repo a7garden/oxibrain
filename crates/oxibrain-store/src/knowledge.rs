@@ -115,6 +115,58 @@ pub fn list_entities(
     Ok(result)
 }
 
+/// Entity row with the canonical surface resolved — the shape the `space://`
+/// resource returns. One join, no N+1.
+///
+/// `surface` is resolved in this order: (1) `entity_keys.surface` of the row
+/// `entities.canonical_key` points at, (2) any key on the entity — preferring
+/// `user_declared` over other origins — since the projection pipeline does
+/// not always set `canonical_key`, (3) the entity id as last resort.
+/// `ty` is the user-visible entity type (stored as `entities.type_name`).
+#[derive(Debug, Clone)]
+pub struct EntityCard {
+    pub id: String,
+    pub ty: String,
+    pub surface: String,
+}
+
+/// List entity cards for a space, newest-first, up to `limit`. One join, no
+/// N+1.
+pub fn list_entity_cards(
+    conn: &Connection,
+    space: &str,
+    limit: usize,
+) -> Result<Vec<EntityCard>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.id, e.type_name,
+                    COALESCE(
+                        k.surface,
+                        (SELECT surface FROM entity_keys WHERE entity_id = e.id ORDER BY origin = 'user_declared' DESC LIMIT 1),
+                        e.id
+                    )
+             FROM entities e
+             LEFT JOIN entity_keys k ON k.id = e.canonical_key
+             WHERE e.space_id = ?1 AND e.merged_into IS NULL
+             ORDER BY e.created_at DESC LIMIT ?2",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space, limit as i64], |r| {
+            Ok(EntityCard {
+                id: r.get(0)?,
+                ty: r.get(1)?,
+                surface: r.get(2)?,
+            })
+        })
+        .map_err(sql_err)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(sql_err)?);
+    }
+    Ok(out)
+}
+
 // ── Entity keys ──────────────────────────────────────────────────────────
 
 pub fn insert_entity_key(conn: &Connection, k: &EntityKey) -> Result<bool, BrainError> {

@@ -666,11 +666,11 @@ impl BrainServer {
 
         let text = match scheme {
             "space" => {
-                let entities = self
+                let cards = self
                     .brain
-                    .list_entities(&space_id, 100)
+                    .list_entity_cards(&space_id, 100)
                     .await
-                    .map_err(|e| (INTERNAL_ERROR, format!("list_entities: {e}")))?;
+                    .map_err(|e| (INTERNAL_ERROR, format!("list_entity_cards: {e}")))?;
                 let episode_count = self
                     .brain
                     .episode_count()
@@ -678,17 +678,17 @@ impl BrainServer {
                     .map_err(|e| (INTERNAL_ERROR, format!("episode_count: {e}")))?;
                 let contradictions = self
                     .brain
-                    .contradictions(&space_id)
+                    .contradiction_details(&space_id)
                     .await
                     .map_err(|e| (INTERNAL_ERROR, format!("contradictions: {e}")))?;
                 let summary = json!({
                     "space": path,
                     "space_id": space_id,
-                    "entity_count": entities.len(),
+                    "entity_count": cards.len(),
                     "episode_count": episode_count,
                     "contradiction_count": contradictions.len(),
-                    "recent_entities": entities.iter().take(20).map(|e| json!({
-                        "id": e.id, "type": e.ty, "canonical_key": e.canonical_key
+                    "recent_entities": cards.iter().take(20).map(|c| json!({
+                        "id": c.id, "surface": c.surface, "type": c.ty
                     })).collect::<Vec<_>>()
                 });
                 serde_json::to_string_pretty(&summary).unwrap_or_default()
@@ -2850,6 +2850,56 @@ mod tests {
         let overview: Value = serde_json::from_str(text).expect("space parse");
         assert!(overview["entity_count"].as_u64().unwrap() >= 1);
         assert!(overview["episode_count"].as_u64().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn space_resource_contract_exact_keys() {
+        let (_dir, server) = fresh_server().await;
+        let (_ep, _alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(
+                1,
+                "resources/read",
+                Some(serde_json::json!({ "uri": "space://t" })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["contents"][0]["text"].as_str().unwrap();
+        let v: serde_json::Value = serde_json::from_str(text).expect("overview parses");
+
+        // serde_json::Map iterates keys in sorted order (BTreeMap), so the
+        // wire-format declaration order is lost once the text is parsed
+        // back into Value. Compare the *set*, not the sequence.
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "contradiction_count",
+                "entity_count",
+                "episode_count",
+                "recent_entities",
+                "space",
+                "space_id",
+            ]
+        );
+        assert_eq!(
+            v["entity_count"].as_u64().unwrap(),
+            2,
+            "Alice + Acme Corp: {text}"
+        );
+        let re = v["recent_entities"].as_array().unwrap();
+
+        for e in re {
+            let ek: Vec<&str> = e.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+            assert_eq!(ek, vec!["id", "surface", "type"], "card keys: {ek:?}");
+            assert!(
+                !e["surface"].as_str().unwrap().is_empty(),
+                "surface never empty"
+            );
+        }
+        assert!(re.iter().any(|e| e["surface"] == "Alice"));
     }
 
     #[tokio::test]
