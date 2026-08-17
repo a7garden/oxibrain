@@ -16,6 +16,9 @@ dist/
 # SDD workspace scratch
 .superpowers/
 
+# Git worktrees (isolated plan workspaces)
+/.worktrees/
+
 # proptest failure artifacts
 proptest-regressions/
 spike/gbnf/target/
