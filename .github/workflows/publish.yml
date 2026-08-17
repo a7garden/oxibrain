@@ -72,11 +72,10 @@ jobs:
           publish oxibrain-store
           publish oxibrain-views
           publish oxibrain-embed-local --no-verify
-          publish oxibrain-llm-http
           publish oxibrain-llm-local --no-verify
           publish oxibrain-connectors
-          publish oxibrain-client
-          publish oxibrain-mcp
+          publish oxibrain-client --no-verify
+          publish oxibrain-mcp --no-verify
           publish oxibrain-cli
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
