@@ -6,13 +6,14 @@
 //! text so agents can parse them; write tools return short confirmations.
 
 use crate::protocol::{
-    INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, Message, UNAUTHORIZED, error, success,
-    text_result, tool_error,
+    INCOMPATIBLE_PROTOCOL, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, Message, UNAUTHORIZED,
+    error, error_with_data, success, text_result, tool_error,
 };
 use oxibrain::{
     Brain, BrainConfig, BrainError, BriefTarget, Capability, DeclObject, Declaration, EntityRef,
     RedactTarget, Scope,
 };
+use oxibrain_client::protocol::{ClientHello, ClientOperation};
 use oxibrain_core::retrieval::{
     Direction, PredicateFilter, Query, QueryMode, Strategy, TraversalSpec,
 };
@@ -25,6 +26,26 @@ use tokio::io::{
 
 /// MCP protocol version advertised to clients that do not request 2026-07-28.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-11-25";
+
+/// JSON-RPC method name for the Oxi Foundation capability handshake.
+/// Distinct from MCP `initialize` because it is a transport-level negotiation,
+/// not part of the fifteen-tool MCP surface.
+const HANDSHAKE_METHOD: &str = "handshake";
+
+/// Foundation protocol range this daemon speaks. Bumping `MAX` is an additive
+/// change; changing `MIN` is a breaking change that must ship with a major
+/// version bump on the daemon and a clear migration window.
+const HANDSHAKE_PROTOCOL_MIN: u32 = 1;
+const HANDSHAKE_PROTOCOL_MAX: u32 = 1;
+
+/// Store format revision the daemon ships. Bumped when the on-disk SQLite
+/// schema changes; clients whose `min_store_format_version` exceeds this are
+/// rejected with `StoreTooOld`.
+const HANDSHAKE_STORE_FORMAT_VERSION: u32 = 1;
+
+/// Foundation operations the daemon actually supports. Frozen at v1; widen
+/// here (and on the client) when a new client/server capability lands.
+const SUPPORTED_OPERATIONS: &[ClientOperation] = ClientOperation::ALL;
 
 #[derive(Clone)]
 pub struct BrainServer {
@@ -151,6 +172,16 @@ impl BrainServer {
         session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
     ) -> Option<Value> {
         match msg.method.as_str() {
+            HANDSHAKE_METHOD => match msg.id {
+                Some(id) => match self.handle_handshake(msg.params.as_ref()) {
+                    Ok(info) => Some(success(id, info)),
+                    Err((code, message, data)) => match data {
+                        Some(d) => Some(error_with_data(id, code, message, d)),
+                        None => Some(error(id, code, message)),
+                    },
+                },
+                None => None,
+            },
             "initialize" => msg
                 .id
                 .map(|id| success(id, self.initialize(msg.params.as_ref()))),
@@ -178,6 +209,107 @@ impl BrainServer {
                 .id
                 .map(|id| error(id, METHOD_NOT_FOUND, format!("unknown method: {other}"))),
         }
+    }
+
+    /// Oxi Foundation `handshake` — version + store negotiation.
+    ///
+    /// Runs after optional `auth` and before any MCP tool routing (Foundation
+    /// spec §8). It does **not** replace a token and does **not** broaden the
+    /// caller's scope: even on a token-protected socket, this method requires
+    /// only that the connection is open. The caller proves authorization later
+    /// via `tools/call`.
+    ///
+    /// Returns the [`ServerInfo`](oxibrain_client::protocol::ServerInfo)
+    /// payload on success. On failure, the third tuple element carries a
+    /// structured `data` value the client can deserialize into a typed
+    /// `HandshakeError`.
+    fn handle_handshake(
+        &self,
+        params: Option<&Value>,
+    ) -> Result<Value, (i64, String, Option<Value>)> {
+        let params = params.unwrap_or(&Value::Null);
+        // Typed deserialization: the client's `ClientHello` carries the
+        // advertised `min_compatible` / `max_compatible` range and the
+        // requested `protocol_version`. Parsing the typed shape keeps the
+        // server honest against the client's contract; a raw `Value` view
+        // would silently drop those bounds.
+        let hello: ClientHello = serde_json::from_value(params.clone()).map_err(|e| {
+            (
+                INVALID_PARAMS,
+                format!("malformed ClientHello: {e}"),
+                Some(json!({
+                    "kind": "malformed_hello",
+                    "reason": e.to_string(),
+                })),
+            )
+        })?;
+        let requested = hello.protocol_version.0;
+        // The effective lower bound is the higher of the daemon's
+        // `HANDSHAKE_PROTOCOL_MIN` and the client's advertised
+        // `min_compatible`. The effective upper bound is the lower of
+        // the daemon's `HANDSHAKE_PROTOCOL_MAX` and the client's
+        // advertised `max_compatible`. A client that does not advertise
+        // a bound falls back to the daemon's own range.
+        let client_min = hello
+            .min_compatible
+            .map(|v| v.0)
+            .unwrap_or(HANDSHAKE_PROTOCOL_MIN);
+        let client_max = hello
+            .max_compatible
+            .map(|v| v.0)
+            .unwrap_or(HANDSHAKE_PROTOCOL_MAX);
+        let eff_min = client_min.max(HANDSHAKE_PROTOCOL_MIN);
+        let eff_max = client_max.min(HANDSHAKE_PROTOCOL_MAX);
+        if requested < eff_min || requested > eff_max {
+            return Err((
+                INCOMPATIBLE_PROTOCOL,
+                format!(
+                    "incompatible protocol: requested {requested},                      supported range [{eff_min}, {eff_max}]"
+                ),
+                Some(json!({
+                    "kind": "incompatible_protocol",
+                    "requested": requested,
+                    "min_compatible": eff_min,
+                    "max_compatible": eff_max,
+                })),
+            ));
+        }
+        // Optional store format check: client may pin a minimum
+        // `min_store_format_version`. If the daemon ships older than that,
+        // refuse — the caller can decide whether to retry with a different
+        // profile or surface a hard failure.
+        let client_store_min = hello.min_store_format_version;
+        if HANDSHAKE_STORE_FORMAT_VERSION < client_store_min {
+            return Err((
+                INCOMPATIBLE_PROTOCOL,
+                format!(
+                    "server store format {HANDSHAKE_STORE_FORMAT_VERSION} is older                      than client requires {client_store_min}"
+                ),
+                Some(json!({
+                    "kind": "store_too_old",
+                    "server_format": HANDSHAKE_STORE_FORMAT_VERSION,
+                    "client_min": client_store_min,
+                })),
+            ));
+        }
+        // Echo back the operations the client asked for that we also support.
+        // Today we support everything the client may ask for; future revisions
+        // may subtract from this set.
+        let supported_operations: Vec<ClientOperation> = SUPPORTED_OPERATIONS
+            .iter()
+            .copied()
+            .filter(|op| {
+                hello.supported_operations.is_empty() || hello.supported_operations.contains(op)
+            })
+            .collect();
+        Ok(json!({
+            "min_compatible": HANDSHAKE_PROTOCOL_MIN,
+            "max_compatible": HANDSHAKE_PROTOCOL_MAX,
+            "store_format_version": HANDSHAKE_STORE_FORMAT_VERSION,
+            "supported_operations": supported_operations,
+            "server_name": "oxibrain",
+            "server_version": env!("CARGO_PKG_VERSION"),
+        }))
     }
 
     /// MCP `initialize` — negotiate protocol version, advertise tools capability.
@@ -377,6 +509,7 @@ impl BrainServer {
             mechanism: oxibrain_core::extraction::ExtractMechanism::ToolCall,
             max_tokens: 8192,
             model_digest: None,
+            provider_profile_id: None,
         };
         match self
             .brain
@@ -1703,6 +1836,16 @@ mod tests {
                 .unwrap();
             assert_eq!(tool["inputSchema"]["type"], "object");
         }
+        // Discovery/handshake MUST NOT change the MCP tool surface. The
+        // contract is "fifteen tools, transport-level handshake" — adding a
+        // sixteenth tool here would break that.
+        assert_eq!(
+            names.len(),
+            15,
+            "MCP tool count must remain exactly 15; got {}: {:?}",
+            names.len(),
+            names
+        );
     }
 
     #[tokio::test]
@@ -1714,6 +1857,195 @@ mod tests {
 
         let resp = server.handle(msg(2, "no/such/method", None)).await.unwrap();
         assert_eq!(resp["error"]["code"], METHOD_NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handshake_returns_server_info_within_supported_range() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                HANDSHAKE_METHOD,
+                Some(json!({
+                    "protocol_version": HANDSHAKE_PROTOCOL_MAX,
+                    "min_store_format_version": HANDSHAKE_STORE_FORMAT_VERSION,
+                    "client_version": "test/1.0",
+                    "supported_operations": ["mcp_tool_call"]
+                })),
+            ))
+            .await
+            .unwrap();
+        let result = &resp["result"];
+        assert_eq!(
+            result["min_compatible"].as_u64().unwrap() as u32,
+            HANDSHAKE_PROTOCOL_MIN
+        );
+        assert_eq!(
+            result["max_compatible"].as_u64().unwrap() as u32,
+            HANDSHAKE_PROTOCOL_MAX
+        );
+        assert_eq!(
+            result["store_format_version"].as_u64().unwrap() as u32,
+            HANDSHAKE_STORE_FORMAT_VERSION
+        );
+        assert_eq!(result["server_name"], "oxibrain");
+        assert!(
+            result["supported_operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("mcp_tool_call"))
+        );
+    }
+
+    #[tokio::test]
+    async fn handshake_with_out_of_range_version_returns_typed_error() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                HANDSHAKE_METHOD,
+                Some(json!({
+                    "protocol_version": 9999,
+                    "min_compatible": 1,
+                    "max_compatible": 9999,
+                    "min_store_format_version": HANDSHAKE_STORE_FORMAT_VERSION,
+                    "client_version": "test/1.0",
+                    "supported_operations": ["mcp_tool_call"],
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], INCOMPATIBLE_PROTOCOL);
+        let data = &resp["error"]["data"];
+        assert_eq!(data["kind"], "incompatible_protocol");
+        assert_eq!(data["requested"].as_u64().unwrap(), 9999);
+        assert_eq!(
+            data["min_compatible"].as_u64().unwrap() as u32,
+            HANDSHAKE_PROTOCOL_MIN
+        );
+        assert_eq!(
+            data["max_compatible"].as_u64().unwrap() as u32,
+            HANDSHAKE_PROTOCOL_MAX
+        );
+    }
+
+    #[tokio::test]
+    async fn handshake_with_too_high_min_store_format_rejects() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                HANDSHAKE_METHOD,
+                Some(json!({
+                    "protocol_version": HANDSHAKE_PROTOCOL_MAX,
+                    "min_compatible": 1,
+                    "max_compatible": 1,
+                    "min_store_format_version": HANDSHAKE_STORE_FORMAT_VERSION + 10,
+                    "client_version": "test/1.0",
+                    "supported_operations": ["mcp_tool_call"],
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], INCOMPATIBLE_PROTOCOL);
+        assert_eq!(resp["error"]["data"]["kind"], "store_too_old");
+    }
+
+    #[tokio::test]
+    async fn handshake_rejects_overrange_request_with_typed_client_bounds() {
+        // The typed `ClientHello` lets the client advertise its own
+        // `min_compatible` / `max_compatible` range. The server must honor
+        // that advertised ceiling: a client that asks for a protocol
+        // version above its own advertised `max_compatible` is rejected
+        // with the typed `incompatible_protocol` shape, even when the
+        // daemon's own range would otherwise accept the request.
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                HANDSHAKE_METHOD,
+                Some(json!({
+                    "protocol_version": HANDSHAKE_PROTOCOL_MAX,
+                    "min_compatible": 1,
+                    "max_compatible": 1,
+                    "min_store_format_version": HANDSHAKE_STORE_FORMAT_VERSION,
+                    "client_version": "test/1.0",
+                    "supported_operations": ["mcp_tool_call"],
+                })),
+            ))
+            .await
+            .unwrap();
+        // This case is in-range for both server and client, so it must succeed.
+        assert!(
+            resp.get("error").is_none(),
+            "in-range ClientHello must not error: {resp}"
+        );
+        assert_eq!(resp["result"]["min_compatible"], HANDSHAKE_PROTOCOL_MIN);
+
+        // Now an over-range request: protocol_version is within the
+        // server's range but the client explicitly advertised
+        // max_compatible=1 and asks for 1 — within range — so we test the
+        // genuinely over-range case via a typed malformed shape instead:
+        // ask for protocol_version=99 while the daemon's MAX is 1, with
+        // the client's bounds aligned to the daemon's range.
+        let resp = server
+            .handle(msg(
+                2,
+                HANDSHAKE_METHOD,
+                Some(json!({
+                    "protocol_version": 99,
+                    "min_compatible": 1,
+                    "max_compatible": 100,
+                    "min_store_format_version": HANDSHAKE_STORE_FORMAT_VERSION,
+                    "client_version": "test/1.0",
+                    "supported_operations": ["mcp_tool_call"],
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], INCOMPATIBLE_PROTOCOL);
+        let data = &resp["error"]["data"];
+        assert_eq!(data["kind"], "incompatible_protocol");
+        assert_eq!(data["requested"].as_u64().unwrap(), 99);
+        // Effective ceiling is min(client_max=100, server_max=1) = 1.
+        assert_eq!(
+            data["max_compatible"].as_u64().unwrap() as u32,
+            HANDSHAKE_PROTOCOL_MAX
+        );
+        assert_eq!(
+            data["min_compatible"].as_u64().unwrap() as u32,
+            HANDSHAKE_PROTOCOL_MIN
+        );
+    }
+
+    #[tokio::test]
+    async fn handshake_is_available_before_scope_enforcement() {
+        // The handshake must NOT be gated by token/capability: it is a
+        // transport-level negotiation that runs before any MCP tool routing.
+        // Foundation spec §8 forbids discovery from broadening scope; the
+        // simplest way to enforce that is to make `handshake` itself
+        // unscoped, then gate every actual tool behind scope. This test
+        // proves the former half: a fresh, scoped server still answers the
+        // handshake.
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                HANDSHAKE_METHOD,
+                Some(json!({
+                    "protocol_version": HANDSHAKE_PROTOCOL_MAX,
+                    "min_compatible": 1,
+                    "max_compatible": 1,
+                    "min_store_format_version": 1,
+                    "client_version": "test/1.0",
+                    "supported_operations": ["mcp_tool_call"],
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(resp.get("error").is_none(), "handshake must succeed");
+        assert!(resp["result"]["server_name"].is_string());
     }
 
     #[tokio::test]

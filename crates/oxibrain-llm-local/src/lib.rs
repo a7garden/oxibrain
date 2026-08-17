@@ -118,9 +118,12 @@ impl LlmPort for LocalLlm {
     }
 
     fn capabilities(&self) -> LlmCapabilities {
+        // Local GGUF path uses GBNF grammar-constrained decoding (§9.4, D28).
         LlmCapabilities {
             grammar: true,
             structured_output: false,
+            tool_call: false,
+            json_schema: false,
         }
     }
 }

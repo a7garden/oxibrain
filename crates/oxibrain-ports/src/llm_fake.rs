@@ -85,9 +85,14 @@ impl LlmPort for FakeLlmPort {
     }
 
     fn capabilities(&self) -> LlmCapabilities {
+        // `enable_grammar()` flips the GBNF flag; the additive remote
+        // mechanism flags stay false — the fake deliberately advertises only
+        // what it has been configured to satisfy.
         LlmCapabilities {
             grammar: self.grammar.load(Ordering::SeqCst),
             structured_output: false,
+            tool_call: false,
+            json_schema: false,
         }
     }
 }
@@ -180,5 +185,15 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn additive_capability_flags_default_to_false() {
+        let fake = FakeLlmPort::new();
+        let caps = fake.capabilities();
+        assert!(!caps.tool_call);
+        assert!(!caps.json_schema);
+        assert!(!caps.structured_output);
+        assert!(!caps.grammar);
     }
 }

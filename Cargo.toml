@@ -31,7 +31,7 @@ oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.2.0" }
 oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.2.0" }
 oxibrain-llm-local = { path = "crates/oxibrain-llm-local", version = "0.2.0" }
 oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.2.0" }
-oxibrain-client = { path = "crates/oxibrain-client", version = "0.2.0" }
+oxibrain-client = { path = "crates/oxibrain-client", version = "0.3.0" }
 oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.2.0" }
 oxibrain-store = { path = "crates/oxibrain-store", version = "0.2.0" }
 oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.2.0" }
@@ -41,6 +41,7 @@ hex = "0.4"
 unicode-normalization = "0.1"
 fs2 = "0.4"
 async-trait = "0.1"
+parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }

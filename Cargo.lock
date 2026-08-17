@@ -932,6 +932,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "log",
+ "zeroize",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -996,6 +1006,15 @@ dependencies = [
  "find_cuda_helper",
  "glob",
  "walkdir",
+]
+
+[[package]]
+name = "lock_api"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
 ]
 
 [[package]]
@@ -1092,6 +1111,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 name = "oxibrain"
 version = "0.2.0"
 dependencies = [
+ "async-trait",
  "blake3",
  "criterion",
  "hex",
@@ -1100,6 +1120,7 @@ dependencies = [
  "oxibrain-ports",
  "oxibrain-store",
  "oxibrain-views",
+ "parking_lot",
  "proptest",
  "reqwest",
  "rusqlite",
@@ -1118,7 +1139,9 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
+ "keyring",
  "oxibrain",
+ "oxibrain-client",
  "oxibrain-connectors",
  "oxibrain-core",
  "oxibrain-llm-http",
@@ -1137,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-client"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "oxibrain",
@@ -1146,6 +1169,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -1233,6 +1257,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "oxibrain",
+ "oxibrain-client",
  "oxibrain-core",
  "oxibrain-ports",
  "serde",
@@ -1279,6 +1304,29 @@ dependencies = [
 [[package]]
 name = "oxibrain-views"
 version = "0.2.0"
+
+[[package]]
+name = "parking_lot"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
+dependencies = [
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "windows-link",
+]
 
 [[package]]
 name = "percent-encoding"
@@ -1541,6 +1589,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_syscall"
+version = "0.5.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1724,6 +1781,12 @@ checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "scopeguard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "serde"

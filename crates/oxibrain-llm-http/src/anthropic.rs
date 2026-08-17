@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use oxibrain_ports::{BrainError, LlmPort, LlmRequest, LlmResponse};
+use oxibrain_ports::{BrainError, LlmCapabilities, LlmPort, LlmRequest, LlmResponse};
 use reqwest::Client;
 use serde_json::{Value, json};
 
@@ -72,6 +72,18 @@ impl LlmPort for AnthropicLlm {
             text: serde_json::to_string(input).map_err(|e| provider(false, e.to_string()))?,
             raw,
         })
+    }
+
+    fn capabilities(&self) -> LlmCapabilities {
+        // Anthropic adapter enforces structure via forced tool calls
+        // (`tool_choice: {type: tool}` above). JSON Schema is *not*
+        // natively supported by the public Anthropic API today.
+        LlmCapabilities {
+            grammar: false,
+            structured_output: false,
+            tool_call: true,
+            json_schema: false,
+        }
     }
 }
 

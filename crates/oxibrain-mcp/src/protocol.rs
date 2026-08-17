@@ -14,6 +14,9 @@ pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
 /// Implementation-defined: token lacks the required capability/scope.
 pub const UNAUTHORIZED: i64 = -32001;
+/// Implementation-defined: the Oxi Foundation `handshake` was rejected
+/// (incompatible protocol, store format too old, etc.).
+pub const INCOMPATIBLE_PROTOCOL: i64 = -32002;
 pub const INTERNAL_ERROR: i64 = -32603;
 
 /// A parsed JSON-RPC request or notification. `id == None` marks a notification
@@ -59,6 +62,19 @@ pub fn success(id: Value, result: Value) -> Value {
 /// Build a JSON-RPC error response value: `{jsonrpc, id, error:{code,message}}`.
 pub fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message.into() } })
+}
+
+/// Build a JSON-RPC error response with a structured `data` payload.
+///
+/// Used by the `handshake` method to surface a typed rejection
+/// (`HandshakeError` from `oxibrain_client::protocol`) so the client can
+/// recover without parsing free-form strings.
+pub fn error_with_data(id: Value, code: i64, message: impl Into<String>, data: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message.into(), "data": data }
+    })
 }
 
 /// MCP `tools/call` success result: a single text content block.

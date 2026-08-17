@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use oxibrain_ports::{BrainError, LlmPort, LlmRequest, LlmResponse};
+use oxibrain_ports::{BrainError, LlmCapabilities, LlmPort, LlmRequest, LlmResponse};
 use reqwest::Client;
 use serde_json::{Value, json};
 
@@ -55,6 +55,19 @@ impl LlmPort for OpenAiLlm {
             .ok_or_else(|| provider(false, "missing response content"))?
             .to_owned();
         Ok(LlmResponse { text, raw })
+    }
+
+    fn capabilities(&self) -> LlmCapabilities {
+        // OpenAI adapter emits `response_format: json_schema` (strict) when
+        // a schema is supplied, and the chat-completions endpoint exposes
+        // native tool calls as well. Profile validation treats these
+        // equivalently via `LlmCapabilities::satisfies`.
+        LlmCapabilities {
+            grammar: false,
+            structured_output: true,
+            tool_call: true,
+            json_schema: true,
+        }
     }
 }
 fn provider(retryable: bool, message: impl Into<String>) -> BrainError {

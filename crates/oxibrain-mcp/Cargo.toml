@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+oxibrain-client.workspace = true
 oxibrain.workspace = true
 oxibrain-core.workspace = true
 oxibrain-ports.workspace = true

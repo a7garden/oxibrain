@@ -26,6 +26,7 @@ pub async fn run(dir: &Path, space: &str) -> anyhow::Result<()> {
         provider.model_id.clone(),
         provider.mechanism,
         provider.model_digest.clone(),
+        provider.profile_id(),
     );
     let summary = brain.reextract(&space_id, &config).await?;
     println!(

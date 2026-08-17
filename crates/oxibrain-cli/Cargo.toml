@@ -11,11 +11,26 @@ rust-version.workspace = true
 name = "oxibrain"
 path = "src/main.rs"
 
+[lib]
+name = "oxibrain_cli"
+path = "src/lib.rs"
+
+[features]
+# When enabled, the OS Keychain (macOS Keychain / Linux libsecret / Windows
+# Credential Manager via the `keyring` crate) is used to resolve Foundation
+# profile secrets. Defaults to off so the standalone CLI build pulls no
+# platform secret-store crate; the in-memory resolver then refuses every
+# lookup, and the resolution ladder falls through to the compat env /
+# local model (Task 3 §3, doc/spec/oxi-foundation-v1.md §0).
+default = []
+os-keychain = ["dep:keyring"]
+
 [dependencies]
 oxibrain.workspace = true
 oxibrain-core.workspace = true
 oxibrain-mcp.workspace = true
 oxibrain-store.workspace = true
+oxibrain-client.workspace = true
 serde.workspace = true
 oxibrain-llm-http.workspace = true
 oxibrain-llm-local.workspace = true
@@ -29,3 +44,4 @@ anyhow.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 toml = "0.8"
+keyring = { version = "3", optional = true }

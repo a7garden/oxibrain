@@ -52,6 +52,7 @@ async fn grammar_capable_llm_takes_the_constrained_branch() {
         mechanism: ExtractMechanism::Grammar,
         max_tokens: 4096,
         model_digest: None,
+        provider_profile_id: None,
     };
     let summary = brain.extract_one(&space, &ep_id, &extractor).await.unwrap();
 

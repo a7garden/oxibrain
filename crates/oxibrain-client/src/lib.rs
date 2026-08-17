@@ -10,10 +10,31 @@
 //! any tool call. The server resolves the token to a `Scope` that gates every
 //! subsequent request (DESIGN §11.2).
 //!
+//! Capability handshake: `connect_default` / `connect_endpoint` perform the
+//! transport-level `handshake` described in `doc/spec/oxi-foundation-v1.md`
+//! §8. Discovery and capability negotiation ride on the same JSON-RPC socket;
+//! the MCP tool list stays at fifteen.
+//!
 //! Platform: Unix-only (Unix-domain sockets). On non-Unix targets the crate
 //! compiles but all methods return `UnsupportedPlatform`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
+
+pub mod discovery;
+pub mod foundation_package;
+pub mod protocol;
+
+pub use discovery::{BrainEndpoint, DiscoveryError, default_socket_path};
+pub use foundation_package::{
+    AbstractRequirement, FoundationPackage, PackageError, PackageManifest, PackagePersona,
+    PackagesLock, PayloadLocation, TrustState, foundation_home, load_package_manifest,
+    load_packages_lock, manifest_path, parse_package_manifest, parse_packages_lock,
+    select_package_for_target,
+};
+pub use protocol::{
+    BrainCapabilities, BrainProtocolVersion, ClientHello, ClientOperation, HandshakeError,
+    ServerInfo, default_client_hello, parse_handshake_error,
+};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -21,6 +42,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+
+/// Default client identity used by [`default_client_hello`] when the caller
+/// does not supply one. Hosts (Oxicode, Oxios) override this to identify
+/// themselves in `ClientHello.client_version`.
+const DEFAULT_CLIENT_VERSION: &str =
+    concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
 /// A client connected to an oxibrain daemon over a Unix-domain socket.
 ///
@@ -78,6 +105,90 @@ impl BrainClient {
             );
         }
         Ok(client)
+    }
+
+    /// Connect using the canonical Oxi Foundation default socket.
+    ///
+    /// Resolves the path via [`BrainEndpoint::default`] (which honors
+    /// `$OXIBRAIN_SOCKET` and falls back to `$HOME/.oxi/brain/oxibrain.sock`)
+    /// and then performs the transport-level `handshake` before returning.
+    ///
+    /// Errors fast when the daemon is absent (sub-second).
+    pub async fn connect_default() -> Result<(Self, BrainCapabilities)> {
+        let endpoint = BrainEndpoint::default()
+            .with_context(|| "no default oxibrain socket: set $OXIBRAIN_SOCKET or $HOME")?;
+        Self::connect_endpoint(&endpoint).await
+    }
+
+    /// Connect to a specific endpoint (validated path) and perform the
+    /// `handshake`. Returns the negotiated [`BrainCapabilities`] alongside the
+    /// client so the caller can branch on store format or server version.
+    pub async fn connect_endpoint(endpoint: &BrainEndpoint) -> Result<(Self, BrainCapabilities)> {
+        let mut client = Self::connect(endpoint.path()).await?;
+        let caps = client
+            .handshake(default_client_hello(DEFAULT_CLIENT_VERSION))
+            .await?;
+        Ok((client, caps))
+    }
+
+    /// Connect, optionally authenticate, and perform the handshake — the full
+    /// Oxi Foundation bring-up sequence in one call.
+    ///
+    /// - On a token-protected socket, the `auth` request must come first; the
+    ///   `Scope` resolved by the server gates every subsequent call.
+    /// - The `handshake` request comes after optional auth and before any MCP
+    ///   tool routing — matching the order in
+    ///   `doc/spec/oxi-foundation-v1.md` §8.
+    /// - On a trusted (no-token) socket, `token` may be `None`.
+    pub async fn connect_endpoint_handshake(
+        endpoint: &BrainEndpoint,
+        token: Option<&str>,
+    ) -> Result<(Self, BrainCapabilities)> {
+        let mut client = if let Some(tok) = token {
+            Self::connect_with_token(endpoint.path(), tok).await?
+        } else {
+            Self::connect(endpoint.path()).await?
+        };
+        let caps = client
+            .handshake(default_client_hello(DEFAULT_CLIENT_VERSION))
+            .await?;
+        Ok((client, caps))
+    }
+
+    /// Negotiate capabilities with the daemon.
+    ///
+    /// Sends a `handshake` JSON-RPC request carrying the supplied
+    /// [`ClientHello`] and parses the resulting [`ServerInfo`] into
+    /// [`BrainCapabilities`]. On an incompatible-version error the daemon
+    /// returns a JSON-RPC error with a typed [`HandshakeError`] in `data`;
+    /// the client surfaces that error as a typed `Err`.
+    pub async fn handshake(&mut self, hello: ClientHello) -> Result<BrainCapabilities> {
+        let id = self.alloc_id();
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": protocol::HANDSHAKE_METHOD,
+            "params": hello,
+        });
+        self.send(&req).await?;
+        let resp = self.recv().await?;
+        if let Some(err) = resp.get("error") {
+            if let Some(typed) = parse_handshake_error(err) {
+                return Err(typed.into());
+            }
+            bail!(
+                "handshake failed: {}",
+                err.get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error")
+            );
+        }
+        let result = resp
+            .get("result")
+            .context("missing result in handshake response")?;
+        let info: ServerInfo = serde_json::from_value(result.clone())
+            .context("parse ServerInfo from handshake result")?;
+        Ok(info.into())
     }
 
     // ── Low-level JSON-RPC ───────────────────────────────────────────────
@@ -301,5 +412,11 @@ mod tests {
     fn extract_text_fails_without_content() {
         let result = json!({});
         assert!(extract_text(&result).is_err());
+    }
+
+    #[test]
+    fn default_client_version_is_compiled_in() {
+        // Sanity check: the macro embedded the crate name + version.
+        assert!(DEFAULT_CLIENT_VERSION.contains("oxibrain-client"));
     }
 }

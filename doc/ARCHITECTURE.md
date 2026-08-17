@@ -1,10 +1,12 @@
 # oxibrain — Architecture
-> **Version:** v2.4 · **Date:** 2026-08-16 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.5 · **Date:** 2026-08-17 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
 > **Companions:** `doc/ROADMAP.md` (sequencing, exit criteria, effort), `doc/ECOSYSTEM.md`
-> (how the oxi apps compose), `doc/spec/` (per-milestone implementation specs), `doc/adr/`.
+> (how the oxi apps compose), `doc/spec/` (per-milestone implementation specs — includes
+> `doc/spec/oxi-foundation-v1.md` for the cross-app Foundation contract), `doc/adr/`
+> (notably `ADR-007` for the Foundation v1 contract decision).
 >
 > **Naming note:** this file was `DESIGN.md` through v1.0. Renamed because "DESIGN.md" has
 > come to mean a front-end design-system document. `ARCHITECTURE.md` is the Rust-ecosystem
@@ -356,6 +358,15 @@ with no model call, because extraction outputs are cached against the ledger.
 | **Embedded** | one host process links `oxibrain` | exclusive advisory lock | a single app, a CLI run, tests |
 | **Daemon** (`oxibrain serve --daemon`) | background service owns the store | sole writer; clients speak MCP over socket / stdio / HTTP | several apps share one brain |
 | **Read-only library** | any process | read-only connection, no index mutation | analytics, export |
+
+The daemon is the **sole durable-memory data plane** for the oxi ecosystem: every consuming
+app (oxicode, oxios, oxiline, oximemo, and external MCP clients) reaches durable state
+exclusively through it. With the daemon stopped, callers **degrade** — they do not instantiate
+an app-local durable fallback, because a second store would re-create the silo this design
+removes. Discovery of the daemon is by the Foundation contract (§15, `doc/spec/oxi-foundation-v1.md`):
+clients find the listening socket via the default `~/.oxi/brain/oxibrain.sock` path or the
+`$OXIBRAIN_SOCKET` override and never read SQLite directly. The Oxi Foundation v1 contract is
+additive: a client that cannot parse the file still speaks JSON-RPC and still respects scopes.
 
 Embedded mode fails fast with a clear error if a daemon holds the lock, and prints the command
 to attach instead. Two processes with independent in-memory indexes writing one SQLite file is
@@ -1115,6 +1126,30 @@ why` shows which extractor claimed what. **A user with no API key gets a complet
 user with one gets a better graph on the episodes that matter.** No feature is gated, only
 quality — the right shape for a local-first tool.
 
+### 8.6 The Foundation boundary — what oxibrain owns and what it does not
+
+C2 names a default and a ceiling; the Foundation v1 contract (ADR-007,
+`doc/spec/oxi-foundation-v1.md`) names where profile resolution happens. The default
+`LlmPort` implementation remains the local GGUF adapter (`oxibrain-llm-local`). Remote
+adapters — Anthropic, OpenAI, Ollama, hosted encoders — are **profile-selected**, not
+process-wide: a host may swap in a Foundation profile whose provider is a frontier endpoint,
+but only at the facade/CLI boundary (`Brain::with_llm` and the `oxibrain` CLI's
+`--profile <id>`), with the role-binding and Keychain-locator rules enforced by the
+adapter before any secret is read.
+
+Two things are explicitly out of scope for oxibrain, and the Foundation contract does not
+change that:
+
+1. **No driving of another app's CLI for inference.** The Oxicode TUI/CLI is an
+   application surface, not an inference backend. `oxibrain` never invokes
+   `oxicode ...` to satisfy an `LlmPort` call. A profile's `provider` field refers to an
+   inference provider the user has configured locally (HTTP endpoint, MCP-sampling client),
+   not to another oxi binary.
+2. **No mandatory model gateway.** oxibrain does not require a shared inference
+   daemon, a Foundation-side router, or a Foundation-side load balancer. Two hosts may
+   hold the same profile file and select different engines at the facade; that is the
+   point of profile selection. A profile is a **policy document**, not a routing key.
+
 ---
 
 ## 9. Ingestion and extraction
@@ -1621,6 +1656,33 @@ all of it at the summary boundary.
 
 Compaction stores compressed content **in SQLite**, not in an external blob store.
 
+### 13.2 Consolidation vs. application note curation
+
+`Brain::consolidate` is **not** an authoring path. It is a read/derive operation on the
+ledger: it clusters ledger episodes by topic or temporal proximity, emits a new
+`EpisodeKind::Derived` episode (or cache-links an existing one) whose content is the cached
+extraction summary, and writes that derived episode into the ledger as an ordinary immutable
+row. Application note curation — a user editing a memo, oximemo's user reordering a card, an
+Oxios agent rewriting its scratchpad — is editing the host's own files and never crosses the
+daemon boundary. The brain does not maintain a parallel curation surface and never mutates
+an `EpisodeKind::Derived` episode in place. Re-deriving a cluster (because the underlying
+model changed, or because new source episodes arrived) writes a **new** derived episode; the
+previous one stays, and `Belief` / `support` / `Uncertainty` continue to be computed from the
+source ledger, never from a derived episode (`§5.1`, P1; `§13.1`).
+
+Concretely:
+
+- **Extracts from primary episodes.** Consolidation clusters ledger episodes and re-reads
+  them through the extraction cache; it does not re-extract a previously derived summary
+  and does not let one derived episode feed another as a primary source.
+- **Preserves support.** The `Derived` row records its source episode ids and the
+  `Support` slice (distinct sources, contradictions, single-source claims) that the fold
+  produced for it. P10 is enforced at write: a derived episode with empty support is
+  rejected.
+- **Preserves `Uncertainty`.** The summary's `Uncertainty` block is the same block the
+  fold computes for any episode, recomputed on read, never whittled down at the summary
+  boundary. A summary that hides its contradictions is a regression, not a feature.
+
 ---
 
 ## 14. The views surface
@@ -1748,6 +1810,41 @@ removed. "Forget this person entirely" is a supported, tested operation.
   shipping** (append-only, content-addressed, commutative) plus **Loro** (Rust CRDT) for the
   mutable slices needing real merge semantics: user merges, resolutions, config. Derived state
   is never synced; each device reprojects.
+
+### 15.7 Foundation profile boundary — secrets, scopes, and discovery
+
+The Foundation v1 contract (`doc/spec/oxi-foundation-v1.md`, ADR-007) governs how a host
+process resolves a profile's Keychain-locator reference into a usable credential, and how
+that resolution stays out of the daemon. The rules below are enforced at the **facade/CLI
+boundary** of `oxibrain` (and of every consumer of `oxibrain-client`). `oxibrain-core`,
+`oxibrain-store`, and `oxibrain-index` never see a Keychain reference, a profile JSON path,
+or a provider secret. They take an `LlmPort` (or `EmbeddingPort`) that is already wired;
+they do not know which profile produced it.
+
+- **Profiles carry a locator, not a secret.** `profiles.json` is non-secret by construction:
+  a profile's `credential` field is `{service, account}` — the OS-Keychain service and
+  account names under which the secret is stored. The profile is world-readable; the
+  secret is not. Storing `api_key`, `bearer`, `access_token`, or `refresh_token`-shaped
+  fields in `profiles.json` is a parser-level rejection. Environment variables remain an
+  explicit development/automation override, never the Foundation path.
+- **Role binding is enforced before the secret is read.** A profile declares the roles it is
+  permitted to satisfy (`memory.extract`, `memory.consolidate`, `coding.primary`,
+  `assistant.general`). The host asks for a role, not for a provider secret. Resolution is:
+  explicit CLI/environment override → a Foundation profile whose `roles` contains the
+  requested role → existing `ANTHROPIC_*`/`OPENAI_*` compatibility environment
+  variables → local model. A profile whose role list does not contain the requested role
+  is **not selected**, and a missing or unavailable Keychain secret is reported as such
+  rather than silently falling through to a different remote provider.
+- **Discovery is additive and auth-first-message is preserved.** `oxibrain-client` exposes
+  `default_socket_path()` returning `~/.oxi/brain/oxibrain.sock` (or `$OXIBRAIN_SOCKET`)
+  and `connect_default()` / `connect_endpoint(...)` helpers for hosts. Hosts speak a
+  `ClientHello` on connect and receive a `ServerInfo` with the daemon's
+  `schema_version`, `server_version`, and supported features — used for capability
+  negotiation, not for a sixteenth MCP tool. The MCP tool surface stays at fifteen. The
+  auth-first-message rule (token-before-payload) and the existing `Scope`/`Capability`
+  semantics in §15.1–§15.2 are unchanged: discovery metadata never replaces a token and
+  never broadens scope. Full enumeration of the additive client surface is in
+  `doc/CONSUMPTION_CONTRACT.md`.
 
 ---
 
@@ -1969,6 +2066,8 @@ oxibrain/
 │   ├── adr/                   # architecture decision records
 │   ├── research/              # dated reviews; historical, not authoritative
 │   └── ontology.md            # generated from the core registry
+├── tests/
+│   └── fixtures/oxi-foundation/v1/   # cross-host fixture corpus (ADR-007)
 ├── crates/
 │   ├── oxibrain/              # facade: `Brain`, config, prelude — target < 1,000 LOC
 │   ├── oxibrain-core/         # pure: fold · resolve · rank · pack · step · registry
@@ -1988,7 +2087,19 @@ oxibrain/
 └── apps/                      # desktop brain UI — not an editor (§1.4)
 ```
 
-**One binary, not two.** The daemon is `oxibrain serve --daemon`.
+**Installation root.** Every consuming app reads from a single tree, which the daemon
+creates on `init` and owns thereafter. Clients never read SQLite directly; they speak MCP
+over the daemon's listening socket.
+
+```
+~/.oxi/
+├── config.toml                 # shared: which brain, which space, provider settings
+├── foundation/v1/              # Foundation v1 contract (ADR-007) — non-secret
+│   ├── profiles.json           # provider profiles (Keychain locator only — never a secret)
+│   └── packages.lock           # resolved Foundation packages (name/version/digest/source/trust)
+└── brain/                      # oxibrain store — daemon is the sole writer
+    └── oxibrain.sock           # default listening socket (`$OXIBRAIN_SOCKET` override)
+```
 
 **Dependency rules, enforced in CI:**
 
@@ -2035,13 +2146,36 @@ own, so a brain outage leaves its agents with *no* memory rather than degraded m
 ### 19.2 Consumption contract
 
 - Semver on the `oxibrain` facade. The public surface is `oxibrain::*`.
-- MCP tool schemas versioned; **additive changes only within a major** (§16.2).
+- MCP tool schemas versioned; **additive changes only within a major** (§16.2). The
+  fifteen-tool MCP surface is unchanged by the Foundation contract; discovery happens over
+  the transport handshake, not a sixteenth tool.
 - Stability tiers per API: `stable`, `unstable` (feature-gated), `internal`.
 - A compatibility test suite consumers run against their pinned version.
 
-Detail in `doc/CONSUMPTION_CONTRACT.md`.
+Detail in `doc/CONSUMPTION_CONTRACT.md`. The Foundation client surface
+(`default_socket_path`, `connect_default`, `connect_endpoint`, `ClientHello`,
+`ServerInfo`) is enumerated there as additive planned client features; it is not yet
+shipped in `oxibrain-client@0.2.0` and is pinned to land in 0.3.x.
 
----
+### 19.3 The Foundation plane
+
+The Foundation v1 contract is a **separate plane** from the durable-memory data plane and
+from the agent execution plane. It is not a runtime crate, a daemon broker, or a model
+gateway (ADR-007). Its sole job is to give every consumer the same answer to two
+questions:
+
+- Which provider profile is bound to a given role, and where is its secret kept?
+  Answered by `~/.oxi/foundation/v1/profiles.json` plus the OS Keychain.
+- Which immutable Foundation packages are in play, and what abstract capabilities do
+  they require? Answered by `~/.oxi/foundation/v1/packages.lock`.
+
+The brain owns `~/.oxi/brain/`, full stop. Hosts that integrate via `oxibrain-client`
+discover the daemon by `default_socket_path()` (`~/.oxi/brain/oxibrain.sock`, or the path
+in `$OXIBRAIN_SOCKET`) and speak the additive `ClientHello` / `ServerInfo` handshake
+described in §15.7 and `doc/CONSUMPTION_CONTRACT.md`. They never open the store file, never
+parse the SQLite WAL, and never read a profile JSON to extract a secret — the secret stays
+in the OS Keychain, behind the host's `SecretResolver` (`§15.7`,
+`doc/spec/oxi-foundation-v1.md`).
 
 ## 20. Milestones
 

@@ -67,6 +67,7 @@ fn test_extractor() -> ExtractorConfig {
         mechanism: ExtractMechanism::JsonSchema,
         max_tokens: 4096,
         model_digest: None,
+        provider_profile_id: None,
     }
 }
 

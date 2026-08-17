@@ -154,3 +154,45 @@ async fn client_auth_invalid_token_fails_connection() {
     let err = result.unwrap_err().to_string();
     assert!(err.contains("authentication failed"), "got: {err}");
 }
+
+#[tokio::test]
+async fn connect_endpoint_performs_handshake_then_tool_call() {
+    use oxibrain_client::discovery::BrainEndpoint;
+
+    let (_dir, sock) = spawn_server().await;
+    let endpoint = BrainEndpoint::from_path(sock.clone()).unwrap();
+
+    let (mut client, caps) = BrainClient::connect_endpoint(&endpoint)
+        .await
+        .expect("connect_endpoint + handshake");
+    assert_eq!(caps.server_name, "oxibrain");
+
+    // The negotiated client behaves like a normal one.
+    client.ping().await.expect("ping");
+    let ingested = client
+        .ingest("endpoint round-trip", "personal", "endpoint.md")
+        .await
+        .expect("ingest");
+    assert!(ingested.contains("Ingested as episode"));
+}
+
+#[tokio::test]
+async fn connect_endpoint_handshake_with_token_combines_auth_and_capability() {
+    use oxibrain_client::discovery::BrainEndpoint;
+
+    let (_dir, sock, secret) = spawn_auth_server(&[Capability::Read, Capability::Ingest]).await;
+    let endpoint = BrainEndpoint::from_path(sock.clone()).unwrap();
+
+    let (mut client, _caps) = BrainClient::connect_endpoint_handshake(&endpoint, Some(&secret))
+        .await
+        .expect("connect + auth + handshake");
+
+    // Read works.
+    let _ = client.contradictions("personal").await.expect("read");
+    // Ingest works (Ingest cap).
+    let ingested = client
+        .ingest("combined bring-up", "personal", "endpoint.md")
+        .await
+        .expect("ingest");
+    assert!(ingested.contains("Ingested as episode"));
+}

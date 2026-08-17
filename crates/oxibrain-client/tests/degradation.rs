@@ -42,3 +42,20 @@ async fn connect_with_token_nonexistent_socket_fails_fast() {
     assert!(result.is_err(), "must error on non-existent socket");
     assert!(elapsed.as_secs() < 1, "took {elapsed:?}, expected < 1s");
 }
+
+#[tokio::test]
+async fn connect_endpoint_nonexistent_socket_fails_fast() {
+    use oxibrain_client::discovery::BrainEndpoint;
+    use std::time::Instant;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("no-daemon-here.sock");
+    let endpoint = BrainEndpoint::from_path(path.clone()).unwrap();
+
+    let start = Instant::now();
+    let result = BrainClient::connect_endpoint(&endpoint).await;
+    let elapsed = start.elapsed();
+
+    assert!(result.is_err(), "must error on non-existent socket");
+    assert!(elapsed.as_secs() < 1, "took {elapsed:?}, expected < 1s");
+}

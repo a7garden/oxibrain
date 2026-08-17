@@ -31,6 +31,17 @@ pub struct ExtractorConfig {
     /// extraction cache.
     #[serde(default)]
     pub model_digest: Option<String>,
+    /// Optional Foundation profile id (`profiles.json::id`) that bound the
+    /// model when extraction ran. Folded into [`ExtractorConfig::id`] so
+    /// cached summaries are invalidated when the role binding changes
+    /// (Task 5, §13). `None` for the legacy compat env / explicit override
+    /// path — the hash stays identical to the pre-Foundation config so
+    /// existing caches continue to hit. The profile id is non-secret and
+    /// is stored only in the cache half (extractor_id), never in any
+    /// truth-half identifier; Keychain locators, display names, and
+    /// wall-clock values are deliberately excluded.
+    #[serde(default)]
+    pub provider_profile_id: Option<String>,
 }
 
 /// How structured output is enforced (§7.4). Recorded in the ExtractorId hash.
@@ -49,9 +60,14 @@ pub enum ExtractMechanism {
 }
 
 impl ExtractorConfig {
-    /// ExtractorId = blake3(model_id, prompt_version, registry_major, mechanism[, model_digest]).
-    /// Only the MAJOR registry version invalidates the cache (D8).
-    /// The model digest — when present — invalidates it on weight changes (§9.5).
+    /// ExtractorId = blake3(model_id, prompt_version, registry_major,
+    /// mechanism[, model_digest[, provider_profile_id]]). Only the MAJOR
+    /// registry version invalidates the cache (D8). The model digest —
+    /// when present — invalidates it on weight changes (§9.5). The
+    /// Foundation profile id — when present — invalidates it when the
+    /// role binding changes (Task 5, §13); absent profile id keeps the
+    /// hash identical to the pre-Foundation config so legacy caches
+    /// continue to hit.
     pub fn id(&self) -> String {
         let mut hasher = blake3::Hasher::new();
         hasher.update(self.model_id.as_bytes());
@@ -60,6 +76,9 @@ impl ExtractorConfig {
         hasher.update(&[self.mechanism as u8]);
         if let Some(digest) = &self.model_digest {
             hasher.update(digest.as_bytes());
+        }
+        if let Some(profile_id) = &self.provider_profile_id {
+            hasher.update(profile_id.as_bytes());
         }
         hex::encode(hasher.finalize().as_bytes())
     }
@@ -833,6 +852,7 @@ mod tests {
             mechanism: ExtractMechanism::ToolCall,
             max_tokens: 8192,
             model_digest: None,
+            provider_profile_id: None,
         };
         assert_eq!(c.id(), c.id());
     }
@@ -848,6 +868,7 @@ mod tests {
             mechanism: ExtractMechanism::Grammar,
             max_tokens: 8192,
             model_digest: None,
+            provider_profile_id: None,
         };
         assert_eq!(base.id(), base.id());
         let json_mode = ExtractorConfig {
@@ -902,6 +923,7 @@ mod tests {
             mechanism: ExtractMechanism::JsonSchema,
             max_tokens: 4096,
             model_digest: None,
+            provider_profile_id: None,
         };
         let diff = ExtractorConfig {
             model_id: "b".into(),
@@ -919,6 +941,7 @@ mod tests {
             mechanism: ExtractMechanism::JsonSchema,
             max_tokens: 4096,
             model_digest: None,
+            provider_profile_id: None,
         };
         let diff = ExtractorConfig {
             mechanism: ExtractMechanism::ToolCall,
@@ -936,6 +959,7 @@ mod tests {
             mechanism: ExtractMechanism::JsonSchema,
             max_tokens: 4096,
             model_digest: None,
+            provider_profile_id: None,
         };
         let diff = ExtractorConfig {
             registry_major: 2,
@@ -955,9 +979,11 @@ mod tests {
             mechanism: ExtractMechanism::JsonSchema,
             max_tokens: 8192,
             model_digest: Some("abc123".into()),
+            provider_profile_id: None,
         };
         let diff = ExtractorConfig {
             model_digest: Some("def456".into()),
+            provider_profile_id: None,
             ..base.clone()
         };
         assert_ne!(
@@ -969,6 +995,7 @@ mod tests {
         // A missing digest must also differ (opt-in digest changes the id).
         let nodigest = ExtractorConfig {
             model_digest: None,
+            provider_profile_id: None,
             ..base.clone()
         };
         assert_ne!(base.id(), nodigest.id());

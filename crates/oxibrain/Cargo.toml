@@ -35,6 +35,8 @@ serde_json.workspace = true
 criterion.workspace = true
 toml = "0.8"
 serde.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
 
 [[bench]]
 name = "budget"

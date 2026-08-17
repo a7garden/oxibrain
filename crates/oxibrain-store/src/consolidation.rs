@@ -116,6 +116,21 @@ pub fn write_derived_episode(
     Ok(ep_id)
 }
 
+/// Compute a deterministic hash for a community member set (sorted IDs).
+/// Mixes the literal "community" tag into the hash so the namespace
+/// cannot collide with an episode-cluster hash for the same extractor
+/// (avoids a migration to add `scope_kind` to the checkpoint table).
+pub fn hash_community_member_set(entity_ids: &[String]) -> [u8; 32] {
+    let mut sorted: Vec<&str> = entity_ids.iter().map(|s| s.as_str()).collect();
+    sorted.sort();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"community\x00");
+    for id in sorted {
+        hasher.update(id.as_bytes());
+    }
+    hasher.finalize().into()
+}
+
 /// Compute a deterministic hash for a member set (sorted IDs).
 pub fn hash_member_set(ids: &[String]) -> [u8; 32] {
     let mut sorted: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
@@ -188,6 +203,64 @@ pub fn completed_clusters(
         set.insert(row.map_err(sql_err)?);
     }
     Ok(set)
+}
+
+/// Primary episode IDs that cite any of the given entities (via
+/// assertions → statements → subject/object), sorted by id for
+/// determinism. Used by the community summariser to populate the
+/// derived episode's source links so summaries are never uncited.
+pub fn episodes_for_entities(
+    conn: &Connection,
+    space: &str,
+    entity_ids: &[String],
+) -> Result<Vec<String>, BrainError> {
+    if entity_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Schema (migrations/v1.sql): episodes.{id, space_id, kind},
+    // assertions.{statement_id, episode_id}, statements.{id,
+    // space_id, subject_id, object_entity, object_literal}.
+    // Mirror the projection `entities_for_episodes` uses (UNION over
+    // the subject_id / object_entity halves) so the SQL row shape
+    // never disagrees between the two helpers. The output is
+    // deduplicated and sorted by id for determinism.
+    let placeholders = std::iter::repeat("?")
+        .take(entity_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT DISTINCT a.episode_id
+           FROM assertions a
+           JOIN statements s ON a.statement_id = s.id
+           JOIN episodes e ON a.episode_id = e.id
+          WHERE e.space_id = ?1
+            AND e.kind = 'primary'
+            AND (
+                s.subject_id IN ({placeholders})
+                OR s.object_entity IN ({placeholders})
+            )
+          ORDER BY a.episode_id ASC",
+    );
+    // param order: space sentinel (1×), entity_ids for subject_id (N),
+    // entity_ids for object_entity (N) → 1 + 2N placeholders total.
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&space];
+    for id in entity_ids {
+        params.push(id as &dyn rusqlite::ToSql);
+    }
+    for id in entity_ids {
+        params.push(id as &dyn rusqlite::ToSql);
+    }
+    let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params), |r| {
+            r.get::<_, String>(0)
+        })
+        .map_err(sql_err)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(sql_err)?);
+    }
+    Ok(out)
 }
 
 /// Load community entities grouped by label.
@@ -290,7 +363,145 @@ pub fn find_episode_clusters(
     Ok(clusters)
 }
 
+/// Return the entity ids that appear in ≥ 2 of the given primary episodes
+/// inside `space`, sorted by id for determinism. This is the cluster's
+/// "shared entity" set used to compute Uncertainty (§13.1) and to decide
+/// whether a cluster is real (≥ 2 shared entities, the same threshold
+/// `find_episode_clusters` uses to group them in the first place).
+///
+/// Determinism: the SQL uses `IN (?, ?, ...)` with a stable placeholder
+/// ordering and `GROUP BY / ORDER BY entity_id`, so two runs over the same
+/// store produce byte-identical output regardless of insertion order.
+pub fn entities_for_episodes(
+    conn: &Connection,
+    space: &str,
+    episode_ids: &[String],
+) -> Result<Vec<String>, BrainError> {
+    if episode_ids.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(episode_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    // An entity is shared iff it appears in ≥ 2 distinct primary episodes of
+    // this space via the assertion → statement → entity_id (subject or object)
+    // path. Statements are the canonical "what the episode believes about the
+    // entity" carrier; both sides count so entity mentions work for either
+    // role (e.g. Alice "born_in" Seoul and Seoul "contains" Alice collapse on
+    // the entity Alice for this purpose).
+    // An entity is shared iff it appears (as subject OR object) in ≥ 2
+    // distinct primary episodes of this space, via the assertion →
+    // statement → entity_id (subject or object) path. Statements are the
+    // canonical "what the episode believes about the entity" carrier;
+    // both sides count so entity mentions work for either role (e.g.
+    // Alice "born_in" Seoul and Seoul "contains" Alice collapse on the
+    // entity Alice for this purpose).
+    //
+    // We use anonymous `?` placeholders throughout so rusqlite's positional
+    // binding matches the in-order params vector: 2 * len(episode_ids)
+    // episode ids followed by the space sentinel repeated twice.
+    let sql = format!(
+        "WITH ep_entities AS (
+             SELECT DISTINCT a.episode_id, s.subject_id AS entity_id
+               FROM assertions a
+               JOIN statements s ON a.statement_id = s.id
+               JOIN episodes e ON a.episode_id = e.id
+              WHERE a.episode_id IN ({placeholders})
+                AND e.space_id = ?
+                AND e.kind = 'primary'
+                AND s.subject_id IS NOT NULL
+             UNION
+             SELECT DISTINCT a.episode_id, s.object_entity AS entity_id
+               FROM assertions a
+               JOIN statements s ON a.statement_id = s.id
+               JOIN episodes e ON a.episode_id = e.id
+              WHERE a.episode_id IN ({placeholders})
+                AND e.space_id = ?
+                AND e.kind = 'primary'
+                AND s.object_entity IS NOT NULL
+         )
+         SELECT entity_id
+           FROM ep_entities
+          GROUP BY entity_id
+         HAVING COUNT(DISTINCT episode_id) >= 2
+          ORDER BY entity_id ASC",
+    );
+    // Bind the same episode ids for both UNION branches, then the space
+    // sentinel twice.
+    let mut params: Vec<&dyn rusqlite::ToSql> = episode_ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::ToSql)
+        .collect();
+    params.extend(episode_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
+    params.push(&space);
+    params.push(&space);
+    let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params), |r| {
+            r.get::<_, String>(0)
+        })
+        .map_err(sql_err)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(sql_err)?);
+    }
+    Ok(out)
+}
+
+/// Filter clusters to only those not yet completed for the given extractor.
+/// "Completed" means a `consolidation_checkpoints` row with `status =
+/// 'completed'` exists for the cluster's member-set hash. In-progress
+/// checkpoints are intentionally NOT filtered — a crashed run must resume
+/// (Task 5, §13).
+///
+/// The returned vector preserves the input order, so the caller can rely
+/// on `find_episode_clusters` / `hash_member_set` determinism end-to-end.
+pub fn filter_pending_clusters(
+    conn: &Connection,
+    extractor_id: &str,
+    clusters: &[EpisodeCluster],
+) -> Result<Vec<EpisodeCluster>, BrainError> {
+    let done = completed_clusters(conn, extractor_id)?;
+    let mut out = Vec::with_capacity(clusters.len());
+    for cluster in clusters {
+        let hash = hash_member_set(&cluster.episode_ids);
+        let key = hex::encode(hash);
+        if !done.contains(&key) {
+            out.push(cluster.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// Compute `Uncertainty` (§13.1, P10) for a cluster from its shared entity
+/// ids. Wraps `belief_stats_for_entities` with the pure `compute_uncertainty`
+/// so the store returns the persisted JSON-ready value. Deterministic given
+/// the same `(conn, space, entities, now)` — `belief_stats_for_entities`
+/// uses a fixed GROUP BY and `now` only enters as a staleness bound.
+pub fn uncertainty_for_cluster(
+    conn: &Connection,
+    space: &str,
+    shared_entities: &[String],
+    now: Timestamp,
+) -> Result<oxibrain_core::Uncertainty, BrainError> {
+    let input = belief_stats_for_entities(conn, space, shared_entities, now)?;
+    Ok(oxibrain_core::compute_uncertainty(&input))
+}
+
 /// Build the LLM prompt for summarizing an episode cluster.
+///
+/// Deliberately uses raw episode text only (`cluster.episode_ids`
+/// content). The `cluster.shared_entities` field is **unused on
+/// purpose** in this prompt — passing empty is the documented
+/// contract (Task 5 Finding 4). Shared entities are still computed
+/// later in the flow via `entities_for_episodes` (used to set
+/// `episode_links.sources` of the derived episode and to derive the
+/// `Uncertainty` JSON). Keeping them out of the prompt avoids the
+/// prompt becoming order-dependent on map iteration (`BTreeMap` /
+/// SQL `ORDER BY` would still be deterministic, but the body itself
+/// reads more naturally as raw source text + a count/listing of
+/// entities).
 pub fn build_consolidation_prompt(
     conn: &Connection,
     space: &str,
@@ -488,5 +699,111 @@ mod tests {
         let done = completed_clusters(&conn, "ext_a").unwrap();
         assert_eq!(done.len(), 1);
         assert!(!done.contains(hex::encode(h2).as_str()));
+    }
+
+    /// Two clusters share an extractor, one completed, one in-progress.
+    /// `filter_pending_clusters` must drop the completed one and keep the
+    /// in-progress one (a crashed run must resume, §13).
+    #[test]
+    fn filter_pending_keeps_in_progress_drops_completed() {
+        use crate::migration;
+        use rusqlite::Connection;
+        migration::ensure_vec_extension();
+        let conn = Connection::open_in_memory().unwrap();
+        migration::run(&conn).unwrap();
+
+        // Pick episode-id pairs whose `hash_member_set` matches our
+        // chosen checkpoint hashes, so the filter operates on the same
+        // keys the store would.
+        let done_ids = vec!["done_a".into(), "done_b".into()];
+        let in_progress_ids = vec!["prog_a".into(), "prog_b".into()];
+        let done_h = hash_member_set(&done_ids);
+        let in_progress_h = hash_member_set(&in_progress_ids);
+        let now = oxibrain_ports::Timestamp::from_millis(1);
+
+        checkpoint_begin(&conn, &done_h, "ext_b", now).unwrap();
+        checkpoint_complete(&conn, &done_h, now).unwrap();
+        checkpoint_begin(&conn, &in_progress_h, "ext_b", now).unwrap();
+
+        let seeded = vec![
+            EpisodeCluster {
+                episode_ids: in_progress_ids.clone(),
+                shared_entities: vec![],
+            },
+            EpisodeCluster {
+                episode_ids: done_ids.clone(),
+                shared_entities: vec![],
+            },
+        ];
+        let pending = filter_pending_clusters(&conn, "ext_b", &seeded).unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "exactly one cluster (in_progress) must remain"
+        );
+        assert_eq!(
+            pending[0].episode_ids, in_progress_ids,
+            "the in_progress cluster must survive the filter"
+        );
+    }
+
+    /// `filter_pending_clusters` is deterministic — it preserves input
+    /// order and only drops clusters whose member-set hash is in the
+    /// completed set. This is the determinism guarantee `consolidate_impl`
+    /// relies on to keep its checkpoint / cluster ordering stable.
+    #[test]
+    fn filter_pending_is_input_order_preserving() {
+        use crate::migration;
+        use rusqlite::Connection;
+        migration::ensure_vec_extension();
+        let conn = Connection::open_in_memory().unwrap();
+        migration::run(&conn).unwrap();
+
+        let now = oxibrain_ports::Timestamp::from_millis(1);
+        // Nothing completed — every cluster must remain, in input order.
+        let clusters = vec![
+            EpisodeCluster {
+                episode_ids: vec!["c".into(), "a".into()],
+                shared_entities: vec![],
+            },
+            EpisodeCluster {
+                episode_ids: vec!["b".into(), "d".into()],
+                shared_entities: vec![],
+            },
+            EpisodeCluster {
+                episode_ids: vec!["e".into(), "f".into()],
+                shared_entities: vec![],
+            },
+        ];
+        let pending = filter_pending_clusters(&conn, "ext_z", &clusters).unwrap();
+        assert_eq!(pending.len(), 3);
+        assert_eq!(
+            pending[0].episode_ids,
+            vec!["c".to_string(), "a".to_string()]
+        );
+        assert_eq!(
+            pending[1].episode_ids,
+            vec!["b".to_string(), "d".to_string()]
+        );
+        assert_eq!(
+            pending[2].episode_ids,
+            vec!["e".to_string(), "f".to_string()]
+        );
+
+        // Mark the middle cluster completed — it must drop out, the
+        // surrounding ones must keep their input positions.
+        let mid_h = hash_member_set(&["b".into(), "d".into()]);
+        checkpoint_begin(&conn, &mid_h, "ext_z", now).unwrap();
+        checkpoint_complete(&conn, &mid_h, now).unwrap();
+        let pending = filter_pending_clusters(&conn, "ext_z", &clusters).unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(
+            pending[0].episode_ids,
+            vec!["c".to_string(), "a".to_string()]
+        );
+        assert_eq!(
+            pending[1].episode_ids,
+            vec!["e".to_string(), "f".to_string()]
+        );
     }
 }
