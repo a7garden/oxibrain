@@ -1109,7 +1109,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "oxibrain"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-connectors"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "hex",
@@ -1203,7 +1203,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-embed-local"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "llama-cpp-2",
  "oxibrain-ports",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-index"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "serde",
@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-llm-http"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "oxibrain-ports",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-llm-local"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "encoding_rs",
@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1269,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-ports"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "proptest",
@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "fs2",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-views"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "parking_lot"

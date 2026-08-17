@@ -28,3 +28,4 @@ spike/gbnf/Cargo.lock
 .publish-remaining.sh
 .publish.log
 .publish*.sh
+.release-prep-status.md
