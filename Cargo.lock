@@ -1164,7 +1164,6 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "oxibrain",
- "oxibrain-mcp",
  "oxibrain-ports",
  "serde",
  "serde_json",

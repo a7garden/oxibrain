@@ -1,5 +1,7 @@
-//! Integration tests for oxibrain-client: full round-trip through the socket
-//! transport, including token authentication and scope enforcement.
+//! Round-trip integration tests: a real `oxibrain-mcp` socket server driven
+//! by `oxibrain-client`. These live in the mcp crate (not client) because
+//! `cargo publish` resolves dev-dependencies against the crates.io index —
+//! a client dev-dependency on mcp would form a publish cycle.
 
 #![cfg(unix)]
 

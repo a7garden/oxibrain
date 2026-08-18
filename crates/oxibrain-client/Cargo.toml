@@ -16,6 +16,5 @@ tokio = { workspace = true, features = ["io-util", "net", "time"] }
 
 [dev-dependencies]
 oxibrain.workspace = true
-oxibrain-mcp.workspace = true
 oxibrain-ports.workspace = true
 tempfile.workspace = true
