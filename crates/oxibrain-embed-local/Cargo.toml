@@ -6,6 +6,9 @@ license.workspace = true
 description = "Local embedding adapter for oxibrain — multilingual sentence embeddings"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["embeddings", "multilingual", "gguf", "bge-m3"]
+categories = ["science"]
 
 [dependencies]
 oxibrain-ports.workspace = true

@@ -6,6 +6,9 @@ license.workspace = true
 description = "Facade library for oxibrain — the local-first second brain engine"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["second-brain", "knowledge-base", "local-first", "memory", "notes"]
+categories = ["text-processing"]
 
 [features]
 default = []

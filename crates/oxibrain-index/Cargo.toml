@@ -6,6 +6,9 @@ license.workspace = true
 description = "Lexical and graph index primitives for oxibrain — n-gram, TF-IDF, adjacency, community"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["ngram", "minhash", "full-text-search", "multilingual"]
+categories = ["text-processing"]
 
 [dependencies]
 serde.workspace = true

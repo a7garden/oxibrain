@@ -6,6 +6,9 @@ license.workspace = true
 description = "Rendering and view layer for oxibrain — Markdown briefs, exports"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["markdown", "briefs", "navigation", "views"]
+categories = ["text-processing"]
 
 [dependencies]
 # Views are pure renderers over already-fetched projection data. No rusqlite,

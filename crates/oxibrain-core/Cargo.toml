@@ -6,6 +6,9 @@ license.workspace = true
 description = "Core domain types, temporal fold, extraction, ranking, and packing for oxibrain"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["knowledge-graph", "temporal", "entity-resolution", "fold"]
+categories = ["database-implementations"]
 
 [dependencies]
 oxibrain-ports.workspace = true

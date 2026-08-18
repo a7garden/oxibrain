@@ -6,6 +6,9 @@ license.workspace = true
 description = "SQLite storage layer for oxibrain — ledger, projection, migrations, queries"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["sqlite", "storage", "ledger", "migrations"]
+categories = ["database-implementations"]
 
 [dependencies]
 oxibrain-ports.workspace = true

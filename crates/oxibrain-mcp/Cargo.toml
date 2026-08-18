@@ -6,6 +6,9 @@ license.workspace = true
 description = "MCP server tools for oxibrain — fifteen-tool cap"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["mcp", "model-context-protocol", "agent", "tools"]
+categories = ["development-tools"]
 
 [dependencies]
 async-trait.workspace = true

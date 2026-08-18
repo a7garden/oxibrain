@@ -6,6 +6,9 @@ license.workspace = true
 description = "Client SDK for oxibrain — programmatic access to the brain"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["client", "sdk", "json-rpc", "unix-socket"]
+categories = ["api-bindings"]
 
 [dependencies]
 anyhow.workspace = true

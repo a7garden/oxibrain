@@ -6,6 +6,9 @@ license.workspace = true
 description = "Source connectors for oxibrain — vault readers, file ingest"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["markdown", "vault", "import", "sync"]
+categories = ["text-processing"]
 
 [dependencies]
 tracing.workspace = true

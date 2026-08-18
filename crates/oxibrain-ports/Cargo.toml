@@ -6,6 +6,8 @@ license.workspace = true
 description = "Port traits for oxibrain — LLM, embedding, tokenizer, rerank, clock"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["ports", "adapters", "traits"]
 
 [dependencies]
 thiserror.workspace = true

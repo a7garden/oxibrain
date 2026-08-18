@@ -6,6 +6,9 @@ license.workspace = true
 description = "Command-line interface and MCP server for oxibrain"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["cli", "second-brain", "mcp", "local-first"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "oxibrain"

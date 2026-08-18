@@ -6,6 +6,9 @@ license.workspace = true
 description = "Local LLM adapter for oxibrain — GGUF inference with grammar-constrained decoding"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["gguf", "llama", "local-inference", "grammar-constrained"]
+categories = ["science"]
 
 [dependencies]
 oxibrain-ports.workspace = true

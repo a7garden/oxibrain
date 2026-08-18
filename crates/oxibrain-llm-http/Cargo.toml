@@ -6,6 +6,9 @@ license.workspace = true
 description = "HTTP LLM provider adapter for oxibrain (OpenAI-compatible)"
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["llm", "openai", "http", "json-schema"]
+categories = ["api-bindings"]
 
 [dependencies]
 oxibrain-ports.workspace = true
