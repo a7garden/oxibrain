@@ -11,7 +11,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.85
         with:
           components: rustfmt, clippy
@@ -37,5 +37,7 @@ jobs:
              crates/oxibrain-core/src crates/oxibrain-views/src crates/oxibrain/src; then
             echo "rusqlite referenced in core/views/facade production code"; exit 1
           fi
+      - name: publish order (cycle + membership guard)
+        run: bash scripts/publish.sh --order-only
       - name: test
         run: cargo test --all-features
