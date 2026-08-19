@@ -1,7 +1,8 @@
 # oxibrain — Architecture
 > **Version:** v2.9 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **v2.9 — Embedded repair/operations console.** The console ships inside the `oxibrain`
-> binary via `include_dir!` against `apps/brain-ui/dist/` (§16.6). `oxibrain serve --http
+> binary via `include_dir!` against the bundle committed inside `oxibrain-mcp`
+> (`crates/oxibrain-mcp/assets/dist/`, vite's outDir — §16.6). `oxibrain serve --http
 > 127.0.0.1:18080` now serves the UI without `--ui-dir`. The console's scope is
 > repair/operations only (ecosystem blueprint §6.4): Overview, Entity, Conflicts, Merges,
 > Failures, Sources, Operations. It is **not** a host for ask/chat, capture/authoring, an
@@ -2159,7 +2160,7 @@ and are never re-ingested.
 The CLI is a first-class product surface, not a debug tool.
 
 `serve --http <addr>` also serves the **embedded console** (§16.6) by default. The `--ui-dir`
-flag is retained only as a dev override that points at a built `apps/brain-ui/dist` on disk;
+flag is retained only as a dev override that points at a built bundle on disk (see §16.6);
 production callers omit it and use the embedded assets.
 
 ### 16.5 Import / export, backup, errors
@@ -2177,12 +2178,13 @@ production callers omit it and use the embedded assets.
 ### 16.6 Embedded repair/operations console
 
 The `oxibrain` binary serves a small, opinionated **console** for inspecting and operating
-a brain instance. The bundle lives in `apps/brain-ui/dist/` and is **compiled into the
+a brain instance. The bundle lives in `crates/oxibrain-mcp/assets/dist/` (vite's `outDir`,
+inside the owning crate so `cargo package` ships it) and is **compiled into the
 binary** via `include_dir!` (the `include_dir` crate, ADR-008). No separate Node tool
 chain, no `--ui-dir` flag, no per-platform installer — `cargo install oxibrain && oxibrain
 serve --http 127.0.0.1:18080` opens a working console at the served root. `--ui-dir` is
-retained as a development-time override pointing at a freshly built `apps/brain-ui/dist/`
-on disk; production callers never need it.
+retained as a development-time override pointing at a freshly built bundle on disk
+(`bun run build` in `apps/brain-ui/`); production callers never need it.
 
 **Scope.** The console covers the repair/operations slice of the ecosystem blueprint
 (blueprint §6.4) — knowledge quality work and operations, **not** knowledge creation or
@@ -2211,12 +2213,13 @@ third-party MCP clients). oxibrain stays on the right hand of "understand, then 
 shipping them here would turn a memory kernel into a general productivity app and break the
 editing/ownership boundary in §1.4.
 
-**Bundle delivery.** `apps/brain-ui/dist/` is **committed to the repo** (it is the only
-guarantee that `cargo install oxibrain` from a tagged release produces a runnable console).
-A CI job builds `apps/brain-ui/dist` with `bun install && bun run build`, then asserts
-`git diff --exit-code apps/brain-ui/dist` and an aggregate gzip size ≤ 400 KB, blocking any
-release whose bundle diverges or grows beyond budget. Schema/asset mismatches therefore
-fail the build, not the user.
+**Bundle delivery.** `crates/oxibrain-mcp/assets/dist/` is **committed to the repo** (it is
+the only guarantee that `cargo install oxibrain` from a tagged release produces a runnable
+console, and it must sit inside the crate for `cargo package` to embed it in the tarball).
+A CI job builds the bundle with `bun install && bun run build` in `apps/brain-ui/`, then
+asserts `git diff --exit-code crates/oxibrain-mcp/assets/dist` and an aggregate gzip size
+≤ 400 KB, blocking any release whose bundle diverges or grows beyond budget.
+Schema/asset mismatches therefore fail the build, not the user.
 
 ---
 

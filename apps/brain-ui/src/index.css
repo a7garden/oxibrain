@@ -4,10 +4,11 @@
 @import "./tokens/components.css";
 @import "./tokens/theme.css";
 
-/* dist/ is committed (ADR-008) — exclude it from content auto-detection so
-   a previous build's minified output never feeds the next build's class scan
-   (would make the bundle hash depend on build history). */
-@source not "../dist";
+/* The committed console bundle lives inside the oxibrain-mcp crate (ADR-008)
+   — exclude it from content auto-detection so a previous build's minified
+   output never feeds the next build's class scan (would make the bundle hash
+   depend on build history). */
+@source not "../../crates/oxibrain-mcp/assets/dist";
 
 html, body {
   background-color: var(--color-surface);

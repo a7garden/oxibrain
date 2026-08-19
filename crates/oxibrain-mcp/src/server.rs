@@ -35,9 +35,11 @@ const HANDSHAKE_METHOD: &str = "handshake";
 
 /// Embedded repair/operations console (ADR-008). Served by `serve_http` when
 /// no `--ui-dir` override is given, so `cargo install oxibrain` alone can
-/// render the console. The dist/ directory is committed to the repo; CI
+/// render the console. The bundle lives at `assets/dist/` INSIDE this crate
+/// (vite's outDir) so it ships in the published tarball — a path outside the
+/// crate would be missing from `cargo package`'s verify build. CI
 /// regenerates it and fails on drift or size overflow.
-static CONSOLE_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../apps/brain-ui/dist");
+static CONSOLE_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/dist");
 
 /// Foundation protocol range this daemon speaks. Bumping `MAX` is an additive
 /// change; changing `MIN` is a breaking change that must ship with a major

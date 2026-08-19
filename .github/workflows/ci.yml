@@ -56,10 +56,10 @@ jobs:
           rm -rf node_modules/.vite
           bun run build
       - name: bundle matches source
-        run: git diff --exit-code apps/brain-ui/dist
+        run: git diff --exit-code crates/oxibrain-mcp/assets/dist
       - name: bundle size
         run: |
-          SIZE=$(find apps/brain-ui/dist -type f -exec cat {} + | gzip -9 | wc -c)
+          SIZE=$(find crates/oxibrain-mcp/assets/dist -type f -exec cat {} + | gzip -9 | wc -c)
           if [ "$SIZE" -gt 409600 ]; then
             echo "console bundle exceeds 400KB gzipped: $SIZE bytes"; exit 1
           fi

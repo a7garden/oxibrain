@@ -78,12 +78,13 @@ alternative.
 
 ### Accepted cost: a committed build artifact
 
-`cargo install oxibrain` cannot run `bun`, so `apps/brain-ui/dist/` must be committed and
-listed in the owning crate's `include`. Committed build artifacts drift and add review
-noise. Mitigated structurally, not by discipline:
+`cargo install oxibrain` cannot run `bun`, so the bundle must be committed **inside the
+owning crate** — vite's `outDir` is `crates/oxibrain-mcp/assets/dist/`, which `cargo
+package` then embeds in the published tarball. Committed build artifacts drift and add
+review noise. Mitigated structurally, not by discipline:
 
-- CI runs `bun run build` then `git diff --exit-code apps/brain-ui/dist` — a bundle that
-  does not match its source **fails the build**.
+- CI runs `bun run build` then `git diff --exit-code crates/oxibrain-mcp/assets/dist` —
+  a bundle that does not match its source **fails the build**.
 - CI asserts gzipped bundle size ≤ 400 KB.
 
 ### Accepted cost: two languages in the repository

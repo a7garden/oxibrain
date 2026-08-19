@@ -151,7 +151,7 @@ pub enum Command {
         #[arg(long)]
         daemon: bool,
         /// Serve the desktop brain UI from this directory (GET requests).
-        /// Point at the built `apps/brain-ui/dist/`.
+        /// Dev override — defaults to the embedded bundle (see ADR-008).
         #[arg(long)]
         ui_dir: Option<PathBuf>,
     },
