@@ -21,6 +21,7 @@ use oxibrain_index::ngram;
 use oxibrain_index::{BlockingConfig, LshIndex};
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 
@@ -160,6 +161,17 @@ pub enum Declaration {
         trust: String,
         effective_from: i64,
         effective_to: Option<i64>,
+    },
+    Split {
+        entity: EntityRef,
+    },
+    Alias {
+        entity: EntityRef,
+        surface: String,
+    },
+    RegisterPredicate {
+        name: String,
+        def_json: String,
     },
 }
 
@@ -738,6 +750,71 @@ pub fn project_declaration(
                 created_at: now,
             };
             ledger::insert_policy(conn, &row)?;
+        }
+        Declaration::Split { entity } => {
+            let (entity_id, _) =
+                resolve_or_create(conn, space, entity, &ep_id, 0, now, &[], cache)?;
+            // Find active merge where this entity is the loser.
+            let merge: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT id, winner_id FROM entity_merges
+                     WHERE loser_id = ?1 AND undone_at IS NULL
+                     ORDER BY decided_at DESC LIMIT 1",
+                    rusqlite::params![entity_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(sql_err)?;
+            match merge {
+                Some((merge_id, _winner)) => {
+                    conn.execute(
+                        "UPDATE entity_merges SET undone_at = ?1 WHERE id = ?2",
+                        rusqlite::params![now.millis(), merge_id],
+                    )
+                    .map_err(sql_err)?;
+                    conn.execute(
+                        "UPDATE entities SET merged_into = NULL WHERE id = ?1",
+                        rusqlite::params![entity_id],
+                    )
+                    .map_err(sql_err)?;
+                    touched.push(entity_id);
+                }
+                None => {
+                    return Err(BrainError::Invalid(format!(
+                        "split: no active merge for entity {entity_id}"
+                    )));
+                }
+            }
+        }
+        Declaration::Alias { entity, surface } => {
+            let (entity_id, _) =
+                resolve_or_create(conn, space, entity, &ep_id, 0, now, &[], cache)?;
+            let normalized = resolution::normalize(surface.as_str(), &entity.ty);
+            let key_id = entity_key_id(&entity_id, &normalized, &entity.ty);
+            let key = EntityKey {
+                id: key_id,
+                space: space.to_string(),
+                entity: entity_id.clone(),
+                ty: entity.ty.clone(),
+                normalized,
+                surface: surface.clone(),
+                origin: KeyOrigin::UserDeclared,
+            };
+            kcrud::insert_entity_key(conn, &key)?;
+            cache.insert_key(space, &entity.ty, &key);
+            touched.push(entity_id);
+        }
+        Declaration::RegisterPredicate { name, def_json } => {
+            let v: serde_json::Value = serde_json::from_str(def_json)
+                .map_err(|e| BrainError::Invalid(format!("predicate def_json: {e}")))?;
+            let major = v.get("major_version").and_then(|x| x.as_i64()).unwrap_or(1) as i64;
+            let minor = v.get("minor_version").and_then(|x| x.as_i64()).unwrap_or(0) as i64;
+            conn.execute(
+                "INSERT OR REPLACE INTO predicates (name, major_version, minor_version, def_json)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![name, major, minor, def_json],
+            )
+            .map_err(sql_err)?;
         }
     }
     crate::index_ops::index_entities_fts(conn, space, &touched)?;

@@ -10,6 +10,7 @@ use oxibrain_core::{
     Statement, Support,
 };
 use oxibrain_ports::BrainError;
+use oxibrain_ports::Timestamp;
 use rusqlite::{Connection, params};
 
 // ── Entities ───────────────────────────────────────────────────────────
@@ -262,6 +263,20 @@ pub fn set_merged_into(conn: &Connection, loser: &str, winner: &str) -> Result<(
     conn.execute(
         "UPDATE entities SET merged_into = ?1 WHERE id = ?2",
         params![winner, loser],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+/// Mark a merge as undone (split). Sets undone_at on the merge record.
+pub fn undo_merge(
+    conn: &Connection,
+    merge_id: &str,
+    undone_at: Timestamp,
+) -> Result<(), BrainError> {
+    conn.execute(
+        "UPDATE entity_merges SET undone_at = ?1 WHERE id = ?2",
+        params![undone_at.millis(), merge_id],
     )
     .map_err(sql_err)?;
     Ok(())
