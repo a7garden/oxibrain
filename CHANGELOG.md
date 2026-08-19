@@ -3,6 +3,70 @@
 All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
+## [Unreleased]
+
+## [0.4.0] — 2026-08-19
+
+### Features
+
+- **Event identity, trust policy, and server-evaluated trust** — episodes gain
+  an identity tuple `(space_id, source_id, occurrence_id)` distinct from
+  `content_hash`, which is now integrity-only. Schema v10 rebuilds the episodes
+  table (drops `UNIQUE(space_id, content_hash)`) and adds `sources`,
+  `source_policies`, and `assertions.trust`. The ledger gains `insert_event`
+  with `IngestAttachment` and occurrence-based dedup (same content re-push is
+  idempotent; different content creates a new episode). `RegisterSource` /
+  `SetSourcePolicy` write policy state through the ledger (P1: ledger stays the
+  only durable write path). The fold computes support per distinct episode
+  across trust tiers, and assertions carry their episode's trust into belief
+  confidence. MCP enforces the trust gate in `enforce_scope` — `trust=trusted`
+  requires the new `trusted_ingest` capability; `ingest`/`remember` use the
+  event path with server-built attachments. Facade: `Brain::ingest_event` /
+  `ensure_source`.
+- **Pull connector occurrence identity** — `sync` registers the vault as a
+  pull source, derives occurrence chains via
+  `H(source_id, locator, predecessor, content_hash)`, and ingests through the
+  event path. Legacy episodes participate in `Unchanged` classification but are
+  never re-ingested.
+- **Curation parity (P4 exit condition)** — entity merge/split/alias/retract,
+  `declare`, predicate add, and source policy on the CLI. New
+  `Split`/`Alias`/`RegisterPredicate` declaration variants project
+  deterministically: `Split` undoes the latest active merge, `Alias` adds a
+  `UserDeclared` entity key, `RegisterPredicate` writes the predicates table.
+  Every correction emits an auditable `Declaration`; reprojection remains
+  byte-identical.
+- **Embedded repair/operations console (ADR-008)** — `apps/brain-ui` scoped to
+  seven routes (Overview, Entity, Conflicts, Merges, Failures, Sources,
+  Operations); `ask`/`capture`/`graph` surfaces and the sigma/graphology deps
+  removed. `dist/` is committed so `cargo install oxibrain && oxibrain serve
+  --http` renders the console with no Node toolchain; `--ui-dir` remains a dev
+  override. CI gates: clean bun build, committed `dist/` must match, gzipped
+  bundle ≤ 400 KB.
+- **`reproject` over JSON-RPC** — a bare method (deliberately not an MCP tool —
+  too destructive for agent access; fifteen-tool cap preserved) returning
+  before/after space stats: `{completed_at, entities_reprojected,
+  statements_updated, before, after}`. Completes the Operations view's
+  reproject button.
+- **`review_merges` sections** — the MCP tool gains a `section` parameter
+  (`merges|failures|sources`) so the console's FailuresView/SourcesView reuse
+  an existing tool instead of adding new ones. Adds `Brain::list_failures` /
+  `Brain::list_sources`; `SourceRow` now serializes.
+- **HTML note scanning** — `oxibrain-connectors` vault scan ingests `.html`
+  notes alongside `.md` (oximemo format): `split_frontmatter` parses the
+  leading `<!-- +++ … +++ -->` comment, `html_to_text` strips tags/entities/
+  comments and drops `script`/`style` contents so FTS sees clean prose. Scan
+  rules mirror oximemo: case-insensitive `.md`/`.html`, skip
+  `TEMPLATE.md`/`.html`, `oximemo.toml` (+ legacy sibling), `_assets/`, and
+  hidden directories.
+
+### Documentation
+
+- ARCHITECTURE.md v2.6 → v2.9 (memory authority redesign, curation parity,
+  pull connector occurrence identity, Plan D minimal console §16.6), ADR-008
+  (console technology) accepted.
+- ECOSYSTEM.md v2 verb-ownership blueprint; implementation plans for curation
+  parity and pull connector occurrence identity.
+
 ## [0.3.0] — 2026-08-17
 
 ### Features
