@@ -15,6 +15,7 @@ dist/
 
 # OMP harness local state
 /.omp/
+/.oxicode/
 
 # SDD workspace scratch
 .superpowers/
