@@ -1,6 +1,14 @@
 # oxibrain — Architecture
-> **Version:** v2.8 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
-> **v2.8 — Curation parity.** §4.2.2 documents the curation surface: every user
+> **Version:** v2.9 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.9 — Embedded repair/operations console.** The console ships inside the `oxibrain`
+> binary via `include_dir!` against `apps/brain-ui/dist/` (§16.6). `oxibrain serve --http
+> 127.0.0.1:18080` now serves the UI without `--ui-dir`. The console's scope is
+> repair/operations only (ecosystem blueprint §6.4): Overview, Entity, Conflicts, Merges,
+> Failures, Sources, Operations. It is **not** a host for ask/chat, capture/authoring, an
+> exploratory force graph, or general note/task/session management — those remain out of
+> scope for oxibrain. ADR-008 locks the decision; CI gates `dist/` (built bundle matches
+> committed tree, gzipped ≤ 400 KB).
+> v2.8 — Curation parity. §4.2.2 documents the curation surface: every user
 > knowledge edit (entity merge/split/alias/retract, manual declare, predicate add,
 > source policy) is a `Declaration` episode, so reprojection replays it exactly (§5.3).
 > Split is formalized as the inverse of Merge — it sets `EntityMerge.undone_at`
@@ -17,7 +25,6 @@
 > **Companions:** `doc/ROADMAP.md` (sequencing, exit criteria, effort), `doc/ECOSYSTEM.md`
 > (how the oxi apps compose), `doc/spec/` (per-milestone implementation specs — includes
 > `doc/spec/oxi-foundation-v1.md` for the cross-app Foundation contract), `doc/adr/`
-> (notably `ADR-007` for the Foundation v1 contract decision).
 >
 > **Naming note:** this file was `DESIGN.md` through v1.0. Renamed because "DESIGN.md" has
 > come to mean a front-end design-system document. `ARCHITECTURE.md` is the Rust-ecosystem
@@ -83,7 +90,7 @@ factor of five in half of them (§7.5).
 - **Answers** via hybrid retrieval: lexical, semantic, multi-hop traversal, and thematic
   community search.
 - **Lets agents navigate** rather than only query (§14).
-- **Serves** humans (CLI, later a UI) and agents (MCP, Rust API).
+- **Serves** humans (CLI, embedded console, MCP) and agents (MCP, Rust API).
 
 ### 1.2 Who it is for, in order
 
@@ -104,7 +111,7 @@ One engine, three delivery shapes.
 |---|---|---|
 | `oxibrain` crate | Rust library — the `Brain` facade | apps embedding a brain in-process |
 | `oxibrain` binary | **one** executable: CLI, MCP server, and daemon as subcommands | standalone users, MCP clients, a team node |
-| desktop app | a *brain* UI over the binary | users who want to see the graph |
+| embedded console | a **repair/operations** UI bundled inside the binary (`include_dir!`, §16.6) — no `cargo install` extra step, no Node, no `--ui-dir` | users who want to review merges, contradictions, failures, sources, and run reproject |
 
 The product must be complete with no GUI:
 `cargo install oxibrain && oxibrain init && oxibrain ingest ~/notes && oxibrain ask "…"`.
@@ -307,8 +314,7 @@ was decided; it arrived as the default when nobody decided.
 ┌───────────────────────────────────────────────────────────────────────┐
 │ SURFACES (adapters — no business logic)                               │
 │  oxibrain-cli  ·  oxibrain-mcp (stdio · socket · HTTP)                │
-│  Rust API (oxibrain crate)     ·  desktop UI                          │
-├───────────────────────────────────────────────────────────────────────┤
+│  Rust API (oxibrain crate)     ·  embedded console (§16.6)            │
 │ oxibrain-views — rendered pages. Never stored, never touches SQLite   │
 │  brief · navigate · profile                                           │
 ├───────────────────────────────────────────────────────────────────────┤
@@ -2152,6 +2158,10 @@ and are never re-ingested.
 
 The CLI is a first-class product surface, not a debug tool.
 
+`serve --http <addr>` also serves the **embedded console** (§16.6) by default. The `--ui-dir`
+flag is retained only as a dev override that points at a built `apps/brain-ui/dist` on disk;
+production callers omit it and use the embedded assets.
+
 ### 16.5 Import / export, backup, errors
 
 - Full-fidelity JSONL export of ledger + cache + audit, round-trip tested: `export | import`
@@ -2164,9 +2174,52 @@ The CLI is a first-class product surface, not a debug tool.
   Model{missing_or_corrupt}`. Ports return typed errors; `anyhow` never crosses a public
   boundary.
 
+### 16.6 Embedded repair/operations console
+
+The `oxibrain` binary serves a small, opinionated **console** for inspecting and operating
+a brain instance. The bundle lives in `apps/brain-ui/dist/` and is **compiled into the
+binary** via `include_dir!` (the `include_dir` crate, ADR-008). No separate Node tool
+chain, no `--ui-dir` flag, no per-platform installer — `cargo install oxibrain && oxibrain
+serve --http 127.0.0.1:18080` opens a working console at the served root. `--ui-dir` is
+retained as a development-time override pointing at a freshly built `apps/brain-ui/dist/`
+on disk; production callers never need it.
+
+**Scope.** The console covers the repair/operations slice of the ecosystem blueprint
+(blueprint §6.4) — knowledge quality work and operations, **not** knowledge creation or
+exploration. The seven routes that ship:
+
+| Route | Purpose |
+|---|---|
+| Overview | store health and counts (entity/episode/assertion/statement totals; last reproject time) |
+| Entity | rendered entity page (`oxibrain-views::brief`); entity detail with aliases, neighbours, and provenance |
+| Conflicts | contradiction inbox surfaced from the fold; supports review/retract |
+| Merges | merge review queue, with apply/undo backed by `Declaration` episodes |
+| Failures | quarantine inspection — failed extractions with raw response and error trace |
+| Sources | source registry + effective source-policy trust per source |
+| Operations | `reproject`, `doctor`, store-size readout, and model-digest verification |
+
+Each route reads through the same MCP/JSON-RPC surface (§16.2). The Merge/Failures/Sources
+tables all dispatch into the `review_merges` tool's `section ∈ {merges, failures, sources}`
+switch, which keeps the MCP tool surface at the fifteen-tool cap.
+
+**Out of scope.** The console deliberately does **not** include ask/chat, capture/authoring,
+a general exploratory force graph, or note/task/session management. Those are the user-facing
+left hand of the oxi ecosystem and live in dedicated apps (`oximemo`, `oxiline`, `oxios`,
+third-party MCP clients). oxibrain stays on the right hand of "understand, then operate";
+shipping them here would turn a memory kernel into a general productivity app and break the
+editing/ownership boundary in §1.4.
+
+**Bundle delivery.** `apps/brain-ui/dist/` is **committed to the repo** (it is the only
+guarantee that `cargo install oxibrain` from a tagged release produces a runnable console).
+A CI job builds `apps/brain-ui/dist` with `bun install && bun run build`, then asserts
+`git diff --exit-code apps/brain-ui/dist` and an aggregate gzip size ≤ 400 KB, blocking any
+release whose bundle diverges or grows beyond budget. Schema/asset mismatches therefore
+fail the build, not the user.
+
 ---
 
 ## 17. Quality and evaluation
+
 
 Without measurement, "the extraction pipeline is the product's value" is unfalsifiable and every
 tuning decision is a guess.
@@ -2275,7 +2328,7 @@ oxibrain/
 │   ├── oxibrain-client/       # thin client for consuming apps
 │   └── oxibrain-cli/          # THE binary: `oxibrain` (cli + serve + daemon)
 ├── eval/                      # golden corpus, parity corpus, benchmark runners
-└── apps/                      # desktop brain UI — not an editor (§1.4)
+└── apps/                      # brain-ui source — its `dist/` is embedded into the binary (§16.6)
 ```
 
 **Installation root.** Every consuming app reads from a single tree, which the daemon
@@ -2380,7 +2433,7 @@ M0–M6 have shipped. `doc/ROADMAP.md` carries M7 onward with exit criteria and 
 | **M3** | Extraction and evaluation: job queue, LLM port + HTTP adapter, generated schema, validator, quarantine, re-extraction, eval harness | ✅ |
 | **M4** | Surfaces and security: spaces, scopes, tokens, audit, trust tiers, redaction, MCP server, daemon, transports, CLI, export/import | ✅ |
 | **M5** | oxios migration: `Brain`-backed memory, importer, consumption contract | ✅ |
-| **M6** | Desktop brain UI: graph explorer, timeline, ask-with-provenance, merge review, contradiction inbox, quick capture | ✅ |
+| **M6** | Embedded repair/operations console (§16.6): overview, entity, contradictions, merges, failures, sources, operations — supersedes the desktop UI of earlier drafts | ✅ |
 | **M7** | **Own the model** — C2 + C3 + the P1 split | → ROADMAP |
 | **M8** | **The decide layer** — P9 for retrieval and context | → ROADMAP |
 | **M9** | **Agent-native** — views, navigation, blocking | → ROADMAP |
