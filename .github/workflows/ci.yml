@@ -41,3 +41,25 @@ jobs:
         run: bash scripts/publish.sh --order-only
       - name: test
         run: cargo test --all-features
+
+  console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - name: install deps
+        working-directory: apps/brain-ui
+        run: bun install
+      - name: build
+        working-directory: apps/brain-ui
+        run: |
+          rm -rf node_modules/.vite
+          bun run build
+      - name: bundle matches source
+        run: git diff --exit-code apps/brain-ui/dist
+      - name: bundle size
+        run: |
+          SIZE=$(find apps/brain-ui/dist -type f -exec cat {} + | gzip -9 | wc -c)
+          if [ "$SIZE" -gt 409600 ]; then
+            echo "console bundle exceeds 400KB gzipped: $SIZE bytes"; exit 1
+          fi

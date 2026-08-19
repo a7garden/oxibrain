@@ -9,6 +9,7 @@ use crate::protocol::{
     INCOMPATIBLE_PROTOCOL, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, Message, UNAUTHORIZED,
     error, error_with_data, success, text_result, tool_error,
 };
+use include_dir::{Dir, include_dir};
 use oxibrain::{
     Brain, BrainConfig, BrainError, BriefTarget, Capability, DeclObject, Declaration, EntityRef,
     IngestAttachment, RedactTarget, Scope, SourceRef, Timestamp, TrustTier,
@@ -31,6 +32,12 @@ const DEFAULT_PROTOCOL_VERSION: &str = "2025-11-25";
 /// Distinct from MCP `initialize` because it is a transport-level negotiation,
 /// not part of the fifteen-tool MCP surface.
 const HANDSHAKE_METHOD: &str = "handshake";
+
+/// Embedded repair/operations console (ADR-008). Served by `serve_http` when
+/// no `--ui-dir` override is given, so `cargo install oxibrain` alone can
+/// render the console. The dist/ directory is committed to the repo; CI
+/// regenerates it and fails on drift or size overflow.
+static CONSOLE_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../apps/brain-ui/dist");
 
 /// Foundation protocol range this daemon speaks. Bumping `MAX` is an additive
 /// change; changing `MIN` is a breaking change that must ship with a major
@@ -710,12 +717,34 @@ impl BrainServer {
 
     async fn tool_review_merges(&self, args: &Value) -> Result<String, ToolErr> {
         let space_id = self.ensure_space(&space_arg(args)).await?;
-        let merges = self
-            .brain
-            .list_merges(&space_id)
-            .await
-            .map_err(ToolErr::run)?;
-        to_json(&merges)
+        let section = str_arg_or(args, "section", "merges");
+        match section.as_str() {
+            "failures" => {
+                let failures = self
+                    .brain
+                    .list_failures(&space_id)
+                    .await
+                    .map_err(ToolErr::run)?;
+                to_json(&failures)
+            }
+            "sources" => {
+                let sources = self
+                    .brain
+                    .list_sources(&space_id)
+                    .await
+                    .map_err(ToolErr::run)?;
+                to_json(&sources)
+            }
+            _ => {
+                // Default: merges (existing behavior).
+                let merges = self
+                    .brain
+                    .list_merges(&space_id)
+                    .await
+                    .map_err(ToolErr::run)?;
+                to_json(&merges)
+            }
+        }
     }
 
     // ── Write tools: remember, retract, merge_entities ───────────────────
@@ -1221,10 +1250,11 @@ fn tool_list() -> Value {
                     "required": ["start"]
                 })),
             tool("review_merges",
-                "List entity merge records in a space — which entities were merged, by whom (rule/user/import), and when.",
+                "Console data tool. `section` selects what to list: `merges` (default) — entity merge records, by whom (rule/user/import), and when; `failures` — extraction failures (episode, extractor, raw response, errors); `sources` — registered sources (name, kind, mode, claims). All sections return JSON arrays.",
                 json!({
                     "type": "object",
                     "properties": {
+                        "section": { "type": "string", "enum": ["merges", "failures", "sources"], "description": "What to list (default: merges)." },
                         "space": { "type": "string", "description": "Space name (default: personal)." }
                     }
                 })),
@@ -1606,7 +1636,7 @@ pub async fn serve_http(
     if ui_dir.is_some() {
         tracing::info!("oxibrain HTTP (UI + API) listening on http://{addr}");
     } else {
-        tracing::info!("oxibrain HTTP (API only) listening on http://{addr}");
+        tracing::info!("oxibrain HTTP (embedded console + API) listening on http://{addr}");
     }
     let shutdown = crate::daemon::shutdown_signal();
     tokio::pin!(shutdown);
@@ -1697,56 +1727,96 @@ async fn handle_http_post(
 }
 
 /// Handle a GET (static file) request.
+///
+/// When `ui_dir` is Some, serve from the filesystem (dev override). When it is
+/// None, serve from the embedded `CONSOLE_DIST` (ADR-008) so a plain
+/// `cargo install oxibrain` can render the console without Node.
 async fn handle_http_get(
     reader: &mut tokio::io::BufReader<tokio::net::TcpStream>,
     path: &str,
     ui_dir: Option<std::sync::Arc<std::path::PathBuf>>,
 ) -> anyhow::Result<()> {
-    let Some(ui_dir) = ui_dir else {
-        return write_http_response(
-            reader,
-            404,
-            "Not Found",
-            br#"{"error":"no UI directory configured"}"#,
-        )
-        .await;
-    };
-
-    // Strip query string, map to file path.
+    // Strip query string, map to a safe relative path (no traversal).
     let rel = path.split('?').next().unwrap_or("/");
     let rel = rel.strip_prefix('/').unwrap_or(rel);
-    let file_path = if rel.is_empty() || rel == "/" {
-        ui_dir.join("index.html")
+    let rel = if rel.is_empty() || rel == "/" {
+        "index.html".to_string()
     } else {
-        // Prevent directory traversal.
-        let safe: std::path::PathBuf = rel
-            .split('/')
+        rel.split('/')
             .filter(|s| !s.contains("..") && !s.is_empty())
-            .collect();
-        ui_dir.join(safe)
+            .collect::<Vec<_>>()
+            .join("/")
     };
 
-    match tokio::fs::read(&file_path).await {
-        Ok(data) => {
-            let ct = content_type(&file_path);
-            write_http_response_with_ct(reader, 200, "OK", ct, &data).await
+    if let Some(ui_dir) = ui_dir {
+        let file_path = ui_dir.join(&rel);
+        match tokio::fs::read(&file_path).await {
+            Ok(data) => {
+                let ct = content_type(&file_path);
+                return write_http_response_with_ct(reader, 200, "OK", ct, &data).await;
+            }
+            Err(_) => {
+                // SPA fallback: serve index.html for client-side routing.
+                return match tokio::fs::read(ui_dir.join("index.html")).await {
+                    Ok(data) => {
+                        write_http_response_with_ct(
+                            reader,
+                            200,
+                            "OK",
+                            "text/html; charset=utf-8",
+                            &data,
+                        )
+                        .await
+                    }
+                    Err(_) => write_http_response(reader, 404, "Not Found", b"not found").await,
+                };
+            }
         }
-        Err(_) => {
+    }
+
+    // Embedded console.
+    match CONSOLE_DIST.get_file(&rel) {
+        Some(file) => {
+            let ct = content_type_from_name(&rel);
+            write_http_response_with_ct(reader, 200, "OK", ct, file.contents()).await
+        }
+        None => {
             // SPA fallback: serve index.html for client-side routing.
-            match tokio::fs::read(ui_dir.join("index.html")).await {
-                Ok(data) => {
+            match CONSOLE_DIST.get_file("index.html") {
+                Some(f) => {
                     write_http_response_with_ct(
                         reader,
                         200,
                         "OK",
                         "text/html; charset=utf-8",
-                        &data,
+                        f.contents(),
                     )
                     .await
                 }
-                Err(_) => write_http_response(reader, 404, "Not Found", b"not found").await,
+                None => write_http_response(reader, 404, "Not Found", b"not found").await,
             }
         }
+    }
+}
+
+/// Content type for an embedded asset path (no filesystem extension lookup).
+fn content_type_from_name(name: &str) -> &'static str {
+    let Some(ext) = name.rsplit('.').next() else {
+        return "application/octet-stream";
+    };
+    match ext.to_lowercase().as_str() {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript",
+        "css" => "text/css",
+        "json" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        _ => "application/octet-stream",
     }
 }
 
@@ -2947,6 +3017,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_get_serves_embedded_console() {
+        use std::time::Duration;
+        use tokio::net::TcpStream;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let addr: std::net::SocketAddr = "127.0.0.1:18100".parse().unwrap();
+        let _task = tokio::spawn(async move {
+            let _ = serve_http(brain, addr, None).await;
+        });
+
+        // Wait for listener.
+        let mut stream = None;
+        for _ in 0..100 {
+            if let Ok(s) = TcpStream::connect("127.0.0.1:18100").await {
+                stream = Some(s);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let mut stream = stream.expect("connect to HTTP server");
+
+        // GET / must return the embedded index.html, not 404.
+        let request = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        stream.write_all(request.as_bytes()).await.unwrap();
+        stream.flush().await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.contains("200 OK"),
+            "embedded console must serve index.html, got: {response_str}"
+        );
+        assert!(
+            response_str.contains("text/html"),
+            "index.html must be text/html, got: {response_str}"
+        );
+        assert!(
+            response_str.contains("<div"),
+            "index.html must contain app markup, got: {response_str}"
+        );
+    }
+
+    #[tokio::test]
     async fn contradictions_tool_returns_detail_dto_contract() {
         let (_dir, server) = fresh_server().await;
         // Two conflicting static values for born_in(Alice, …).
@@ -3328,6 +3443,61 @@ mod tests {
         let merges: Vec<Value> = serde_json::from_str(text).expect("merges parse");
         assert_eq!(merges.len(), 1);
         assert_eq!(merges[0]["winner"], alice);
+    }
+
+    #[tokio::test]
+    async fn review_merges_section_sources_lists_registered_sources() {
+        let (_dir, server) = fresh_server().await;
+        let space_id = server.brain.ensure_space("t").await.unwrap();
+
+        // Register a vault source via the facade (declaration path).
+        server
+            .brain
+            .ensure_source(&space_id, "vault:///tmp/notes", "document_revision", "pull")
+            .await
+            .unwrap();
+
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "review_merges",
+                    "arguments": { "space": "t", "section": "sources" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let sources: Vec<Value> = serde_json::from_str(text).expect("sources parse");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0]["name"], "vault:///tmp/notes");
+        assert_eq!(sources[0]["kind"], "document_revision");
+        assert_eq!(sources[0]["mode"], "pull");
+    }
+
+    #[tokio::test]
+    async fn review_merges_section_failures_returns_empty_list() {
+        let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
+
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "review_merges",
+                    "arguments": { "space": "t", "section": "failures" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let failures: Vec<Value> = serde_json::from_str(text).expect("failures parse");
+        assert!(
+            failures.is_empty(),
+            "no extraction failures expected: {text}"
+        );
     }
 
     #[tokio::test]

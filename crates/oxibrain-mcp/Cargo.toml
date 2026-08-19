@@ -21,6 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "io-std", "net", "time", "signal"] }
 tracing.workspace = true
+include_dir.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

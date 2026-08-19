@@ -482,6 +482,30 @@ impl Brain {
             oxibrain_store::knowledge::list_merges(conn, &space)
         })
     }
+
+    /// List extraction failures in a space, most recent first.
+    /// Used by the `review_merges` MCP tool (`section: "failures"`).
+    pub async fn list_failures(
+        &self,
+        space: &str,
+    ) -> Result<Vec<oxibrain_store::quarantine::ExtractionFailure>, BrainError> {
+        let space = space.to_string();
+        read_op!(self.handle, |conn| {
+            oxibrain_store::quarantine::list_failures(conn, Some(&space))
+        })
+    }
+
+    /// List registered sources in a space.
+    /// Used by the `review_merges` MCP tool (`section: "sources"`).
+    pub async fn list_sources(
+        &self,
+        space: &str,
+    ) -> Result<Vec<oxibrain_store::ledger::SourceRow>, BrainError> {
+        let space = space.to_string();
+        read_op!(self.handle, |conn| {
+            oxibrain_store::ledger::list_sources(conn, &space)
+        })
+    }
     pub async fn timeline(
         &self,
         space: &str,

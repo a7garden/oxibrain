@@ -57,6 +57,7 @@ anyhow = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 llama-cpp-2 = { version = "0.1", features = ["sampler"] }
 encoding_rs = "0.8"
+include_dir = "0.7"
 
 [profile.release]
 lto = "thin"

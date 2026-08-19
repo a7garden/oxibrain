@@ -7,6 +7,7 @@ use oxibrain_core::{
 };
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Idempotently create a space, returning its id. Id is derived from name (deterministic).
@@ -388,6 +389,7 @@ fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainEr
 // ── Source registry CRUD ────────────────────────────────────────────────────
 
 /// A registered source row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceRow {
     pub id: String,
     pub space: String,
