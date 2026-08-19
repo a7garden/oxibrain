@@ -50,6 +50,20 @@ impl TrustTier {
             _ => None,
         }
     }
+    /// Total order for deterministic sorting (Trusted < SemiTrusted < Untrusted).
+    pub fn ordinal(&self) -> u8 {
+        match self {
+            Self::Trusted => 0,
+            Self::SemiTrusted => 1,
+            Self::Untrusted => 2,
+        }
+    }
+}
+
+impl Default for TrustTier {
+    fn default() -> Self {
+        Self::Trusted
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -84,9 +98,13 @@ impl EpisodeKind {
 pub enum SourceRef {
     Note { path: String },
     Document { uri: String },
+    DocumentRevision { uri: String },
     Conversation,
     Message,
     AgentTrace,
+    ArtifactEvent { uri: String },
+    WebClip { uri: String },
+    CalendarEvent { uri: String },
     Declaration,
     Derived { of: String },
 }
@@ -97,9 +115,13 @@ impl SourceRef {
         match self {
             Self::Note { path } => ("note", Some(path.clone())),
             Self::Document { uri } => ("document", Some(uri.clone())),
+            Self::DocumentRevision { uri } => ("document_revision", Some(uri.clone())),
             Self::Conversation => ("conversation", None),
             Self::Message => ("message", None),
             Self::AgentTrace => ("agent_trace", None),
+            Self::ArtifactEvent { uri } => ("artifact_event", Some(uri.clone())),
+            Self::WebClip { uri } => ("web_clip", Some(uri.clone())),
+            Self::CalendarEvent { uri } => ("calendar_event", Some(uri.clone())),
             Self::Declaration => ("declaration", None),
             Self::Derived { of } => ("derived", Some(of.clone())),
         }

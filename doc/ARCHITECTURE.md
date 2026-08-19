@@ -1,5 +1,5 @@
 # oxibrain — Architecture
-> **Version:** v2.5 · **Date:** 2026-08-17 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.6 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
@@ -191,7 +191,7 @@ Two corollaries with teeth:
   derived from it like any other. Nothing a user asserts lives only in the projection, because
   reprojection would erase it.
 - **Truth is a deterministic function of the ledger.** Not "equivalent", not "isomorphic" —
-  byte-identical, guaranteed by content-derived identity (§5.6) and canonical processing order.
+  byte-identical, guaranteed by deterministic identity (§5.6) and canonical processing order.
   §17.3 tests it.
 
 *Why the split:* §11.2 already holds that truth and salience are different things. Applying the
@@ -326,7 +326,7 @@ The layering rule that makes this real rather than decorative is P9, and it is C
 flowchart TB
   subgraph Write
     S[source: note / chat / doc / trace / declaration] --> C[connector]
-    C --> E[(episode — immutable, content-addressed)]
+    C --> E[(episode — immutable, event-identified)]
     E --> Q[(ingest job queue — durable)]
     Q --> CH[chunk + deterministic context prefix]
     CH --> X[extract: LlmPort, registry-derived grammar]
@@ -425,13 +425,13 @@ pub struct Space { pub id: SpaceId, pub name: String, pub created_at: Timestamp 
 
 /// The atom of record. Immutable once written.
 pub struct Episode {
-    pub id: EpisodeId,              // hash-derived (§5.6) — NOT a random ULID
+    pub id: EpisodeId,              // event-derived for new-path episodes (§5.6)
     pub space: SpaceId,
     pub seq: u64,                   // monotonic ingest order; defines canonical replay order
-    pub content_hash: ContentHash,  // BLAKE3 over normalized content
+    pub content_hash: ContentHash,  // BLAKE3 integrity verification; not identity
     pub content: String,
     pub source: SourceRef,
-    pub trust: TrustTier,           // Trusted | SemiTrusted | Untrusted   (§15.3)
+    pub trust: TrustTier,           // server-evaluated (§15.3)
     pub kind: EpisodeKind,          // Primary | Declaration | Derived     (§5.3)
     pub occurred_at: Timestamp,     // when it happened in the world
     pub ingested_at: Timestamp,     // when the system received it
@@ -439,7 +439,8 @@ pub struct Episode {
 }
 ```
 
-`SourceRef` — `Conversation | Note{path} | Document{uri} | Message | AgentTrace | Declaration |
+`SourceRef` — `Conversation | Note{path} | Document{uri} | DocumentRevision{uri} |
+ArtifactEvent{uri} | WebClip{uri} | CalendarEvent{uri} | Message | AgentTrace | Declaration |
 Derived{of}`.
 
 ### 5.3 Episode kinds — closing the derived-episode loop
@@ -591,10 +592,11 @@ every cached extraction and forces a full, paid re-extraction. Therefore:
 
 ### 5.6 Deterministic identity
 
-Every truth-half ID is **content-derived**, and the derivation is acyclic:
+Every truth-half ID is **deterministically derived**, and the derivation is acyclic. For episodes
+written through the event path, identity is the registered source occurrence within a space:
 
 ```
-EpisodeId    = blake3(space, content_hash, source_ref, occurred_at)
+EpisodeId    = blake3(space_id, source_id, occurrence_id)
 EntityId     = blake3(space, entity_type, first_episode_id, first_span_start)
 EntityKeyId  = blake3(entity_id, normalized, ty)
 StatementId  = blake3(space, subject_entity_id, predicate, object_repr)
@@ -603,8 +605,14 @@ MentionId    = blake3(assertion_id, role, span)
 ChunkId      = blake3(episode_id, ordinal)
 ```
 
+The tuple `(space_id, source_id, occurrence_id)` is the episode identity for new-path episodes.
+`content_hash` verifies the payload bytes; it is not identity. Equal bytes from independent
+sources therefore remain independent episodes. Reusing an occurrence with the same bytes is an
+idempotent retry; reusing it with different bytes is a conflict. Legacy internal callers retain
+their content-hash-deduplicated write path while they migrate to event identity.
+
 No cycle: entities are keyed by *where they were first mentioned* — a location in an immutable,
-content-addressed episode — not by anything downstream of themselves. A rename or a merge never
+event-identified episode — not by anything downstream of themselves. A rename or a merge never
 changes an `EntityId`, so P3 holds.
 
 "First mention" is well defined because replay has a **canonical order**:
@@ -623,9 +631,16 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 PRAGMA busy_timeout=5000;
 
--- ── Ledger ────────────────────────────────────────────────────────────
+-- ── Ledger (schema v10) ───────────────────────────────────────────────
 CREATE TABLE spaces (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL
+);
+
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY, space_id TEXT NOT NULL REFERENCES spaces(id),
+  name TEXT NOT NULL, kind TEXT NOT NULL, mode TEXT NOT NULL,
+  claims_json TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL,
+  UNIQUE (space_id, name)
 );
 
 CREATE TABLE episodes (
@@ -641,8 +656,28 @@ CREATE TABLE episodes (
   occurred_at  INTEGER NOT NULL,
   ingested_at  INTEGER NOT NULL,
   redacted_at  INTEGER,
-  UNIQUE (space_id, content_hash),        -- idempotent ingest, by construction
+  source_id    TEXT REFERENCES sources(id),
+  occurrence_id TEXT,
+  accepted_at  INTEGER,
+  principal    TEXT,
+  claims_json  TEXT,
   UNIQUE (space_id, seq)
+);
+CREATE UNIQUE INDEX idx_ep_occurrence
+  ON episodes(space_id, source_id, occurrence_id)
+  WHERE source_id IS NOT NULL AND occurrence_id IS NOT NULL;
+
+-- Schema v10 deliberately has no UNIQUE(space_id, content_hash): equal bytes
+-- from independent source occurrences are independent episodes.
+
+CREATE TABLE source_policies (
+  id             TEXT PRIMARY KEY,
+  source_id      TEXT NOT NULL REFERENCES sources(id),
+  trust          TEXT NOT NULL,
+  effective_from INTEGER NOT NULL,
+  effective_to   INTEGER,
+  declaration_ep TEXT NOT NULL REFERENCES episodes(id),
+  created_at     INTEGER NOT NULL
 );
 
 CREATE TABLE episode_links (
@@ -713,7 +748,8 @@ CREATE TABLE assertions (
   claimed_to   INTEGER NOT NULL,
   confidence   REAL NOT NULL,
   recorded_at  INTEGER NOT NULL,
-  retracted_at INTEGER
+  retracted_at INTEGER,
+  trust        TEXT NOT NULL DEFAULT 'trusted'
 );
 
 CREATE TABLE beliefs (
@@ -1157,7 +1193,7 @@ change that:
 ### 9.1 Stages
 
 ```
-connector → episode (dedup by content hash) → job enqueued → lease
+connector → episode (idempotent by event identity) → job enqueued → lease
   → chunk (+ deterministic context prefix)
   → extract (LlmPort, registry-derived grammar) → cache raw response
   → parse → validate against registry → capture mentions → resolve identity
@@ -1302,9 +1338,10 @@ Under §9.4 this narrows usefully: with format failures impossible, everything i
   machine rather than with a rate limit.
 - Profiles: `realtime`, `batched` (default), `nightly`.
 - Three layers of idempotency, each a database constraint rather than a code path:
-  `UNIQUE(space_id, content_hash)` on episodes; `PRIMARY KEY(episode_id, extractor_id)` on
-  extractions; content-derived `AssertionId`. Re-ingesting a directory nightly is therefore safe
-  and cheap, which is what people actually do.
+  the partial unique index on `(space_id, source_id, occurrence_id)` for event-path episodes,
+  `PRIMARY KEY(episode_id, extractor_id)` on extractions, and content-derived `AssertionId`.
+  Replaying the same source occurrence is therefore safe and cheap without conflating equal
+  bytes from independent sources.
 
 ---
 
@@ -1744,10 +1781,11 @@ cross; a local entity linked to a shared one records that link explicitly.
 ```rust
 pub struct Scope {
     pub spaces: Vec<SpaceId>,
-    pub caps: CapabilitySet,        // Read | Write | Ingest | Sample | Admin | Redact
+    pub caps: CapabilitySet,        // Read | Write | Ingest | Sample | Admin | Redact | TrustedIngest
     pub predicate_filter: Option<PredicateFilter>,
     pub entity_type_filter: Option<Vec<EntityTypeRef>>,
     pub expires_at: Option<Timestamp>,
+    pub label: String,              // authenticated principal label recorded at ingress
 }
 ```
 
@@ -1755,21 +1793,32 @@ Tokens: `oxibrain token issue --space work --caps read,query --expires 30d`. MCP
 one. An unauthenticated daemon is acceptable only over a Unix socket with filesystem
 permissions, behind an explicit flag with a startup warning.
 
-`Sample` is a distinct capability (§8.3).
+`Sample` is a distinct capability (§8.3). `TrustedIngest` is the narrowly scoped authority to
+override server trust evaluation and explicitly mark an ingest as trusted (§15.3).
 
 ### 15.3 Trust tiers and prompt injection
 
-`ingest` runs a model over arbitrary text, and that text can contain instructions.
+`ingest` runs a model over arbitrary text, and that text can contain instructions. Trust is
+**server-evaluated**: clients may submit source claims, but they cannot assign an authoritative
+`TrustTier`. Effective trust comes from the applicable source-policy declaration for the
+registered source. Source registration and policy changes are themselves append-only
+`Declaration` episodes, so replay can reproduce the assessment instead of consulting mutable
+external configuration.
 
-| Tier | Source | Treatment |
+`TrustedIngest` is the sole exception. A scope carrying that capability may explicitly request
+`Trusted`; without it, an ingest request that attempts to self-grant `Trusted` is rejected and
+the server applies source policy. Ordinary `Ingest` or `Write` authority never implies
+`TrustedIngest`.
+
+| Tier | Source policy posture | Treatment |
 |---|---|---|
-| `Trusted` | user-authored notes, direct declarations | full weight |
-| `SemiTrusted` | own conversations, agent traces | full weight, flagged |
-| `Untrusted` | web pages, imported documents, third-party messages | content fenced and marked as data; assertions get reduced trust weight and are **excluded from context assembly by default** unless corroborated by a trusted episode |
+| `Trusted` | registered human-authored sources, direct declarations | full weight |
+| `SemiTrusted` | conversations, agent traces, reviewed artifacts | full weight, flagged |
+| `Untrusted` | web clips, imported third-party material, unreviewed scratch content | content fenced and marked as data; assertions get reduced trust weight and are **excluded from context assembly by default** unless corroborated by a trusted episode |
 
 Additionally: extraction output is data, never executed; validated mentions must appear
-verbatim (§9.4); and assertions from a single untrusted episode can never alone flip a belief
-with trusted support.
+verbatim (§9.4); assertions retain the server-evaluated trust of their supporting episode; and
+assertions from a single untrusted episode can never alone flip a belief with trusted support.
 
 **C2 changes the threat surface, and improves it.** With a local extractor, untrusted content
 is processed by a model we ship, under a grammar we generate, on the user's machine — not sent
@@ -1805,9 +1854,9 @@ removed. "Forget this person entirely" is a supported, tested operation.
   keychain. Off by default because it complicates backup; documented.
 - HTTP is loopback-only by default; a non-loopback bind requires TLS and refuses to start
   without it.
-- **Sync is post-v1**, and the schema is ready: content-derived ids, content hashes, an
-  append-only ledger, and a rebuildable projection. The mechanism will be **ledger log
-  shipping** (append-only, content-addressed, commutative) plus **Loro** (Rust CRDT) for the
+- **Sync is post-v1**, and the schema is ready: deterministically derived ids, content hashes,
+  event identity, an append-only ledger, and a rebuildable projection. The mechanism will be
+  **ledger log shipping** (append-only and commutative) plus **Loro** (Rust CRDT) for the
   mutable slices needing real merge semantics: user merges, resolutions, config. Derived state
   is never synced; each device reprojects.
 
@@ -1934,7 +1983,7 @@ that were never populated (F30); the description must match what is returned.
 
 ```
 oxibrain init | doctor | stats
-oxibrain ingest <path|-> [--source kind] [--trust tier] [--space s] [--watch]
+oxibrain ingest <path|-> [--source kind] [--space s] [--watch]  # trust is server-evaluated
 oxibrain sync <dir> [--space s]                     # vault sync: idempotent, occurred_at = mtime
 oxibrain ask "<question>" [--as-of DATE] [--global] [--explain]
 oxibrain page <entity>                        # rendered brief
@@ -2269,8 +2318,8 @@ contract is a corruption path.
 corroboration confidence, real transaction time, non-destructive retraction, and reversible
 resolution.
 
-**D4 — Content-derived identity, not random ULIDs.** Deriving ids from first-mention location is
-acyclic, rename-stable, and makes P1's central test implementable.
+**D4 — Deterministically derived identity, not random ULIDs.** Episode ids derive from source
+occurrences; entity ids derive from first-mention location. Both are acyclic and replay-stable.
 
 **D5 — `EpisodeKind::Derived` is terminal.** Otherwise the community layer creates a
 generate→extract→recluster→generate loop and destroys reprojection determinism.

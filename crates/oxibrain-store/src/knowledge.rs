@@ -379,8 +379,8 @@ pub fn get_statement_group(
 
 pub fn insert_assertion(conn: &Connection, a: &Assertion) -> Result<(), BrainError> {
     conn.execute(
-        "INSERT OR IGNORE INTO assertions (id, statement_id, episode_id, extractor_id, polarity, claimed_from, claimed_to, confidence, recorded_at, retracted_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT OR IGNORE INTO assertions (id, statement_id, episode_id, extractor_id, polarity, claimed_from, claimed_to, confidence, recorded_at, retracted_at, trust)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             a.id,
             a.statement,
@@ -392,12 +392,12 @@ pub fn insert_assertion(conn: &Connection, a: &Assertion) -> Result<(), BrainErr
             a.confidence,
             a.recorded_at.millis(),
             a.retracted_at.map(|t| t.millis()),
+            a.trust.as_db(),
         ],
     )
     .map_err(sql_err)?;
     Ok(())
 }
-
 pub fn get_assertions_for_statement(
     conn: &Connection,
     statement_id: &str,
@@ -405,13 +405,14 @@ pub fn get_assertions_for_statement(
     let mut stmt = conn
         .prepare(
             "SELECT id, statement_id, episode_id, extractor_id, polarity,
-                    claimed_from, claimed_to, confidence, recorded_at, retracted_at
+                    claimed_from, claimed_to, confidence, recorded_at, retracted_at, trust
              FROM assertions WHERE statement_id = ?1",
         )
         .map_err(sql_err)?;
     let rows = stmt
         .query_map(params![statement_id], |r| {
             let polarity_val: i64 = r.get(4)?;
+            let trust_s: String = r.get(10)?;
             Ok(Assertion {
                 id: r.get(0)?,
                 statement: r.get(1)?,
@@ -423,6 +424,8 @@ pub fn get_assertions_for_statement(
                 confidence: r.get(7)?,
                 recorded_at: oxibrain_ports::Timestamp(r.get::<_, i64>(8)?),
                 retracted_at: r.get::<_, Option<i64>>(9)?.map(oxibrain_ports::Timestamp),
+                trust: oxibrain_core::TrustTier::parse_db(&trust_s)
+                    .expect("valid trust tier in db"),
             })
         })
         .map_err(sql_err)?;

@@ -162,6 +162,46 @@ pub fn token_id(token_hash: &str, issued_at: Timestamp) -> Id {
     ]))
 }
 
+/// `EpisodeEventId = blake3(space, source_id, occurrence_id)`.
+/// This is the event-identity key (§4.2): two independent sources with
+/// identical bytes produce distinct episodes because their source_id differs.
+pub fn episode_event_id(space: &str, source_id: &str, occurrence_id: &str) -> Id {
+    hex(derive(&[
+        ("space", space),
+        ("source_id", source_id),
+        ("occurrence_id", occurrence_id),
+    ]))
+}
+
+/// `SourceId = blake3(space, name)`. Deterministic; re-registration is idempotent.
+pub fn source_id(space: &str, name: &str) -> Id {
+    hex(derive(&[("space", space), ("name", name)]))
+}
+/// `SourcePolicyId = blake3(source_id, effective_from)`.
+pub fn source_policy_id(source_id: &str, effective_from: i64) -> Id {
+    hex(derive(&[
+        ("source_id", source_id),
+        ("effective_from", &effective_from.to_string()),
+    ]))
+}
+
+/// `OccurrenceId = blake3(source_id, locator, predecessor, content_hash)`.
+/// Server-derived for pull connectors; regenerable after a crash before the
+/// cursor advances. mtime and wall clock are deliberately absent (§4.2).
+pub fn occurrence_id(
+    source_id: &str,
+    locator: &str,
+    predecessor: Option<&str>,
+    content_hash: &ContentHash,
+) -> Id {
+    hex(derive(&[
+        ("source_id", source_id),
+        ("locator", locator),
+        ("predecessor", predecessor.unwrap_or("")),
+        ("content_hash", &content_hash.hex()),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,13 +2,14 @@ use oxibrain_core::knowledge::{Entity, Object, Statement};
 use oxibrain_core::registry::core_v1;
 use oxibrain_ports::Timestamp;
 use oxibrain_store::knowledge as kcrud;
+use oxibrain_store::migration;
 use oxibrain_store::registry;
 use rusqlite::Connection;
 
 fn fresh_conn() -> Connection {
+    migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().expect("open");
-    let sql = include_str!("../src/migrations/v1.sql");
-    conn.execute_batch(sql).expect("migrate");
+    migration::run(&conn).expect("migrate");
     // ensure a space exists
     conn.execute(
         "INSERT INTO spaces (id, name, created_at) VALUES ('s1', 'test', 0)",

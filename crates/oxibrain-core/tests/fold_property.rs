@@ -40,6 +40,7 @@ fn make_assertion(stmt: &str, ep: &str, polarity: Polarity, from: i64, to: i64) 
         confidence: 1.0,
         recorded_at: ts(1),
         retracted_at: None,
+        trust: oxibrain_core::TrustTier::Trusted,
     }
 }
 

@@ -304,6 +304,18 @@ pub fn project_extraction(
 ) -> Result<usize, BrainError> {
     let mut count = 0;
 
+    // Look up the episode's trust tier once — all assertions from this
+    // episode inherit it (P2: trust is a property of the evidence source).
+    let trust_str: String = conn
+        .query_row(
+            "SELECT trust FROM episodes WHERE id = ?1",
+            rusqlite::params![episode_id],
+            |r| r.get(0),
+        )
+        .map_err(sql_err)?;
+    let episode_trust = oxibrain_core::TrustTier::parse_db(&trust_str)
+        .unwrap_or(oxibrain_core::TrustTier::Untrusted);
+
     for claim in claims {
         // Resolve subject entity.
         let subj_eref = EntityRef {
@@ -368,6 +380,7 @@ pub fn project_extraction(
             confidence: claim.confidence,
             recorded_at: now,
             retracted_at: None,
+            trust: episode_trust,
         };
         kcrud::insert_assertion(conn, &assertion)?;
 
@@ -570,6 +583,45 @@ pub fn ingest_and_enqueue(
 
     crate::index_ops::index_episode_fts(conn, &episode.space, &ep_id, &episode.content)?;
 
+    enqueue_job(conn, &ep_id, extractor_id, now)?;
+    Ok(ep_id)
+}
+
+// 8 args mirrors `ingest_and_enqueue` (7) plus the attachment; the call
+// sites are the two facade impls, and bundling here would add a type for
+// one extra parameter.
+#[allow(clippy::too_many_arguments)]
+/// Event-identity variant of `ingest_and_enqueue`. Uses `insert_event` with
+/// an optional attachment, then indexes and enqueues extraction.
+/// `trust` is the server-evaluated trust tier for this episode.
+pub fn ingest_event_and_enqueue(
+    conn: &Connection,
+    space: &str,
+    content: &str,
+    source: SourceRef,
+    trust: oxibrain_core::TrustTier,
+    attachment: Option<&ledger::IngestAttachment>,
+    extractor_id: &str,
+    now: Timestamp,
+) -> Result<String, BrainError> {
+    let occurred_at = now;
+    let mut episode = oxibrain_core::Episode {
+        id: String::new(),
+        space: space.into(),
+        seq: 0,
+        content_hash: oxibrain_core::ContentHash([0u8; 32]),
+        content: content.into(),
+        source,
+        trust,
+        kind: EpisodeKind::Primary,
+        occurred_at,
+        ingested_at: now,
+        redacted_at: None,
+    };
+    ledger::insert_event(conn, &mut episode, attachment)?;
+    let ep_id = episode.id.clone();
+
+    crate::index_ops::index_episode_fts(conn, &episode.space, &ep_id, &episode.content)?;
     enqueue_job(conn, &ep_id, extractor_id, now)?;
     Ok(ep_id)
 }

@@ -28,6 +28,8 @@ pub enum Capability {
     Admin,
     /// redact — separate capability on purpose (§12.2)
     Redact,
+    /// May mark ingested content as trusted (bypasses server trust evaluation).
+    TrustedIngest,
 }
 
 impl Capability {
@@ -43,6 +45,7 @@ impl Capability {
                 "sample" => Some(Capability::Sample),
                 "admin" => Some(Capability::Admin),
                 "redact" => Some(Capability::Redact),
+                "trusted_ingest" => Some(Capability::TrustedIngest),
                 _ => None,
             };
             if let Some(c) = cap {
@@ -61,6 +64,7 @@ impl Capability {
             Capability::Sample => "sample",
             Capability::Admin => "admin",
             Capability::Redact => "redact",
+            Capability::TrustedIngest => "trusted_ingest",
         }
     }
 }
@@ -81,6 +85,9 @@ pub struct Scope {
     pub entity_type_filter: Option<Vec<String>>,
     /// When the token expires.
     pub expires_at: Option<Timestamp>,
+    /// Human-readable label for the token (informational only).
+    #[serde(default)]
+    pub label: String,
 }
 
 impl Scope {

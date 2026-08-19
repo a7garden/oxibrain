@@ -84,4 +84,82 @@ impl Brain {
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
+
+    /// Ingest an episode with event-identity attachment. Returns the episode id.
+    /// `trust` is the server-evaluated trust tier for this episode.
+    pub(crate) async fn ingest_event_impl(
+        &self,
+        space: &str,
+        content: String,
+        source: SourceRef,
+        trust: TrustTier,
+        attachment: Option<oxibrain_store::ledger::IngestAttachment>,
+        extractor_id: &str,
+    ) -> Result<String, BrainError> {
+        let h = self.handle.clone();
+        let now = self.clock.now();
+        let space = space.to_string();
+        let extractor_id = extractor_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer()?.submit(Box::new(move |conn| {
+                let ep_id = oxibrain_store::extraction::ingest_event_and_enqueue(
+                    conn,
+                    &space,
+                    &content,
+                    source,
+                    trust,
+                    attachment.as_ref(),
+                    &extractor_id,
+                    now,
+                )?;
+                let _ = tx.send(ep_id);
+                Ok(())
+            }))?;
+            h.writer()?.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("ingest_event channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Ensure a source is registered. Returns its id. Idempotent.
+    pub(crate) async fn ensure_source_impl(
+        &self,
+        space: &str,
+        name: &str,
+        kind: &str,
+        mode: &str,
+    ) -> Result<String, BrainError> {
+        let h = self.handle.clone();
+        let now = self.clock.now();
+        let space = space.to_string();
+        let name = name.to_string();
+        let kind = kind.to_string();
+        let mode = mode.to_string();
+        tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            h.writer()?.submit(Box::new(move |conn| {
+                let src_id = oxibrain_core::source_id(&space, &name);
+                let row = oxibrain_store::ledger::SourceRow {
+                    id: src_id.clone(),
+                    space: space.clone(),
+                    name,
+                    kind,
+                    mode,
+                    claims_json: "{}".into(),
+                    created_at: now,
+                };
+                oxibrain_store::ledger::insert_source(conn, &row)?;
+                let _ = tx.send(src_id);
+                Ok(())
+            }))?;
+            h.writer()?.flush()?;
+            rx.recv()
+                .map_err(|_| BrainError::Storage("ensure_source channel dropped".into()))
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
 }

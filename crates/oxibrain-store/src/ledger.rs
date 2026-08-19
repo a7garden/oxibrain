@@ -3,9 +3,10 @@
 use crate::sql_err;
 use oxibrain_core::{
     ContentHash, Episode, EpisodeKind, SourceRef, TrustTier, content_hash, episode_id,
+    id::episode_event_id,
 };
 use oxibrain_ports::{BrainError, Timestamp};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{HashMap, HashSet};
 
 /// Idempotently create a space, returning its id. Id is derived from name (deterministic).
@@ -105,6 +106,100 @@ pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainEr
     ep.seq = seq;
     ep.content_hash = ch;
     Ok(())
+}
+
+/// Attachment metadata for the event-identity write path (§4.1).
+/// All fields are server-assigned; never accepted from client payloads.
+#[derive(Clone)]
+pub struct IngestAttachment {
+    pub source_id: String,
+    pub occurrence_id: String,
+    pub accepted_at: Timestamp,
+    pub principal: String,
+    pub claims_json: String,
+}
+
+/// Insert an episode via event identity (§4.2).
+///
+/// With `attachment`: identity is `(space_id, source_id, occurrence_id)`.
+/// Without: delegates to `insert_episode` (legacy content-hash dedup).
+///
+/// Idempotent: re-inserting the same occurrence with identical bytes is a
+/// no-op. Same occurrence with different bytes is `BrainError::Conflict`.
+pub fn insert_event(
+    conn: &Connection,
+    ep: &mut Episode,
+    attachment: Option<&IngestAttachment>,
+) -> Result<(), BrainError> {
+    let Some(att) = attachment else {
+        return insert_episode(conn, ep);
+    };
+
+    let ch = content_hash(&ep.content);
+    let id = episode_event_id(&ep.space, &att.source_id, &att.occurrence_id);
+
+    // Check for existing episode with same event identity.
+    let existing: Option<(String, i64, Vec<u8>)> = conn
+        .query_row(
+            "SELECT id, seq, content_hash FROM episodes
+             WHERE space_id = ?1 AND source_id = ?2 AND occurrence_id = ?3",
+            params![ep.space, att.source_id, att.occurrence_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(sql_err)?;
+
+    match existing {
+        Some((eid, seq, stored_hash)) => {
+            if stored_hash == ch.as_bytes() {
+                // Idempotent: same event identity, same bytes.
+                ep.id = eid;
+                ep.seq = seq as u64;
+                ep.content_hash = ch;
+                return Ok(());
+            }
+            Err(BrainError::Conflict(format!(
+                "occurrence '{}' already exists with different content",
+                att.occurrence_id
+            )))
+        }
+        None => {
+            let seq = next_seq(conn, &ep.space)?;
+            let (source_kind, source_ref) = ep.source.db_columns();
+            conn.execute(
+                "INSERT INTO episodes
+                 (id, space_id, seq, content_hash, content, source_kind, source_ref,
+                  trust, kind, occurred_at, ingested_at, redacted_at,
+                  source_id, occurrence_id, accepted_at, principal, claims_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                         ?13, ?14, ?15, ?16, ?17)",
+                params![
+                    id,
+                    ep.space,
+                    seq,
+                    ch.as_bytes(),
+                    ep.content,
+                    source_kind,
+                    source_ref,
+                    ep.trust.as_db(),
+                    ep.kind.as_db(),
+                    ep.occurred_at.millis(),
+                    ep.ingested_at.millis(),
+                    ep.redacted_at.map(|t| t.millis()),
+                    att.source_id,
+                    att.occurrence_id,
+                    att.accepted_at.millis(),
+                    att.principal,
+                    att.claims_json,
+                ],
+            )
+            .map_err(sql_err)?;
+            ep.id = id;
+            ep.seq = seq;
+            ep.content_hash = ch;
+            Ok(())
+        }
+    }
 }
 
 pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, BrainError> {
@@ -225,6 +320,18 @@ fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainEr
         "conversation" => Ok(SourceRef::Conversation),
         "message" => Ok(SourceRef::Message),
         "agent_trace" => Ok(SourceRef::AgentTrace),
+        "document_revision" => Ok(SourceRef::DocumentRevision {
+            uri: r#ref.unwrap_or_default(),
+        }),
+        "artifact_event" => Ok(SourceRef::ArtifactEvent {
+            uri: r#ref.unwrap_or_default(),
+        }),
+        "web_clip" => Ok(SourceRef::WebClip {
+            uri: r#ref.unwrap_or_default(),
+        }),
+        "calendar_event" => Ok(SourceRef::CalendarEvent {
+            uri: r#ref.unwrap_or_default(),
+        }),
         "declaration" => Ok(SourceRef::Declaration),
         "derived" => Ok(SourceRef::Derived {
             of: r#ref.unwrap_or_default(),
@@ -233,4 +340,142 @@ fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainEr
             "unknown source kind: {other}"
         ))),
     }
+}
+
+// ── Source registry CRUD ────────────────────────────────────────────────────
+
+/// A registered source row.
+pub struct SourceRow {
+    pub id: String,
+    pub space: String,
+    pub name: String,
+    pub kind: String,
+    pub mode: String,
+    pub claims_json: String,
+    pub created_at: Timestamp,
+}
+
+/// Insert a source (idempotent: same id → no-op).
+pub fn insert_source(conn: &Connection, row: &SourceRow) -> Result<(), BrainError> {
+    conn.execute(
+        "INSERT OR IGNORE INTO sources (id, space_id, name, kind, mode, claims_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            row.id,
+            row.space,
+            row.name,
+            row.kind,
+            row.mode,
+            row.claims_json,
+            row.created_at.millis(),
+        ],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+/// Look up a source by (space, name).
+pub fn get_source_by_name(
+    conn: &Connection,
+    space: &str,
+    name: &str,
+) -> Result<Option<SourceRow>, BrainError> {
+    conn.query_row(
+        "SELECT id, space_id, name, kind, mode, claims_json, created_at
+         FROM sources WHERE space_id = ?1 AND name = ?2",
+        params![space, name],
+        |r| {
+            Ok(SourceRow {
+                id: r.get(0)?,
+                space: r.get(1)?,
+                name: r.get(2)?,
+                kind: r.get(3)?,
+                mode: r.get(4)?,
+                claims_json: r.get(5)?,
+                created_at: Timestamp(r.get::<_, i64>(6)?),
+            })
+        },
+    )
+    .optional()
+    .map_err(sql_err)
+}
+
+/// List all sources in a space.
+pub fn list_sources(conn: &Connection, space: &str) -> Result<Vec<SourceRow>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, space_id, name, kind, mode, claims_json, created_at
+             FROM sources WHERE space_id = ?1 ORDER BY name",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space], |r| {
+            Ok(SourceRow {
+                id: r.get(0)?,
+                space: r.get(1)?,
+                name: r.get(2)?,
+                kind: r.get(3)?,
+                mode: r.get(4)?,
+                claims_json: r.get(5)?,
+                created_at: Timestamp(r.get::<_, i64>(6)?),
+            })
+        })
+        .map_err(sql_err)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sql_err)
+}
+
+// ── Trust policy CRUD ───────────────────────────────────────────────────────
+
+/// A source trust policy row.
+pub struct PolicyRow {
+    pub id: String,
+    pub source_id: String,
+    pub trust: TrustTier,
+    pub effective_from: Timestamp,
+    pub effective_to: Option<Timestamp>,
+    pub declaration_ep: String,
+    pub created_at: Timestamp,
+}
+
+/// Insert a policy (idempotent: same id → no-op).
+pub fn insert_policy(conn: &Connection, row: &PolicyRow) -> Result<(), BrainError> {
+    conn.execute(
+        "INSERT OR IGNORE INTO source_policies
+         (id, source_id, trust, effective_from, effective_to, declaration_ep, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            row.id,
+            row.source_id,
+            row.trust.as_db(),
+            row.effective_from.millis(),
+            row.effective_to.map(|t| t.millis()),
+            row.declaration_ep,
+            row.created_at.millis(),
+        ],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+/// Effective trust for a source at a given time: the latest policy whose
+/// interval contains `at`. Returns None if no policy covers the instant.
+pub fn effective_policy_trust(
+    conn: &Connection,
+    source_id: &str,
+    at: Timestamp,
+) -> Result<Option<TrustTier>, BrainError> {
+    let trust_s: Option<String> = conn
+        .query_row(
+            "SELECT trust FROM source_policies
+             WHERE source_id = ?1
+               AND effective_from <= ?2
+               AND (effective_to IS NULL OR effective_to > ?2)
+             ORDER BY effective_from DESC
+             LIMIT 1",
+            params![source_id, at.millis()],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_err)?;
+    Ok(trust_s.and_then(|s| TrustTier::parse_db(&s)))
 }

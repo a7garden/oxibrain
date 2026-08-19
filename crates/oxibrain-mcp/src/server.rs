@@ -11,7 +11,7 @@ use crate::protocol::{
 };
 use oxibrain::{
     Brain, BrainConfig, BrainError, BriefTarget, Capability, DeclObject, Declaration, EntityRef,
-    RedactTarget, Scope,
+    IngestAttachment, RedactTarget, Scope, SourceRef, Timestamp, TrustTier,
 };
 use oxibrain_client::protocol::{ClientHello, ClientOperation};
 use oxibrain_core::retrieval::{
@@ -150,6 +150,17 @@ impl BrainServer {
             .map_err(|e| (INTERNAL_ERROR, format!("ensure_space: {e}")))?;
         if !scope.spaces.iter().any(|s| s == &space_id) {
             return Err((UNAUTHORIZED, format!("token not scoped to space '{space}'")));
+        }
+        // Trust gate: only tokens with TrustedIngest may claim trust=trusted.
+        // Without the capability, the server evaluates trust from policy.
+        if matches!(tool, "ingest" | "remember") {
+            let requested_trust = args.get("trust").and_then(|v| v.as_str()).unwrap_or("");
+            if requested_trust == "trusted" && !scope.caps.contains(&Capability::TrustedIngest) {
+                return Err((
+                    UNAUTHORIZED,
+                    "trust='trusted' requires the trusted_ingest capability".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -445,6 +456,51 @@ impl BrainServer {
             .map_err(ToolErr::run)
     }
 
+    /// Resolve the trust tier for an ingest call. If the caller passed
+    /// `trust` and has the TrustedIngest capability (already gated in
+    /// enforce_scope), honor it. Otherwise default to Trusted — parity with
+    /// the existing `ingest_note` path (ingest.rs uses TrustTier::Trusted).
+    /// Plan 2 replaces this default with `effective_policy_trust` lookup.
+    fn resolve_trust(&self, args: &Value) -> TrustTier {
+        match args.get("trust").and_then(|v| v.as_str()) {
+            Some("trusted") => TrustTier::Trusted,
+            Some("semi_trusted") => TrustTier::SemiTrusted,
+            Some("untrusted") => TrustTier::Untrusted,
+            _ => TrustTier::Trusted,
+        }
+    }
+
+    /// Build an IngestAttachment for MCP-originated content.
+    /// occurrence_id = content_hash(content): same content re-push is
+    /// idempotent; different content at same locator creates a new episode.
+    async fn build_attachment(
+        &self,
+        space_id: &str,
+        source_name: &str,
+        content: &str,
+        now: Timestamp,
+    ) -> Result<IngestAttachment, ToolErr> {
+        let source_id = self
+            .brain
+            .ensure_source(space_id, source_name, "mcp", "push")
+            .await
+            .map_err(ToolErr::run)?;
+        let occurrence_id = oxibrain_core::content_hash(content).hex();
+        let principal = self
+            .scope
+            .as_ref()
+            .map(|s| s.label.clone())
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| "mcp".into());
+        Ok(IngestAttachment {
+            source_id,
+            occurrence_id,
+            accepted_at: now,
+            principal,
+            claims_json: "{}".into(),
+        })
+    }
+
     async fn tool_ingest(
         &self,
         args: &Value,
@@ -458,9 +514,20 @@ impl BrainServer {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let now = SystemClock.now();
+        let trust = self.resolve_trust(args);
+        let attachment = self
+            .build_attachment(&space_id, &path, content, now)
+            .await?;
         let id = self
             .brain
-            .ingest_note(&space_id, &path, content.to_string(), now)
+            .ingest_event(
+                &space_id,
+                content.to_string(),
+                SourceRef::Note { path: path.clone() },
+                trust,
+                Some(&attachment),
+                "mcp-ingest",
+            )
             .await
             .map_err(ToolErr::run)?;
 
@@ -662,9 +729,20 @@ impl BrainServer {
         let space_id = self.ensure_space(&space_arg(args)).await?;
         let path = str_arg_or(args, "source_path", "remember");
         let now = SystemClock.now();
+        let trust = self.resolve_trust(args);
+        let attachment = self
+            .build_attachment(&space_id, &path, content, now)
+            .await?;
         let id = self
             .brain
-            .ingest_note(&space_id, &path, content.to_string(), now)
+            .ingest_event(
+                &space_id,
+                content.to_string(),
+                SourceRef::Note { path: path.clone() },
+                trust,
+                Some(&attachment),
+                "mcp-remember",
+            )
             .await
             .map_err(ToolErr::run)?;
         // remember always extracts synchronously (DESIGN §12.2).
@@ -1086,7 +1164,8 @@ fn tool_list() -> Value {
                         "content": { "type": "string", "description": "The text to ingest." },
                         "space": { "type": "string", "description": "Space name (default: personal)." },
                         "source_path": { "type": "string", "description": "Optional source label, e.g. a file path (default: mcp)." },
-                        "extract": { "type": "boolean", "description": "If true, extract claims via client sampling immediately (default: false)." }
+                        "extract": { "type": "boolean", "description": "If true, extract claims via client sampling immediately (default: false)." },
+                        "trust": { "type": "string", "enum": ["trusted","semi_trusted","untrusted"], "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands)." }
                     },
                     "required": ["content"]
                 })),
@@ -1156,7 +1235,8 @@ fn tool_list() -> Value {
                     "properties": {
                         "content": { "type": "string", "description": "The fact or note to remember." },
                         "space": { "type": "string", "description": "Space name (default: personal)." },
-                        "source_path": { "type": "string", "description": "Optional source label (default: remember)." }
+                        "source_path": { "type": "string", "description": "Optional source label (default: remember)." },
+                        "trust": { "type": "string", "enum": ["trusted","semi_trusted","untrusted"], "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands)." }
                     },
                     "required": ["content"]
                 })),
@@ -2360,6 +2440,7 @@ mod tests {
             predicate_filter: None,
             entity_type_filter: None,
             expires_at: None,
+            label: String::new(),
         }
     }
 
@@ -3714,5 +3795,186 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("loopback"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn trust_gate_rejects_trusted_without_capability() {
+        let (_dir, server) = fresh_scoped(&[Capability::Ingest], &["personal"]).await;
+        let msg = msg(
+            1,
+            "tools/call",
+            Some(json!({
+                "name": "ingest",
+                "arguments": {
+                    "content": "test",
+                    "space": "personal",
+                    "trust": "trusted"
+                }
+            })),
+        );
+        let resp = server.handle(msg).await.unwrap();
+        let err = resp.get("error").expect("must be an error");
+        assert_eq!(err["code"], UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn trust_gate_allows_trusted_with_capability() {
+        let (_dir, server) = fresh_scoped(
+            &[Capability::Ingest, Capability::TrustedIngest],
+            &["personal"],
+        )
+        .await;
+        let msg = msg(
+            1,
+            "tools/call",
+            Some(json!({
+                "name": "ingest",
+                "arguments": {
+                    "content": "test",
+                    "space": "personal",
+                    "trust": "trusted"
+                }
+            })),
+        );
+        let resp = server.handle(msg).await.unwrap();
+        // Should succeed (no error field) or return a tool result.
+        assert!(
+            resp.get("error").is_none(),
+            "trusted_ingest cap must allow trust=trusted"
+        );
+    }
+
+    #[tokio::test]
+    async fn trust_gate_allows_ingest_without_trust_param() {
+        let (_dir, server) = fresh_scoped(&[Capability::Ingest], &["personal"]).await;
+        let msg = msg(
+            1,
+            "tools/call",
+            Some(json!({
+                "name": "ingest",
+                "arguments": {
+                    "content": "test",
+                    "space": "personal"
+                }
+            })),
+        );
+        let resp = server.handle(msg).await.unwrap();
+        assert!(
+            resp.get("error").is_none(),
+            "ingest without trust param must succeed"
+        );
+    }
+
+    /// Event-path wiring: ingest creates an episode with attachment.
+    /// Verifies source_id, occurrence_id, and trust are persisted.
+    #[tokio::test]
+    async fn ingest_creates_episode_with_attachment() {
+        let (_dir, server) = fresh_scoped(&[Capability::Ingest], &["personal"]).await;
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "ingest",
+                    "arguments": {
+                        "content": "attachment test",
+                        "space": "personal",
+                        "source_path": "test-source"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(resp.get("error").is_none());
+
+        // Extract episode id from the result text.
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let ep_id = text
+            .strip_prefix("Ingested as episode: ")
+            .unwrap()
+            .to_string();
+
+        // Verify the episode via direct brain access (same-module private field).
+        let ep = server.brain.get_episode(&ep_id).await.unwrap().unwrap();
+        assert_eq!(ep.content, "attachment test");
+        assert_eq!(
+            ep.trust,
+            TrustTier::Trusted,
+            "default trust without param must be Trusted (note-path parity)"
+        );
+
+        // Re-push same content: must return the same episode id (idempotent).
+        let resp2 = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "ingest",
+                    "arguments": {
+                        "content": "attachment test",
+                        "space": "personal",
+                        "source_path": "test-source"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text2 = resp2["result"]["content"][0]["text"].as_str().unwrap();
+        let ep_id2 = text2
+            .strip_prefix("Ingested as episode: ")
+            .unwrap()
+            .to_string();
+        assert_eq!(ep_id, ep_id2, "same content re-push must be idempotent");
+    }
+
+    /// Different content at same source_path creates a new episode.
+    #[tokio::test]
+    async fn ingest_different_content_creates_new_episode() {
+        let (_dir, server) = fresh_scoped(&[Capability::Ingest], &["personal"]).await;
+        let resp1 = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "ingest",
+                    "arguments": {
+                        "content": "version 1",
+                        "space": "personal",
+                        "source_path": "doc.md"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text1 = resp1["result"]["content"][0]["text"].as_str().unwrap();
+        let id1 = text1
+            .strip_prefix("Ingested as episode: ")
+            .unwrap()
+            .to_string();
+
+        let resp2 = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "ingest",
+                    "arguments": {
+                        "content": "version 2",
+                        "space": "personal",
+                        "source_path": "doc.md"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text2 = resp2["result"]["content"][0]["text"].as_str().unwrap();
+        let id2 = text2
+            .strip_prefix("Ingested as episode: ")
+            .unwrap()
+            .to_string();
+        assert_ne!(
+            id1, id2,
+            "different content at same source must create new episode"
+        );
     }
 }

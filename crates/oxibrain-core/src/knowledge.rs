@@ -146,6 +146,9 @@ pub struct Assertion {
     pub confidence: f32,
     pub recorded_at: Timestamp,
     pub retracted_at: Option<Timestamp>,
+    /// Trust tier of the supporting episode at ingest time.
+    #[serde(default)]
+    pub trust: TrustTier,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]

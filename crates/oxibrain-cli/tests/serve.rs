@@ -498,3 +498,82 @@ async fn e2e_smoke_default_discovery() {
         "connect_default took {elapsed:?}; expected < 1s fast degradation"
     );
 }
+
+#[tokio::test]
+async fn trust_gate_enforced_through_daemon_socket() {
+    use oxibrain::{Brain, BrainConfig, Capability, Scope};
+    use oxibrain_client::BrainClient;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let data_dir = dir.path().to_path_buf();
+    let sock_path = dir.path().join("test.sock");
+
+    // Pre-issue a token BEFORE the daemon starts (advisory lock conflict).
+    let secret = {
+        let brain = Brain::open(BrainConfig::at(&data_dir)).await.unwrap();
+        let space_id = brain.ensure_space("personal").await.unwrap();
+        let scope = Scope {
+            spaces: vec![space_id],
+            caps: [Capability::Ingest].into_iter().collect(),
+            predicate_filter: None,
+            entity_type_filter: None,
+            expires_at: None,
+            label: String::new(),
+        };
+        let (_info, secret) = brain.issue_token(&scope, "test", None).await.unwrap();
+        drop(brain); // Release advisory lock before daemon starts.
+        secret
+    };
+
+    // Spawn daemon with --require-token.
+    let mut child = spawn_daemon(
+        &data_dir,
+        &[
+            "--daemon",
+            "--socket",
+            sock_path.to_str().unwrap(),
+            "--require-token",
+        ],
+        None,
+    );
+
+    let appeared = wait_for_socket(&sock_path, Duration::from_secs(5)).await;
+    assert!(appeared, "daemon must start");
+
+    // Connect with token and try trust=trusted.
+    let mut client = BrainClient::connect_with_token(&sock_path, &secret)
+        .await
+        .expect("connect with token");
+
+    let result = client
+        .call_tool(
+            "ingest",
+            serde_json::json!({
+                "content": "test content",
+                "space": "personal",
+                "trust": "trusted"
+            }),
+        )
+        .await;
+
+    // Must fail: token lacks TrustedIngest capability.
+    assert!(
+        result.is_err(),
+        "trust=trusted without TrustedIngest must be rejected"
+    );
+
+    // Without trust param, ingest must succeed.
+    let result = client
+        .call_tool(
+            "ingest",
+            serde_json::json!({
+                "content": "test content without trust",
+                "space": "personal"
+            }),
+        )
+        .await;
+    assert!(result.is_ok(), "ingest without trust param must succeed");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}

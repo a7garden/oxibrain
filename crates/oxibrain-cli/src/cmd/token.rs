@@ -16,6 +16,7 @@ pub async fn run_issue(
         predicate_filter: None,
         entity_type_filter: None,
         expires_at: None,
+        label: String::new(),
     };
     let (info, secret) = brain.issue_token(&scope, "cli", label).await?;
     println!("issued token id={}", info.id);

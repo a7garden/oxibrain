@@ -297,6 +297,7 @@ fn helper_does_not_bypass_or_widen_a_read_only_scope() {
         predicate_filter: None,
         entity_type_filter: None,
         expires_at: None,
+        label: String::new(),
     };
     let snapshot = scope_before.clone();
 

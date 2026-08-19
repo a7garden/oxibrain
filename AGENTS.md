@@ -89,12 +89,20 @@ if tests pass; changing one requires revising the architecture doc first.**
     `merge`, `retract`) create `Declaration` episodes. Never write a projection
     row that no episode explains — reprojection would erase it.
   - **The truth half is byte-identical across rebuilds** — entities, keys, merges,
-    statements, assertions, mentions, beliefs, predicates. IDs are content-derived
-    (§5.6), replay order is canonical. Never introduce a random ULID, a wall-clock
-    value, or a map iteration order into anything persisted here.
+    statements, assertions, mentions, beliefs, predicates. IDs are deterministically
+    derived (§5.6), replay order is canonical. Never introduce a random ULID, a
+    wall-clock value, or a map iteration order into anything persisted here.
   - **The ranking half is equivalent, not identical** — vectors, FTS, chunks,
     adjacency, communities, salience. It may contain float embeddings. **Nothing
     in the ranking half may ever be read by the fold.**
+- **Event identity is source occurrence, not byte equality.** For new-path
+  episodes, identity is `(space_id, source_id, occurrence_id)`; `content_hash`
+  verifies bytes and must never be used to collapse equal content from independent
+  sources. Schema v10 intentionally has no `UNIQUE(space_id, content_hash)`.
+- **Trust is server-evaluated ledger state.** Clients submit provenance claims,
+  never an authoritative `TrustTier`; effective trust comes from source-policy
+  `Declaration` episodes. `TrustedIngest` is the sole capability that may bypass
+  policy and explicitly mark an ingest as trusted.
 - **`EpisodeKind::Derived` is terminal.** Consolidation and community summaries
   write derived episodes; nothing is ever extracted from one, and their generated
   text is cached. Extracting from a derived episode creates a feedback loop that

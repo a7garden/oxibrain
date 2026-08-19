@@ -32,6 +32,7 @@ pub use oxibrain_ports::{
     SystemClock, Timestamp, TokenizerPort,
 };
 
+pub use oxibrain_store::ledger::IngestAttachment;
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 pub use oxibrain_store::security::AuditRow;
 use oxibrain_store::{StoreHandle, ledger, project::ResolutionCache, query, reproject};
@@ -794,6 +795,42 @@ impl Brain {
     ) -> Result<String, BrainError> {
         self.ingest_impl(space, content, source, trust, extractor_id)
             .await
+    }
+
+    /// Ingest an episode with event-identity provenance (§4.1).
+    /// `trust` is the server-evaluated trust tier. `attachment` carries
+    /// server-assigned source/occurrence/principal. Pass `None` attachment
+    /// for legacy content-hash dedup behavior.
+    pub async fn ingest_event(
+        &self,
+        space: &str,
+        content: String,
+        source: SourceRef,
+        trust: TrustTier,
+        attachment: Option<&oxibrain_store::ledger::IngestAttachment>,
+        extractor_id: &str,
+    ) -> Result<String, BrainError> {
+        self.ingest_event_impl(
+            space,
+            content,
+            source,
+            trust,
+            attachment.cloned(),
+            extractor_id,
+        )
+        .await
+    }
+
+    /// Ensure a source is registered in the source registry. Returns its id.
+    /// Idempotent: re-registration returns the same id.
+    pub async fn ensure_source(
+        &self,
+        space: &str,
+        name: &str,
+        kind: &str,
+        mode: &str,
+    ) -> Result<String, BrainError> {
+        self.ensure_source_impl(space, name, kind, mode).await
     }
 
     /// Issue a token. Returns (TokenInfo, secret). The secret is shown once.

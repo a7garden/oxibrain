@@ -387,7 +387,7 @@ fn fold_supersede(
 
 /// Compute support from visible assertions.
 fn compute_support(assertions: &[Assertion]) -> Support {
-    use std::collections::HashSet;
+    use std::collections::BTreeMap;
 
     let affirm_count = assertions
         .iter()
@@ -398,29 +398,46 @@ fn compute_support(assertions: &[Assertion]) -> Support {
         .filter(|a| a.polarity == Polarity::Deny)
         .count() as u32;
 
-    let distinct_episodes: HashSet<&str> = assertions.iter().map(|a| a.episode.as_str()).collect();
+    // Distinct episodes per trust tier. Trust is per-episode, not per-assertion,
+    // so we deduplicate by episode id first.
+    let mut episode_trust: BTreeMap<&str, TrustTier> = BTreeMap::new();
+    for a in assertions {
+        episode_trust.entry(a.episode.as_str()).or_insert(a.trust);
+    }
 
-    // In M1, all declarations are Trusted by default (no trust tier system until M4).
-    // All distinct episodes count as Trusted. Sorted deterministically (single entry).
-    let trust_weights = if distinct_episodes.is_empty() {
-        Vec::new()
-    } else {
-        vec![(TrustTier::Trusted, distinct_episodes.len() as u32)]
-    };
+    let mut trusted = 0u32;
+    let mut semi = 0u32;
+    let mut untrusted = 0u32;
+    for tier in episode_trust.values() {
+        match tier {
+            TrustTier::Trusted => trusted += 1,
+            TrustTier::SemiTrusted => semi += 1,
+            TrustTier::Untrusted => untrusted += 1,
+        }
+    }
+
+    let mut trust_weights = Vec::new();
+    if trusted > 0 {
+        trust_weights.push((TrustTier::Trusted, trusted));
+    }
+    if semi > 0 {
+        trust_weights.push((TrustTier::SemiTrusted, semi));
+    }
+    if untrusted > 0 {
+        trust_weights.push((TrustTier::Untrusted, untrusted));
+    }
 
     Support {
         affirm_count,
         deny_count,
-        distinct_episodes: distinct_episodes.len() as u32,
+        distinct_episodes: episode_trust.len() as u32,
         trust_weights,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::confidence::CalibrationTable;
-    use crate::knowledge::{Object, Polarity, Statement};
+    use crate::knowledge::Object;
     use crate::registry::{Cardinality, Invalidation, ObjectKind, PredicateDef, Temporality};
     use oxibrain_ports::{TIME_MAX, TIME_MIN, Timestamp};
 
@@ -446,6 +463,7 @@ mod tests {
             confidence: 1.0,
             recorded_at: ts(1),
             retracted_at: None,
+            trust: TrustTier::Trusted,
         }
     }
 
@@ -555,6 +573,7 @@ mod tests {
             confidence: 0.9,
             recorded_at: ts(1),
             retracted_at: None,
+            trust: TrustTier::Trusted,
         };
         let group = vec![StatementEntry {
             statement: stmt,
@@ -729,6 +748,7 @@ mod tests {
                     confidence: 1.0,
                     recorded_at: ts(2),
                     retracted_at: None,
+                    trust: TrustTier::Trusted,
                 },
             ],
         }];
@@ -763,6 +783,7 @@ mod tests {
                 confidence: 1.0,
                 recorded_at: ts(1),
                 retracted_at: Some(ts(5)), // retracted before `at`
+                trust: TrustTier::Trusted,
             }],
         }];
         let beliefs = fold(

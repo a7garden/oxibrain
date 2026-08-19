@@ -16,7 +16,7 @@ use oxibrain_core::knowledge::{
     ResolutionMethod, Statement, TypedValue,
 };
 use oxibrain_core::resolution::{self, ResolutionConfig};
-use oxibrain_core::{EpisodeKind, SourceRef};
+use oxibrain_core::{EpisodeKind, SourceRef, TrustTier};
 use oxibrain_index::ngram;
 use oxibrain_index::{BlockingConfig, LshIndex};
 use oxibrain_ports::{BrainError, Timestamp};
@@ -148,6 +148,18 @@ pub enum Declaration {
         predicate: String,
         object: DeclObject,
         episode: String,
+    },
+    RegisterSource {
+        name: String,
+        kind: String,
+        mode: String,
+        claims_json: String,
+    },
+    SetSourcePolicy {
+        source_name: String,
+        trust: String,
+        effective_from: i64,
+        effective_to: Option<i64>,
     },
 }
 
@@ -566,6 +578,7 @@ pub fn project_declaration(
                 confidence: 1.0,
                 recorded_at: now,
                 retracted_at: None,
+                trust: oxibrain_core::TrustTier::Trusted,
             };
             kcrud::insert_assertion(conn, &assertion)?;
 
@@ -685,6 +698,46 @@ pub fn project_declaration(
                     group.iter().map(|e| e.statement.id.clone()).collect();
                 kcrud::replace_beliefs(conn, &group_stmt_ids, &beliefs)?;
             }
+        }
+        Declaration::RegisterSource {
+            name,
+            kind,
+            mode,
+            claims_json,
+        } => {
+            let src_id = oxibrain_core::source_id(space, name);
+            let row = ledger::SourceRow {
+                id: src_id,
+                space: space.to_string(),
+                name: name.clone(),
+                kind: kind.clone(),
+                mode: mode.clone(),
+                claims_json: claims_json.clone(),
+                created_at: now,
+            };
+            ledger::insert_source(conn, &row)?;
+        }
+        Declaration::SetSourcePolicy {
+            source_name,
+            trust,
+            effective_from,
+            effective_to,
+        } => {
+            let tier = TrustTier::parse_db(trust)
+                .ok_or_else(|| BrainError::Invalid(format!("bad trust tier: {trust}")))?;
+            let src = ledger::get_source_by_name(conn, space, source_name)?
+                .ok_or_else(|| BrainError::NotFound(format!("source not found: {source_name}")))?;
+            let pol_id = oxibrain_core::source_policy_id(&src.id, *effective_from);
+            let row = ledger::PolicyRow {
+                id: pol_id,
+                source_id: src.id,
+                trust: tier,
+                effective_from: Timestamp(*effective_from),
+                effective_to: effective_to.map(Timestamp),
+                declaration_ep: ep_id.clone(),
+                created_at: now,
+            };
+            ledger::insert_policy(conn, &row)?;
         }
     }
     crate::index_ops::index_entities_fts(conn, space, &touched)?;
