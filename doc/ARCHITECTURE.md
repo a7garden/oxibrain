@@ -1,6 +1,12 @@
 # oxibrain — Architecture
-> **Version:** v2.7 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
-> **v2.7 — Pull-connector occurrence identity.** §4.2 documents the `oxibrain sync`
+> **Version:** v2.8 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.8 — Curation parity.** §4.2.2 documents the curation surface: every user
+> knowledge edit (entity merge/split/alias/retract, manual declare, predicate add,
+> source policy) is a `Declaration` episode, so reprojection replays it exactly (§5.3).
+> Split is formalized as the inverse of Merge — it sets `EntityMerge.undone_at`
+> rather than deleting the row — and D34 records the decision. CLI verbs in §16.4
+> gain entity `alias`/`retract`, `declare`, `predicate add`, and `source policy`.
+> v2.7 — Pull-connector occurrence identity. §4.2 documents the `oxibrain sync`
 > pull connector: source identity (`name = canonical vault path`, `kind = document_revision`,
 > `mode = pull`), the occurrence chain `occurrence_id = H(source_id, locator, predecessor,
 > content_hash)`, and the rule that legacy episodes (pre-event-path) are classified but never
@@ -426,6 +432,61 @@ future push-mode, web-connector, or agent-trace sources that share the same spac
 > call site; D27's model-ownership rule covers local inference. Sync across devices (§15.6)
 > is post-v1 — when it lands, occurrence chains survive the round trip because every
 > occurrence is reproducible from `(source_id, locator, predecessor, content_hash)` alone.
+
+#### 4.2.2 Curation operations
+
+User-driven knowledge edits — **merging two entities**, **splitting a previously-merged
+entity**, **adding a user-declared alias**, **registering a new predicate**, and **setting a
+source ingest policy** — are first-class curation operations, not out-of-band database
+fixes. Each one writes a `Declaration` episode (§5.3), so every derived row in the
+projection (entity, merge, key, predicate, source policy) is reproducible from the ledger
+alone. Reprojection replays declarations exactly, and the user's knowledge edits survive a
+rebuild the same way user merges do (§5.3, §10.4).
+
+The curation surface is therefore the same surface as the ingestion path: append-only,
+auditable, and idempotent under reprojection. Curation never mutates a previously-written
+ledger row; it appends a new one whose projection side-effects supersede what came before.
+This is the same invariant P1 enforces for ingestion, restated explicitly for the curation
+verbs in §16.4.
+
+| Operation | Declaration variant | Projection effect |
+|---|---|---|
+| `merge`         | `Merge`              | inserts `entity_merges` row with `decided_by = User`; sets `entities.merged_into` on the loser; updates `ResolutionCache` |
+| `split`         | `Split`              | sets `entity_merges.undone_at = now` on the targeted merge; clears `merged_into` for that loser; resolution re-runs only for the affected mentions (§10.4) |
+| `alias`         | `Alias`              | inserts an `EntityKey` with `origin = UserDeclared`; no entity IDs change, only the name table (§10.1) |
+| `retract`       | `Retract`            | sets `assertions.retracted_at = now` (P5 — P1 forbids deletion); the fold's `retracted_at IS NULL` filter (§6.6) drops it from subsequent beliefs without rewriting history |
+| `declare`       | `AddStatement`       | inserts a `Declaration`-kind `Episode` plus a supporting `assertion` row — the manual equivalent of an extracted statement |
+| `predicate add` | `RegisterPredicate`  | inserts a row in the predicate registry (`core/v1` seed; user predicates are additions per §5.5) — registry is **truth-half data** and minor-version changes do not invalidate the extraction cache |
+| `source policy` | `SetSourcePolicy`    | inserts a `Declaration` episode carrying the new trust/policy mapping; replay rebuilds effective trust without consulting mutable external config (§15.3) |
+
+**Split is the inverse of Merge (§10.4, D34).** Concretely: `split(merge_id)` does **not**
+delete the `EntityMerge` row. It sets `undone_at` on that row and clears `merged_into` on
+the previously-losing entity, so the merge remains in the ledger as a recorded past
+decision. This is the same pattern P5 uses for forgetting — redaction is the only
+destructive path (§15.5) — and the only way reprojection can reproduce the historical
+state of the system.
+
+**`alias` and identity (P3, §10).** `alias` only adds a `UserDeclared` entry to the
+`entity_keys` table for an existing entity; it never mints a new entity id. Subsequent
+extraction sees the alias in the resolver's surface candidate set, and because keys are
+matched on the normalized form derived from `entity_keys.surface` (§10.1), the alias is
+reproducible under reprojection. Determinism of derived IDs (§5.6) is preserved.
+
+**`predicate add` is truth-half.** `RegisterPredicate` writes a registry row and a
+`Declaration` episode. The registry is consulted by extraction prompts (§9.4) and by the
+validator; because both consumers re-read the registry on every run, the new predicate
+takes effect on the next extraction without code changes. Minor-version additions do **not**
+invalidate the extraction cache (§5.5), so adding a predicate does not force a paid
+re-extraction of existing episodes.
+
+**Source policy is server-evaluated, not client-declared (§15.3).** `source policy` writes a
+`Declaration` episode that the trust resolver replays to compute effective `TrustTier` per
+source. Effective trust therefore has no mutable external dependency: replays reproduce the
+same assessment because the policy lives in the ledger.
+
+**Idempotency under reprojection** is verified by the same ledger-replay tests that cover
+ingestion (§17.4) — a randomly generated ledger of `Declaration` episodes projects to the
+same truth half whether replayed in one pass or incrementally built.
 
 ### 4.3 Deployment modes
 
@@ -2063,7 +2124,9 @@ oxibrain ingest <path|-> [--source kind] [--space s] [--watch]  # trust is serve
 oxibrain sync <dir> [--space s]                     # vault sync: idempotent, occurred_at = mtime
 oxibrain ask "<question>" [--as-of DATE] [--global] [--explain]
 oxibrain page <entity>                        # rendered brief
-oxibrain entity show|merge|split|alias
+oxibrain entity show|merge|split|alias|retract          # §4.2.2 — merge/split are inverse (D34); alias +retract are Declarations
+oxibrain declare <subject> <predicate> <object>         # §4.2.2 — manual assertion write as a Declaration episode
+oxibrain source policy <source-name> --trust <tier>     # §4.2.2 — server-evaluated trust via Declaration
 oxibrain timeline <entity> [--from --to]
 oxibrain why <statement-id> | why --dropped "<query>"
 oxibrain contradictions | review
@@ -2515,6 +2578,17 @@ they are never re-ingested because re-ingesting them under a freshly-allocated s
 would silently rewrite history. The first `Modified` ingest on the event path for a
 previously legacy-only locator migrates it forward, one file per sync, which is the only
 point at which legacy disappears.
+
+**D34 — Split is the inverse of Merge; it sets `undone_at` rather than deleting the merge
+record.** `Split` (the `oxibrain entity split` CLI verb in §4.2.2, §16.4) does **not** remove
+the `entity_merges` row. The operation appends a `Declaration` episode carrying the `Split`
+variant, whose projection arm sets `entity_merges.undone_at = now` on the targeted merge and
+clears `entities.merged_into` on the previously-losing entity. The merge stays in the ledger
+as a recorded past decision, so reprojection can reproduce the historical state of the
+system. This is the same write pattern P5 uses for forgetting — redaction is the only
+destructive path (§15.5) — and it is the precondition for D6 (the ledger as the only
+durable write path): without it, a split would be an out-of-band fix that the next
+`reproject` would silently undo.
 
 **D32 — This document is `ARCHITECTURE.md`.** "DESIGN.md" has come to denote a front-end
 design-system document; `ARCHITECTURE.md` is the Rust-ecosystem convention and is unambiguous.
