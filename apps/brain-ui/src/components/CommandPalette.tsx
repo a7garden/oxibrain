@@ -35,11 +35,8 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const actions: readonly Action[] = useMemo(
     () => [
       { kind: "nav", to: "/", label: "Overview", icon: "◐" },
-      { kind: "nav", to: "/graph", label: "Graph", icon: "✦" },
-      { kind: "nav", to: "/ask", label: "Ask", icon: "⌕" },
       { kind: "nav", to: "/conflicts", label: "Conflicts", icon: "⚡" },
       { kind: "nav", to: "/merges", label: "Merges", icon: "⇄" },
-      { kind: "nav", to: "/capture", label: "Capture", icon: "✎" },
       { kind: "theme", label: "Toggle theme", icon: "◑" },
     ],
     [],

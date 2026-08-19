@@ -6,13 +6,13 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { AppShell } from "./App";
-import { AskView } from "./views/AskView";
-import { CaptureView } from "./views/CaptureView";
 import { ConflictsView } from "./views/ConflictsView";
 import { EntityPage } from "./views/EntityPage";
-import { GraphView } from "./views/GraphView";
+import { FailuresView } from "./views/FailuresView";
 import { MergesView } from "./views/MergesView";
+import { OperationsView } from "./views/OperationsView";
 import { Overview } from "./views/Overview";
+import { SourcesView } from "./views/SourcesView";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -28,18 +28,6 @@ const indexRoute = createRoute({
   component: Overview,
 });
 
-const graphRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/graph",
-  component: GraphView,
-});
-
-const graphEntityRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/graph/$entityId",
-  component: GraphView,
-});
-
 const entityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/entity/$entityId",
@@ -47,18 +35,6 @@ const entityRoute = createRoute({
     tab: s.tab === "timeline" ? ("timeline" as const) : ("brief" as const),
   }),
   component: EntityPage,
-});
-
-const askRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/ask",
-  validateSearch: (s: Record<string, unknown>) => ({
-    q: typeof s.q === "string" ? s.q : "",
-    // Unique-per-press marker; the `/` hotkey pushes a fresh timestamp so
-    // AskView's autofocus effect fires on every press, including same-route.
-    autofocus: typeof s.autofocus === "number" ? s.autofocus : 0,
-  }),
-  component: AskView,
 });
 
 const conflictsRoute = createRoute({
@@ -73,21 +49,32 @@ const mergesRoute = createRoute({
   component: MergesView,
 });
 
-const captureRoute = createRoute({
+const failuresRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/capture",
-  component: CaptureView,
+  path: "/failures",
+  component: FailuresView,
+});
+
+const sourcesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sources",
+  component: SourcesView,
+});
+
+const operationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/operations",
+  component: OperationsView,
 });
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  graphRoute,
-  graphEntityRoute,
   entityRoute,
-  askRoute,
   conflictsRoute,
   mergesRoute,
-  captureRoute,
+  failuresRoute,
+  sourcesRoute,
+  operationsRoute,
 ]);
 
 export const router = createRouter({

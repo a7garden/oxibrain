@@ -5,6 +5,9 @@
 # Frontend (Phase 4)
 node_modules/
 dist/
+# The console bundle is committed (ADR-008) so `cargo install oxibrain`
+# can serve it without Node. Any other dist/ stays ignored.
+!apps/brain-ui/dist/
 .vite/
 
 # OS / editor

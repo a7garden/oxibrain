@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode } from "react";
 import { CommandPalette } from "./components/CommandPalette";
@@ -19,18 +19,18 @@ const sidebarPrimitives = {
 } as const;
 
 interface NavItem {
-  to: "/" | "/graph" | "/ask" | "/conflicts" | "/merges" | "/capture";
+  to: "/" | "/conflicts" | "/merges" | "/failures" | "/sources" | "/operations";
   label: string;
   icon: string;
 }
 
 const NAV_ITEMS: readonly NavItem[] = [
   { to: "/", label: "Overview", icon: "◐" },
-  { to: "/graph", label: "Graph", icon: "✦" },
-  { to: "/ask", label: "Ask", icon: "⌕" },
   { to: "/conflicts", label: "Conflicts", icon: "⚡" },
   { to: "/merges", label: "Merges", icon: "⇄" },
-  { to: "/capture", label: "Capture", icon: "✎" },
+  { to: "/failures", label: "Failures", icon: "✕" },
+  { to: "/sources", label: "Sources", icon: "⛁" },
+  { to: "/operations", label: "Operations", icon: "⚙" },
 ] as const;
 
 interface AppShellProps {
@@ -50,33 +50,18 @@ export function AppShell({ children }: AppShellProps) {
 
   // ── Global hotkeys + command palette ─────────────────────────────────
   // The palette is mounted once at the shell level so it survives route
-  // changes. The single-key hotkeys (`/`, `c`, `t`) are suppressed by
-  // useHotkeys when the user is typing in an input — the palette's own
-  // input is one such input, so opening the palette automatically disables
-  // those bindings.
+  // changes. The single-key hotkey (`t`) is suppressed by useHotkeys when
+  // the user is typing in an input — the palette's own input is one such
+  // input, so opening the palette automatically disables those bindings.
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const navigate = useNavigate();
   const hotkeyMap = useMemo(
     () => ({
       "mod+k": () => setPaletteOpen((v) => !v),
-      "/": () => {
-        // Push a fresh autofocus timestamp so AskView's effect focuses its
-        // input whether we're crossing routes or already on /ask. AskView's
-        // autofocus effect fires on every timestamp change, including
-        // same-route presses.
-        void navigate({
-          to: "/ask",
-          search: { q: "", autofocus: Date.now() },
-        });
-      },
-      c: () => {
-        void navigate({ to: "/capture" });
-      },
       t: () => {
         toggleTheme();
       },
     }),
-    [navigate],
+    [],
   );
   useHotkeys(hotkeyMap);
 

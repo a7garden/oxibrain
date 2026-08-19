@@ -163,6 +163,14 @@ export const api = {
 
   beliefs: (entityId: string, space = "personal") =>
     readResource<Belief[]>(`entity://${entityId}?space=${space}`),
+
+  /** General console data tool — backed by `review_merges` with a `section`
+   *  discriminator. The MCP server extends the tool to return merges,
+   *  extraction failures, or sources depending on the section. */
+  console_data: <T = unknown>(
+    section: "merges" | "failures" | "sources",
+    space = "personal",
+  ) => callTool<T>("review_merges", { section, space }),
 };
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -296,4 +304,25 @@ export interface TimelineEntry {
   valid_to: number;
   status: string;
   recorded_at: number;
+}
+
+/** Mirrors `oxibrain_store::quarantine::ExtractionFailure`. */
+export interface ExtractionFailure {
+  id: number;
+  episode_id: string;
+  extractor_id: string;
+  raw_response: string;
+  errors_json: string;
+  created_at: number;
+}
+
+/** Mirrors `oxibrain_store::ledger::SourceRow`. */
+export interface SourceRow {
+  id: string;
+  space: string;
+  name: string;
+  kind: string;
+  mode: string;
+  claims_json: string;
+  created_at: number;
 }

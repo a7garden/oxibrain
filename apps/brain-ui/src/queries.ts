@@ -2,8 +2,10 @@ import type {
   Belief,
   ContradictionDetail,
   ExplainBlock,
+  ExtractionFailure,
   MergeRecord,
   SearchResult,
+  SourceRow,
   SpaceOverview,
   TimelineEntry,
   TraversalResult,
@@ -22,6 +24,9 @@ export const qk = {
   contradictions: ["contradictions"] as const,
   merges: ["merges"] as const,
   why: (sid: string) => ["why", sid] as const,
+  failures: ["failures"] as const,
+  sources: ["sources"] as const,
+  operations: ["operations"] as const,
 };
 
 /** Thin fetcher wrappers — used as `queryFn` in `useQuery`. They keep the
@@ -38,6 +43,17 @@ export const fetchers = {
     api.contradictionDetails(),
   merges: (): Promise<MergeRecord[]> => api.listMerges(),
   why: (sid: string): Promise<ExplainBlock> => api.why(sid),
+  failures: (): Promise<ExtractionFailure[]> =>
+    api.console_data<ExtractionFailure[]>("failures"),
+  sources: (): Promise<SourceRow[]> =>
+    api.console_data<SourceRow[]>("sources"),
+  operations: (): Promise<SpaceOverview> =>
+    // OperationsView reads entity / episode counts via the space overview
+    // resource. Reproject itself is CLI-only (no MCP method), so the page
+    // only needs the live overview for stats + a refresh hook after the
+    // user runs the command offline. A future `doctor` MCP tool would
+    // replace this; the cache key stays stable either way.
+    api.spaceOverview(),
 };
 
 /** Invalidate everything a write tool may have changed. */
@@ -45,4 +61,6 @@ export const invalidateAll = {
   space: qk.space,
   contradictions: qk.contradictions,
   merges: qk.merges,
+  failures: qk.failures,
+  sources: qk.sources,
 };
