@@ -7,7 +7,7 @@ description = "MCP server tools for oxibrain — fifteen-tool cap"
 repository.workspace = true
 rust-version.workspace = true
 readme = "../../README.md"
-keywords = ["mcp", "model-context-protocol", "agent", "tools"]
+keywords = ["mcp", "model-context", "agent", "tools"]
 categories = ["development-tools"]
 
 [dependencies]

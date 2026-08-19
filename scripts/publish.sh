@@ -96,9 +96,11 @@ publish() {
     # Deterministic failures — retrying cannot help. A duplicate at a
     # DIFFERENT version means the checkout is not bumped: v0.3.0 was once
     # dispatched from unbumped main, skipped everything at 0.2.0, and the
-    # run went green while publishing nothing.
+    # run went green while publishing nothing. Registry 400s (metadata
+    # validation like keyword length) are also deterministic — v0.4.0 burned
+    # three backoff attempts on one.
     if grep -qE \
-      "already exists on crates.io index|failed to select a version|no matching package named" \
+      "already exists on crates.io index|failed to select a version|no matching package named|status 400 Bad Request" \
       <<<"$out"; then
       echo "❌ $crate@$version: deterministic failure (see group above)"
       return 1
