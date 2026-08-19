@@ -78,7 +78,7 @@ alternative.
 
 ### Accepted cost: a committed build artifact
 
-`cargo install oxibrain` cannot run `bun`, so the bundle must be committed **inside the
+`cargo install oxibrain-cli` cannot run `bun`, so the bundle must be committed **inside the
 owning crate** — vite's `outDir` is `crates/oxibrain-mcp/assets/dist/`, which `cargo
 package` then embeds in the published tarball. Committed build artifacts drift and add
 review noise. Mitigated structurally, not by discipline:
@@ -95,7 +95,7 @@ boundary is a static directory.
 ### Rejected mitigation: a `ui` cargo feature, off by default
 
 Would keep `dist/` out of the published crate by embedding only in CI-built release
-binaries. Rejected because it makes `cargo install oxibrain` a second-class install with no
+binaries. Rejected because it makes `cargo install oxibrain-cli` a second-class install with no
 curation surface, which contradicts `ARCHITECTURE.md` §1.5.
 
 ## Revisit trigger

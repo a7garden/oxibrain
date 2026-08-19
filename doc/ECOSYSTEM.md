@@ -243,7 +243,7 @@ Covered by `ARCHITECTURE.md`. Its ecosystem-facing obligations:
   ecosystem app must be able to ship internationally without asking what the brain
   supports.
 - Stay independently valuable: someone who uses none of the other apps must still get
-  a complete second brain from `cargo install oxibrain`. If that ever stops being true,
+  a complete second brain from `cargo install oxibrain-cli`. If that ever stops being true,
   the brain has degenerated into oxios's memory library.
 
 ### 3.5 oxicode — agent SDK (Foundation consumer)

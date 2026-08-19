@@ -5,7 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   // The console bundle ships inside the oxibrain-mcp crate (ADR-008):
-  // `cargo install oxibrain` serves it with no Node toolchain, and cargo
+  // `cargo install oxibrain-cli` serves it with no Node toolchain, and cargo
   // package must find it inside the crate so the published tarball embeds it.
   build: {
     outDir: "../../crates/oxibrain-mcp/assets/dist",

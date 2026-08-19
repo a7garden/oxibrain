@@ -142,7 +142,7 @@ known extraction-quality workstream, not a lazy-pull defect — the artifact pat
 
 ### Positive
 
-- **Empty install is instant.** `cargo install oxibrain && oxibrain init` completes
+- **Empty install is instant.** `cargo install oxibrain-cli && oxibrain init` completes
   in well under a second. Exploration commands (`help`, `stats`, `page --kind space`,
   MCP read tools) work immediately without a download.
 - **Lazy fetch is the only fetch.** The user sees a download progress line exactly

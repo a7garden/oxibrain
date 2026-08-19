@@ -6,7 +6,7 @@
 node_modules/
 dist/
 # The console bundle is committed inside the oxibrain-mcp crate (ADR-008) so
-# `cargo install oxibrain` can serve it without Node, and `cargo package`
+# `cargo install oxibrain-cli` can serve it without Node, and `cargo package`
 # embeds it in the published tarball. Any other dist/ stays ignored.
 !crates/oxibrain-mcp/assets/dist/
 .vite/

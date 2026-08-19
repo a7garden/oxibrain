@@ -38,7 +38,7 @@ squash-merged.
 - **Embedded repair/operations console (ADR-008)** — `apps/brain-ui` scoped to
   seven routes (Overview, Entity, Conflicts, Merges, Failures, Sources,
   Operations); `ask`/`capture`/`graph` surfaces and the sigma/graphology deps
-  removed. `dist/` is committed so `cargo install oxibrain && oxibrain serve
+  removed. `dist/` is committed so `cargo install oxibrain-cli && oxibrain serve
   --http` renders the console with no Node toolchain; `--ui-dir` remains a dev
   override. CI gates: clean bun build, committed `dist/` must match, gzipped
   bundle ≤ 400 KB.

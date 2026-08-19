@@ -60,9 +60,11 @@ jobs:
           dir=$(mktemp -d)
           cargo new --lib "$dir/consumer" --name oxibrain_consumer
           cd "$dir/consumer"
-          cargo add --quiet oxibrain oxibrain-client oxibrain-mcp
+          # oxibrain-cli ships the actual `oxibrain` binary users install — the
+          # facade/mcp/client libs alone would not catch a broken CLI publish.
+          cargo add --quiet oxibrain oxibrain-client oxibrain-mcp oxibrain-cli
           cargo check --quiet
-          echo "consumer smoke ok: latest published oxibrain stack resolves and compiles"
+          echo "consumer smoke ok: latest published oxibrain stack (incl. cli) resolves and compiles"
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')

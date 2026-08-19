@@ -115,7 +115,7 @@ One engine, three delivery shapes.
 | embedded console | a **repair/operations** UI bundled inside the binary (`include_dir!`, §16.6) — no `cargo install` extra step, no Node, no `--ui-dir` | users who want to review merges, contradictions, failures, sources, and run reproject |
 
 The product must be complete with no GUI:
-`cargo install oxibrain && oxibrain init && oxibrain ingest ~/notes && oxibrain ask "…"`.
+`cargo install oxibrain-cli && oxibrain init && oxibrain ingest ~/notes && oxibrain ask "…"`.
 A GUI required for the product to make sense would mean the CLI and MCP surfaces failed.
 
 Under C2, model weights pull lazily on the first extraction command (§8.4); `init`
@@ -146,7 +146,7 @@ Capture is not authoring.
 
 ### 1.5 What "done" means for v1
 
-- `cargo install oxibrain` → ingest → ask, with **zero** oxi-ecosystem dependencies and **no
+- `cargo install oxibrain-cli` → ingest → ask, with **zero** oxi-ecosystem dependencies and **no
   API key**.
 - Quality does not depend on the user's language (§7.8).
 - Any MCP client connects and gets the full tool surface, scoped.
@@ -2181,7 +2181,7 @@ The `oxibrain` binary serves a small, opinionated **console** for inspecting and
 a brain instance. The bundle lives in `crates/oxibrain-mcp/assets/dist/` (vite's `outDir`,
 inside the owning crate so `cargo package` ships it) and is **compiled into the
 binary** via `include_dir!` (the `include_dir` crate, ADR-008). No separate Node tool
-chain, no `--ui-dir` flag, no per-platform installer — `cargo install oxibrain && oxibrain
+chain, no `--ui-dir` flag, no per-platform installer — `cargo install oxibrain-cli && oxibrain
 serve --http 127.0.0.1:18080` opens a working console at the served root. `--ui-dir` is
 retained as a development-time override pointing at a freshly built bundle on disk
 (`bun run build` in `apps/brain-ui/`); production callers never need it.
@@ -2214,8 +2214,9 @@ shipping them here would turn a memory kernel into a general productivity app an
 editing/ownership boundary in §1.4.
 
 **Bundle delivery.** `crates/oxibrain-mcp/assets/dist/` is **committed to the repo** (it is
-the only guarantee that `cargo install oxibrain` from a tagged release produces a runnable
-console, and it must sit inside the crate for `cargo package` to embed it in the tarball).
+the only guarantee that `cargo install oxibrain-cli` from a tagged release produces a
+runnable console, and it must sit inside the crate for `cargo package` to embed it in the
+tarball).
 A CI job builds the bundle with `bun install && bun run build` in `apps/brain-ui/`, then
 asserts `git diff --exit-code crates/oxibrain-mcp/assets/dist` and an aggregate gzip size
 ≤ 400 KB, blocking any release whose bundle diverges or grows beyond budget.

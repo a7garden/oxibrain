@@ -34,7 +34,7 @@ const DEFAULT_PROTOCOL_VERSION: &str = "2025-11-25";
 const HANDSHAKE_METHOD: &str = "handshake";
 
 /// Embedded repair/operations console (ADR-008). Served by `serve_http` when
-/// no `--ui-dir` override is given, so `cargo install oxibrain` alone can
+/// no `--ui-dir` override is given, so `cargo install oxibrain-cli` alone can
 /// render the console. The bundle lives at `assets/dist/` INSIDE this crate
 /// (vite's outDir) so it ships in the published tarball — a path outside the
 /// crate would be missing from `cargo package`'s verify build. CI
@@ -1792,7 +1792,7 @@ async fn handle_http_post(
 ///
 /// When `ui_dir` is Some, serve from the filesystem (dev override). When it is
 /// None, serve from the embedded `CONSOLE_DIST` (ADR-008) so a plain
-/// `cargo install oxibrain` can render the console without Node.
+/// `cargo install oxibrain-cli` can render the console without Node.
 async fn handle_http_get(
     reader: &mut tokio::io::BufReader<tokio::net::TcpStream>,
     path: &str,
