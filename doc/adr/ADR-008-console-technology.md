@@ -1,7 +1,7 @@
 # ADR-008 — Console technology: keep React + Vite, embed the bundle
 
 > **Date:** 2026-08-19 · **Status:** Accepted
-> **Context doc:** `doc/spec/ecosystem-v2-verb-ownership.md` §3
+> **Context doc:** `doc/spec/ecosystem-v2-memory-kernel.md` §6.4
 > **Supersedes nothing.** Amends `doc/ARCHITECTURE.md` §1.3: the third delivery shape is a
 > *console served by the daemon*, not a desktop application.
 
