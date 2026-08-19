@@ -1,5 +1,10 @@
 # oxibrain — Architecture
-> **Version:** v2.6 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.7 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.7 — Pull-connector occurrence identity.** §4.2 documents the `oxibrain sync`
+> pull connector: source identity (`name = canonical vault path`, `kind = document_revision`,
+> `mode = pull`), the occurrence chain `occurrence_id = H(source_id, locator, predecessor,
+> content_hash)`, and the rule that legacy episodes (pre-event-path) are classified but never
+> re-ingested. D33 records the decision. Existing §5.6 derivation is unchanged.
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
@@ -350,6 +355,77 @@ flowchart TB
 
 **Every arrow after `episode` is replayable.** Drop the projection and `reproject` rebuilds it
 with no model call, because extraction outputs are cached against the ledger.
+
+#### 4.2.1 Pull connector — `oxibrain sync` and occurrence chains
+
+The **pull connector** (`oxibrain sync <dir>`, the markdown vault adapter in
+`oxibrain-connectors`) is the first concrete consumer of event identity for new-path
+episodes. Connectors that push into the brain (chat, declarations, agent traces) carry their
+own identity at the source; the pull connector must derive it from filesystem state alone,
+because the user owns the files and oxibrain does not (§1.4).
+
+A pull-connector ingest is built from four inputs:
+
+```
+source_id       = ensure_source(space, name = canonical(dir), kind = "document_revision", mode = "pull")
+locator         = relative path inside the vault (forward-slash separators)
+predecessor     = latest event-path occurrence_id for that locator in this source, if any
+content_hash    = blake3(file_bytes)
+
+occurrence_id   = blake3(source_id, locator, predecessor, content_hash)
+```
+
+The `predecessor` field is the **occurrence-chain link**: it is the `latest_occurrence_id`
+stored for the locator after the previous successful sync. A fresh locator has `predecessor =
+None`; subsequent edits chain off the previous occurrence. Because the derivation hashes
+`predecessor`, every temporal reversion produces a distinct occurrence. The classic failure
+mode of pure content-hash dedup — A → B → A reduces to one event and silently drops the
+reversion — cannot happen here:
+
+| Sync | locator | content | predecessor | occurrence_id |
+|---|---|---|---|---|
+| 1 | `note.md` | `"A"` | `None` | `occ₁` |
+| 2 | `note.md` | `"B"` | `occ₁` | `occ₂` |
+| 3 | `note.md` | `"A"` | `occ₂` | `occ₃` (≠ `occ₁` despite equal bytes) |
+
+Three writes yield three distinct events; the second `"A"` is `Modified`, not `Unchanged`,
+because classification consults event-path state for content equivalence (§5.6). `mtime`,
+wall-clock, and process-local counters never define identity (§5.6) — they appear only in
+`occurred_at` / `ingested_at` as audit fields.
+
+**Classification precedence** (`oxibrain-core::sync::classify_event`, pure — P9):
+
+```
+event_states > legacy (KnownNotes) > New
+```
+
+Event-path state is consulted first; if the locator has a `latest_content_hash` equal to the
+file's hash, the file is `Unchanged`. If it differs, the file is `Modified`. Only if no
+event-path state exists does the legacy knowledge of pre-existing note hashes apply — and
+pure `New` is reached when nothing is known. Legacy episodes (the v9-era rows with
+`source_id IS NULL`) participate in `Unchanged` classification *only*; they are never
+re-ingested. The first occurrence on the event path for a previously legacy-only locator
+thus produces exactly one `Modified` ingest, after which the locator lives on the event path.
+
+**Idempotency and crash safety.** Replaying the same `(source_id, locator, predecessor,
+content_hash)` tuple is a no-op: the partial unique index `idx_ep_occurrence` (§5.7) makes
+duplicate insertion a database-level conflict, not a code-level check. A scan that crashes
+mid-ingest can therefore be replayed without producing duplicates or skipping uncommitted
+files — only `Unchanged` and successfully-committed `Modified` rows exist after replay.
+
+**Source registration.** `ensure_source` is keyed by `(space_id, name)` (UNIQUE in §5.7)
+and is stable across re-syncs: the canonical absolute path of `dir` is the source's `name`,
+so two runs of `oxibrain sync` against the same vault address the same source, derive the
+same `source_id`, and continue the chain. Distinct vaults naturally map to distinct sources
+even when their root filenames collide. `kind = "document_revision"` and `mode = "pull"`
+are fixed by the connector — the source registry distinguishes this connector from any
+future push-mode, web-connector, or agent-trace sources that share the same space.
+
+> **Boundary.** This subsection specifies the *pull* connector's identity derivation only.
+> Push connectors (chat, declarations, agent traces) carry their own source identity at the
+> call site; D27's model-ownership rule covers local inference. Sync across devices (§15.6)
+> is post-v1 — when it lands, occurrence chains survive the round trip because every
+> occurrence is reproducible from `(source_id, locator, predecessor, content_hash)` alone.
 
 ### 4.3 Deployment modes
 
@@ -1999,14 +2075,17 @@ oxibrain serve [--stdio|--socket|--http] [--daemon] | token issue|list|revoke
 oxibrain predicate add|list | eval [--suite fast|full|bench|parity]
 ```
 
-
-`sync` scans a directory for `.md` files via `oxibrain-connectors` and classifies each
-against the ledger's live note episodes for the space (`oxibrain-core::sync::classify`,
-pure — P9). New and modified files are ingested with `occurred_at` = file mtime, so
-episode ids are stable across re-syncs and an unchanged tree is a no-op. A modified
-path appends a new episode; the previous episode and its assertions remain (P1) —
-stale claims surface via `contradictions` and are removed with `retract`. Sync never
-retracts on its own.
+`sync` scans a directory for `.md` files via `oxibrain-connectors`. The vault is registered
+as a pull source (`name = canonical(dir)`, `kind = "document_revision"`, `mode = "pull"`)
+and each file is classified against the latest event-path occurrence for its locator
+(`oxibrain-core::sync::classify_event`, pure — P9). New and modified files are ingested
+with `occurred_at` = file mtime and `occurrence_id = H(source_id, locator, predecessor,
+content_hash)` (§4.2.1); re-syncing an unchanged tree is a no-op and an A → B → A edit
+pattern produces three distinct events because `predecessor` differs each time. A modified
+path appends a new episode; the previous episode and its assertions remain (P1) — stale
+claims surface via `contradictions` and are removed with `retract`. Sync never retracts on
+its own. Legacy episodes (pre-event-path) participate in `Unchanged` classification only
+and are never re-ingested.
 
 The CLI is a first-class product surface, not a debug tool.
 
@@ -2423,6 +2502,19 @@ and the blocking index.
 representatives cover seven breaking properties; the gate is a 10pp variance bound. A
 per-language list is always incomplete; a property list fails loudly when someone adds an
 English-shaped optimization.
+
+**D33 — Pull connectors derive identity from `(source_id, locator, predecessor,
+content_hash)`.** For push connectors (chat, declarations, agent traces) the call site
+supplies identity. The pull connector has no call site — the user owns the files (§1.4) —
+so the only inputs it can hash are the source registry, the locator (relative vault path),
+the previous occurrence's `occurrence_id`, and the bytes themselves. Hashing `predecessor`
+is what makes A → B → A three events rather than two. Hashing `source_id` and `locator`
+is what makes equal bytes from different vaults remain independent episodes (§5.6).
+Legacy v9 episodes (`source_id IS NULL`) participate in `Unchanged` classification only;
+they are never re-ingested because re-ingesting them under a freshly-allocated source
+would silently rewrite history. The first `Modified` ingest on the event path for a
+previously legacy-only locator migrates it forward, one file per sync, which is the only
+point at which legacy disappears.
 
 **D32 — This document is `ARCHITECTURE.md`.** "DESIGN.md" has come to denote a front-end
 design-system document; `ARCHITECTURE.md` is the Rust-ecosystem convention and is unambiguous.
