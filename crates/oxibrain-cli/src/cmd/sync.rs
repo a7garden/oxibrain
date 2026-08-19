@@ -1,19 +1,22 @@
-//! `oxibrain sync <DIR> [--space s]` — vault sync.
+//! `oxibrain sync <DIR> [--space s]` — vault sync with occurrence identity.
 //!
-//! Scans DIR recursively for `.md` files (oxibrain-connectors), classifies each
-//! against the ledger's live note episodes for the space
-//! (`oxibrain_core::classify_sync`), and ingests new/modified files with
-//! `occurred_at` = file mtime so episode ids are stable across re-syncs.
+//! Scans DIR recursively for `.md`/`.html` files (oxibrain-connectors),
+//! classifies each against the ledger's event-path state for the vault source
+//! (`oxibrain_core::classify_event`), and ingests new/modified files via the
+//! event path with derived occurrence IDs (§4.2).
+//!
+//! Occurrence chain: `occurrence_id = H(source_id, locator, predecessor, content_hash)`.
+//! A → B → A creates three events because the predecessor differs.
 //! Unchanged files are skipped — re-syncing an unchanged tree is a no-op.
-//!
-//! Modified paths append a new episode; the previous episode remains
-//! (append-only ledger, P1). Its assertions stay live until retracted — check
-//! `oxibrain contradictions` after syncing edits.
+//! Legacy episodes (pre-event-identity) participate in Unchanged classification
+//! but are never re-ingested.
 
 use anyhow::{Context, bail};
-use oxibrain::{Brain, BrainConfig};
+use oxibrain::{Brain, BrainConfig, IngestAttachment, SourceRef, TrustTier};
 use oxibrain_connectors::scan_directory;
-use oxibrain_core::{SyncAction, SyncFile, classify_sync, content_hash};
+use oxibrain_core::{
+    SyncAction, SyncFile, classify_event, content_hash, occurrence_id, sync::LocatorState,
+};
 use oxibrain_ports::Timestamp;
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,9 +36,8 @@ pub async fn run(dir: &Path, root: &Path, space: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Scan, classify, ingest. The store path convention is the file's path
-/// relative to the sync root (forward slashes), so syncs are stable across
-/// working directories and machines.
+/// Scan, classify, ingest via event path. The locator convention is the file's
+/// path relative to the sync root (forward slashes).
 pub async fn sync(dir: &Path, root: &Path, space: &str) -> anyhow::Result<SyncReport> {
     if !root.is_dir() {
         bail!("not a directory: {}", root.display());
@@ -43,7 +45,20 @@ pub async fn sync(dir: &Path, root: &Path, space: &str) -> anyhow::Result<SyncRe
     let files = scan_directory(root);
     let brain = Brain::open(BrainConfig::at(dir)).await?;
     let space_id = brain.ensure_space(space).await?;
-    let known = brain.note_hashes(&space_id).await?;
+
+    // Register the vault as a pull source. Source name = canonical path.
+    let source_name = root
+        .canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let source_id = brain
+        .ensure_source(&space_id, &source_name, "document_revision", "pull")
+        .await?;
+
+    // Fetch both classification inputs.
+    let legacy = brain.note_hashes(&space_id).await?;
+    let event_states = brain.locator_states(&space_id, &source_id).await?;
 
     // Content is dropped after hashing; keep it per path for the ingest pass.
     let mut contents: HashMap<String, (String, Timestamp)> = HashMap::new();
@@ -63,14 +78,33 @@ pub async fn sync(dir: &Path, root: &Path, space: &str) -> anyhow::Result<SyncRe
         .collect();
 
     let mut report = SyncReport::default();
-    for action in classify_sync(sync_files, &known) {
+    let now = brain.clock_now();
+    for action in classify_event(sync_files, &legacy, &event_states) {
         match action {
             SyncAction::New(f) => {
-                ingest_one(&brain, &space_id, &contents, &f).await?;
+                ingest_event_one(
+                    &brain,
+                    &space_id,
+                    &source_id,
+                    &contents,
+                    &event_states,
+                    &f,
+                    now,
+                )
+                .await?;
                 report.new.push(f.path);
             }
             SyncAction::Modified(f) => {
-                ingest_one(&brain, &space_id, &contents, &f).await?;
+                ingest_event_one(
+                    &brain,
+                    &space_id,
+                    &source_id,
+                    &contents,
+                    &event_states,
+                    &f,
+                    now,
+                )
+                .await?;
                 report.modified.push(f.path);
             }
             SyncAction::Unchanged(p) => report.unchanged.push(p),
@@ -79,17 +113,44 @@ pub async fn sync(dir: &Path, root: &Path, space: &str) -> anyhow::Result<SyncRe
     Ok(report)
 }
 
-async fn ingest_one(
+async fn ingest_event_one(
     brain: &Brain,
     space_id: &str,
+    source_id: &str,
     contents: &HashMap<String, (String, Timestamp)>,
+    event_states: &HashMap<String, LocatorState>,
     f: &SyncFile,
+    now: Timestamp,
 ) -> anyhow::Result<()> {
-    let (content, occurred_at) = contents
+    let (content, _occurred_at) = contents
         .get(&f.path)
         .with_context(|| format!("content missing for scanned path {}", f.path))?;
+
+    // Derive occurrence: predecessor is the latest occurrence for this locator.
+    let predecessor = event_states
+        .get(&f.path)
+        .map(|s| s.latest_occurrence_id.as_str());
+    let occ = occurrence_id(source_id, &f.path, predecessor, &f.content_hash);
+
+    let attachment = IngestAttachment {
+        source_id: source_id.into(),
+        occurrence_id: occ,
+        accepted_at: now,
+        principal: "sync".into(),
+        claims_json: "{}".into(),
+    };
+
     brain
-        .ingest_note(space_id, &f.path, content.clone(), *occurred_at)
+        .ingest_event(
+            space_id,
+            content.clone(),
+            SourceRef::Note {
+                path: f.path.clone(),
+            },
+            TrustTier::Trusted,
+            Some(&attachment),
+            "vault-sync",
+        )
         .await?;
     Ok(())
 }
@@ -103,22 +164,20 @@ fn systemtime_to_timestamp(t: std::time::SystemTime) -> Timestamp {
 }
 
 fn print_report(report: &SyncReport) {
+    if !report.new.is_empty() {
+        for p in &report.new {
+            println!("  new: {p}");
+        }
+    }
+    if !report.modified.is_empty() {
+        for p in &report.modified {
+            println!("  modified: {p}");
+        }
+    }
     println!(
         "sync complete: {} new, {} unchanged, {} modified",
         report.new.len(),
         report.unchanged.len(),
         report.modified.len()
     );
-    for p in &report.new {
-        println!("  new:       {p}");
-    }
-    for p in &report.modified {
-        println!("  modified:  {p}");
-    }
-    if !report.modified.is_empty() {
-        println!(
-            "  note: modified paths append a new episode; previous versions remain — \
-             check `oxibrain contradictions` and `retract` stale claims"
-        );
-    }
 }

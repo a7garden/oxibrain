@@ -36,6 +36,7 @@ pub use oxibrain_store::ledger::IngestAttachment;
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 pub use oxibrain_store::security::AuditRow;
 use oxibrain_store::{StoreHandle, ledger, project::ResolutionCache, query, reproject};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Discriminator for the three `brief` target kinds (M9 §14.1, `brief(entity |
@@ -152,6 +153,26 @@ impl Brain {
         read_op!(self.handle, |conn| ledger::note_hashes_by_path(
             conn, &space
         ))
+    }
+
+    /// Latest event-path episode state per locator for a source.
+    /// Used by sync to derive occurrence chains (§4.2 pull mode).
+    pub async fn locator_states(
+        &self,
+        space: &str,
+        source_id: &str,
+    ) -> Result<HashMap<String, oxibrain_core::sync::LocatorState>, BrainError> {
+        let space = space.to_string();
+        let source_id = source_id.to_string();
+        read_op!(self.handle, |conn| ledger::locator_states(
+            conn, &space, &source_id
+        ))
+    }
+
+    /// Current time from the configured clock. Exposed for callers that need
+    /// a Timestamp without going through an ingest method.
+    pub fn clock_now(&self) -> Timestamp {
+        self.clock.now()
     }
 
     pub async fn get_episode(&self, id: &str) -> Result<Option<Episode>, BrainError> {

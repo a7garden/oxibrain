@@ -64,7 +64,9 @@ pub use security::{
     AuditEntry, Capability, CapabilitySet, RedactTarget, RedactionClosure, RedactionResult, Scope,
     TokenInfo,
 };
-pub use sync::{KnownNotes, SyncAction, SyncFile, classify as classify_sync};
+pub use sync::{
+    KnownNotes, LocatorState, SyncAction, SyncFile, classify as classify_sync, classify_event,
+};
 
 pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens_rough};
 pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};

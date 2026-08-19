@@ -66,6 +66,47 @@ pub fn classify(files: Vec<SyncFile>, known: &KnownNotes) -> Vec<SyncAction> {
         .collect()
 }
 
+/// State of the latest event-path episode for a locator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatorState {
+    /// The occurrence_id of the most recent episode for this locator.
+    pub latest_occurrence_id: String,
+    /// The content hash of that episode.
+    pub latest_content_hash: ContentHash,
+}
+
+/// Classify scanned files using event-identity state, falling back to legacy
+/// content-hash knowledge for locators not yet on the event path.
+///
+/// Precedence: event_states > legacy > New.
+/// Pure and total: every input file appears in exactly one output action.
+pub fn classify_event(
+    files: Vec<SyncFile>,
+    legacy: &KnownNotes,
+    event_states: &HashMap<String, LocatorState>,
+) -> Vec<SyncAction> {
+    files
+        .into_iter()
+        .map(|f| {
+            if let Some(state) = event_states.get(&f.path) {
+                if state.latest_content_hash == f.content_hash {
+                    SyncAction::Unchanged(f.path)
+                } else {
+                    SyncAction::Modified(f)
+                }
+            } else if let Some(hashes) = legacy.get(&f.path) {
+                if !hashes.is_empty() && hashes.contains(&f.content_hash) {
+                    SyncAction::Unchanged(f.path)
+                } else {
+                    SyncAction::Modified(f)
+                }
+            } else {
+                SyncAction::New(f)
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +245,72 @@ mod tests {
                 }
             }
         }
+    }
+
+    use super::LocatorState;
+
+    fn locator_state(occ: &str, content: &str) -> LocatorState {
+        LocatorState {
+            latest_occurrence_id: occ.into(),
+            latest_content_hash: content_hash(content),
+        }
+    }
+
+    #[test]
+    fn classify_event_new_when_no_state() {
+        let files = vec![file("a.md", "hello", 1)];
+        let actions = classify_event(files, &KnownNotes::new(), &HashMap::new());
+        assert_eq!(actions, vec![SyncAction::New(file("a.md", "hello", 1))]);
+    }
+
+    #[test]
+    fn classify_event_unchanged_when_event_hash_matches() {
+        let states = HashMap::from([("a.md".to_string(), locator_state("occ1", "hello"))]);
+        let files = vec![file("a.md", "hello", 1)];
+        let actions = classify_event(files, &KnownNotes::new(), &states);
+        assert_eq!(actions, vec![SyncAction::Unchanged("a.md".into())]);
+    }
+
+    #[test]
+    fn classify_event_modified_when_event_hash_differs() {
+        let states = HashMap::from([("a.md".to_string(), locator_state("occ1", "old"))]);
+        let files = vec![file("a.md", "new", 2)];
+        let actions = classify_event(files, &KnownNotes::new(), &states);
+        assert_eq!(actions, vec![SyncAction::Modified(file("a.md", "new", 2))]);
+    }
+
+    #[test]
+    fn classify_event_unchanged_via_legacy_hash() {
+        // No event-path state, but legacy hash matches → Unchanged.
+        let mut legacy = KnownNotes::new();
+        legacy.insert("a.md".into(), HashSet::from([content_hash("hello")]));
+        let files = vec![file("a.md", "hello", 1)];
+        let actions = classify_event(files, &legacy, &HashMap::new());
+        assert_eq!(actions, vec![SyncAction::Unchanged("a.md".into())]);
+    }
+
+    #[test]
+    fn classify_event_modified_via_legacy_mismatch() {
+        // Legacy knows the path but content changed → Modified (first event-path ingest).
+        let mut legacy = KnownNotes::new();
+        legacy.insert("a.md".into(), HashSet::from([content_hash("old")]));
+        let files = vec![file("a.md", "new", 2)];
+        let actions = classify_event(files, &legacy, &HashMap::new());
+        assert_eq!(actions, vec![SyncAction::Modified(file("a.md", "new", 2))]);
+    }
+
+    #[test]
+    fn classify_event_event_state_takes_precedence_over_legacy() {
+        // Event state says "old", legacy says "hello" — event state wins.
+        let states = HashMap::from([("a.md".to_string(), locator_state("occ1", "old"))]);
+        let mut legacy = KnownNotes::new();
+        legacy.insert("a.md".into(), HashSet::from([content_hash("hello")]));
+        let files = vec![file("a.md", "hello", 1)];
+        let actions = classify_event(files, &legacy, &states);
+        // Event state hash != file hash → Modified, even though legacy matches.
+        assert_eq!(
+            actions,
+            vec![SyncAction::Modified(file("a.md", "hello", 1))]
+        );
     }
 }

@@ -309,6 +309,49 @@ pub fn note_hashes_by_path(
     Ok(out)
 }
 
+/// Latest event-path episode state per locator for a source (§4.2 pull mode).
+/// One query; decision-free (P9). Redacted episodes are excluded.
+/// Returns the most recent (highest seq) episode per source_ref (locator).
+pub fn locator_states(
+    conn: &Connection,
+    space: &str,
+    source_id: &str,
+) -> Result<HashMap<String, oxibrain_core::sync::LocatorState>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT source_ref, occurrence_id, content_hash FROM episodes
+             WHERE space_id = ?1 AND source_id = ?2 AND redacted_at IS NULL
+             ORDER BY seq ASC",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space, source_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+            ))
+        })
+        .map_err(sql_err)?;
+    let mut out: HashMap<String, oxibrain_core::sync::LocatorState> = HashMap::new();
+    for row in rows {
+        let (locator, occ, hash) = row.map_err(sql_err)?;
+        let mut bytes = [0u8; 32];
+        if hash.len() == 32 {
+            bytes.copy_from_slice(&hash);
+        }
+        // ORDER BY seq ASC → last write wins = latest episode.
+        out.insert(
+            locator,
+            oxibrain_core::sync::LocatorState {
+                latest_occurrence_id: occ,
+                latest_content_hash: ContentHash(bytes),
+            },
+        );
+    }
+    Ok(out)
+}
+
 fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainError> {
     match kind {
         "note" => Ok(SourceRef::Note {
