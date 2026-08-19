@@ -40,6 +40,29 @@ async fn main() -> anyhow::Result<()> {
         Command::Ask { question, space } => cmd::ask::run(&dir, &question, &space).await,
         Command::Entity { command } => match command {
             cli::EntityCmd::Show { id, space } => cmd::entity_show::run(&dir, &id, &space).await,
+            cli::EntityCmd::Merge {
+                loser,
+                loser_type,
+                winner,
+                winner_type,
+                space,
+            } => {
+                cmd::entity_merge::run(&dir, &loser, &loser_type, &winner, &winner_type, &space)
+                    .await
+            }
+            cli::EntityCmd::Split { surface, ty, space } => {
+                cmd::entity_split::run(&dir, &surface, &ty, &space).await
+            }
+            cli::EntityCmd::Alias {
+                surface,
+                ty,
+                alias,
+                space,
+            } => cmd::entity_alias::run(&dir, &surface, &ty, &alias, &space).await,
+            cli::EntityCmd::Retract {
+                statement_id,
+                space,
+            } => cmd::entity_retract::run(&dir, &statement_id, &space).await,
         },
         Command::Timeline { entity_id, space } => {
             cmd::timeline::run(&dir, &entity_id, &space).await
@@ -89,6 +112,22 @@ async fn main() -> anyhow::Result<()> {
         } => cmd::serve::run(&dir, socket, http, require_token, daemon, ui_dir).await,
         Command::Predicate { command } => match command {
             cli::PredicateCmd::List => cmd::predicate::run(),
+            cli::PredicateCmd::Add { json, space } => {
+                cmd::predicate::run_add(&dir, &json, &space).await
+            }
+        },
+        Command::Declare { json, space } => cmd::declare::run(&dir, &json, &space).await,
+        Command::Source { command } => match command {
+            cli::SourceCmd::Policy {
+                name,
+                trust,
+                effective_from,
+                effective_to,
+                space,
+            } => {
+                cmd::source_policy::run(&dir, &name, &trust, effective_from, effective_to, &space)
+                    .await
+            }
         },
         Command::Extract { episode_id, space } => {
             cmd::extract::run(&dir, &episode_id, &space).await

@@ -2,7 +2,11 @@
 //!
 //! No store access needed: the registry is the in-process core ontology.
 
+use oxibrain::Brain;
+use oxibrain::BrainConfig;
 use oxibrain_core::registry::{CORE_V1_MAJOR, CORE_V1_MINOR, LiteralType, ObjectKind, core_v1};
+use oxibrain_store::project::Declaration;
+use std::path::Path;
 
 pub fn run() -> anyhow::Result<()> {
     let preds = core_v1();
@@ -32,6 +36,26 @@ pub fn run() -> anyhow::Result<()> {
             println!("    {}", p.description);
         }
     }
+    Ok(())
+}
+
+pub async fn run_add(dir: &Path, json: &str, space: &str) -> anyhow::Result<()> {
+    let brain = Brain::open(BrainConfig::at(dir)).await?;
+    let space_id = brain.ensure_space(space).await?;
+    // Parse to extract name for the declaration.
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| anyhow::anyhow!("parse predicate def: {e}"))?;
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| anyhow::anyhow!("predicate def must have 'name' field"))?
+        .to_string();
+    let decl = Declaration::RegisterPredicate {
+        name,
+        def_json: json.to_string(),
+    };
+    let ep_id = brain.declare(&space_id, decl).await?;
+    println!("predicate registered as episode: {ep_id}");
     Ok(())
 }
 

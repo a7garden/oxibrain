@@ -184,6 +184,18 @@ pub enum Command {
         #[arg(long, default_value = "fast")]
         suite: String,
     },
+    /// Declare a statement from raw JSON (power-user path).
+    Declare {
+        /// Canonical declaration JSON.
+        json: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Source management.
+    Source {
+        #[command(subcommand)]
+        command: SourceCmd,
+    },
 }
 
 // ── Nested subcommand groups (DESIGN §12.4) ────────────────────────────────
@@ -227,6 +239,13 @@ pub enum TokenCmd {
 pub enum PredicateCmd {
     /// List predicates in the core/v1 registry.
     List,
+    /// Register a custom predicate from JSON.
+    Add {
+        /// Full PredicateDef JSON.
+        json: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -234,6 +253,66 @@ pub enum EntityCmd {
     /// Show entity beliefs.
     Show {
         id: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Merge two entities (loser → winner).
+    Merge {
+        /// Loser entity surface form.
+        loser: String,
+        /// Loser entity type.
+        loser_type: String,
+        /// Winner entity surface form.
+        winner: String,
+        /// Winner entity type.
+        winner_type: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Split: undo the most recent merge for an entity.
+    Split {
+        /// Entity surface form.
+        surface: String,
+        /// Entity type.
+        ty: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Add an alias to an entity.
+    Alias {
+        /// Entity surface form.
+        surface: String,
+        /// Entity type.
+        ty: String,
+        /// Alias surface form to add.
+        alias: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+    /// Retract a statement by ID.
+    Retract {
+        /// Statement ID to retract.
+        statement_id: String,
+        #[arg(long, default_value = "personal")]
+        space: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SourceCmd {
+    /// Set trust policy for a source.
+    Policy {
+        /// Source name (as registered).
+        name: String,
+        /// Trust tier: trusted | untrusted.
+        #[arg(long)]
+        trust: String,
+        /// Effective from (epoch ms). Defaults to now.
+        #[arg(long)]
+        effective_from: Option<i64>,
+        /// Effective to (epoch ms). Open-ended if omitted.
+        #[arg(long)]
+        effective_to: Option<i64>,
         #[arg(long, default_value = "personal")]
         space: String,
     },
