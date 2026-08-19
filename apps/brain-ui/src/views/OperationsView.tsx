@@ -6,13 +6,10 @@ import { ErrorState } from "../components/ErrorState";
 import { rpc } from "../api";
 import { fetchers, qk } from "../queries";
 
-/** Raw JSON-RPC shape for `reproject`. The daemon does not yet expose
- *  this method (it's tracked as a follow-up to Plan D — Task 3 covers
- *  `console` tool sections; the `reproject` RPC method lands with the
- *  CLI/daemon parity work). The button wires the call so it ships
- *  ready; until the server lands the method, the daemon returns
- *  `METHOD_NOT_FOUND` and we surface that via toast rather than
- *  presenting a fake success. */
+/** Raw JSON-RPC shape for `reproject`. The daemon serves the `reproject`
+ *  method over HTTP JSON-RPC (deliberately not an MCP tool — too destructive
+ *  for agent access). It rebuilds the projection from the ledger and returns
+ *  post-reproject stats so the console can confirm what changed. */
 interface ReprojectResult {
   /** Wall-clock millis when reprojection completed. */
   completed_at: number;

@@ -223,6 +223,13 @@ impl BrainServer {
                 },
                 None => None,
             },
+            "reproject" => match msg.id {
+                Some(id) => match self.rpc_reproject(msg.params.as_ref()).await {
+                    Ok(v) => Some(success(id, v)),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
             other => msg
                 .id
                 .map(|id| error(id, METHOD_NOT_FOUND, format!("unknown method: {other}"))),
@@ -745,6 +752,59 @@ impl BrainServer {
                 to_json(&merges)
             }
         }
+    }
+
+    /// JSON-RPC `reproject` — drop and rebuild the projection from the
+    /// ledger, then refresh embeddings. Intentionally **not** an MCP tool:
+    /// too destructive for agent access. Returns post-reproject stats so the
+    /// console can confirm what changed. Optional `space` param defaults to
+    /// the console's `personal` space.
+    async fn rpc_reproject(&self, args: Option<&Value>) -> Result<Value, (i64, String)> {
+        let space = args
+            .and_then(|a| a.get("space"))
+            .and_then(Value::as_str)
+            .unwrap_or("personal");
+        let space_id = self
+            .brain
+            .ensure_space(space)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+
+        let before = self
+            .brain
+            .stats(&space_id)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+
+        let completed_at = self.brain.clock_now().0;
+        self.brain
+            .reproject()
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+
+        let after = self
+            .brain
+            .stats(&space_id)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+
+        Ok(json!({
+            "completed_at": completed_at,
+            "entities_reprojected": after.entities,
+            "statements_updated": after.statements,
+            "before": {
+                "episodes": before.episodes,
+                "entities": before.entities,
+                "statements": before.statements,
+                "contradictions": before.contradictions,
+            },
+            "after": {
+                "episodes": after.episodes,
+                "entities": after.entities,
+                "statements": after.statements,
+                "contradictions": after.contradictions,
+            },
+        }))
     }
 
     // ── Write tools: remember, retract, merge_entities ───────────────────
@@ -3497,6 +3557,50 @@ mod tests {
         assert!(
             failures.is_empty(),
             "no extraction failures expected: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reproject_rpc_rebuilds_projection_and_returns_stats() {
+        let (_dir, server) = fresh_server().await;
+        // Declare a statement so the projection has something to rebuild.
+        let (_ep, _alice) = declare_alice(&server, "t").await;
+
+        let resp = server
+            .handle(msg(2, "reproject", Some(json!({ "space": "t" }))))
+            .await
+            .unwrap();
+        assert!(resp["error"].is_null(), "reproject failed: {resp}");
+
+        let result = &resp["result"];
+        // DTO contract: the three fields the console reads.
+        assert!(result["completed_at"].as_i64().unwrap() > 0, "got: {resp}");
+        assert!(
+            result["entities_reprojected"].as_i64().unwrap() >= 1,
+            "got: {resp}"
+        );
+        assert!(
+            result["statements_updated"].as_i64().unwrap() >= 1,
+            "got: {resp}"
+        );
+        // Before/after snapshot blocks present and consistent.
+        assert_eq!(
+            result["before"]["entities"], result["after"]["entities"],
+            "got: {resp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reproject_rpc_defaults_to_personal_space() {
+        let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("personal").await.unwrap();
+
+        // No params → default space "personal".
+        let resp = server.handle(msg(2, "reproject", None)).await.unwrap();
+        assert!(resp["error"].is_null(), "reproject failed: {resp}");
+        assert!(
+            resp["result"]["completed_at"].as_i64().unwrap() > 0,
+            "got: {resp}"
         );
     }
 
