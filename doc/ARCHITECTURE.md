@@ -2200,7 +2200,9 @@ exploration. The seven routes that ship:
 
 Each route reads through the same MCP/JSON-RPC surface (§16.2). The Merge/Failures/Sources
 tables all dispatch into the `review_merges` tool's `section ∈ {merges, failures, sources}`
-switch, which keeps the MCP tool surface at the fifteen-tool cap.
+switch, which keeps the MCP tool surface at the fifteen-tool cap. The Operations route's
+`reproject` is served as a bare JSON-RPC method (not an MCP tool — too destructive for agent
+access); it returns before/after space stats so the console confirms what changed.
 
 **Out of scope.** The console deliberately does **not** include ask/chat, capture/authoring,
 a general exploratory force graph, or note/task/session management. Those are the user-facing
