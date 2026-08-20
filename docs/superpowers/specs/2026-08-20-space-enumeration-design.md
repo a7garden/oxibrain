@@ -41,10 +41,13 @@ Plus one security defect discovered while reading the dispatch code:
 ## 3. Non-goals (with reasons)
 
 - **`Brain::connect` implementation** — ADR-009 defers; see §5.
-- **CLI `--watch`** — §16.4 documents it but vault watching is consumer-owned
+- **`CLI --watch`** — §16.4 documents it but vault watching is consumer-owned
   (ECOSYSTEM C3: oxibrain reads through connectors; oximemo's vault connector
   watches). A CLI polling watch would duplicate that contract. Recorded as a
   known doc gap; separate decision if wanted.
+  *(Superseded 2026-08-20 by ADR-010: the watch is brain-owned and
+  daemon-hosted — the P8 single-writer lock leaves no other automatable
+  placement. `docs/../doc/adr/ADR-010-daemon-hosted-vault-watch.md`.)*
 - **Consumer-side integrations** (oxicode `memory.*` mapping, oxios migration)
   — other repos, explicitly tracked there (ECOSYSTEM §3.5–§3.6).
 - **Full typed client mirror of the Brain surface** — client-owned DTOs per

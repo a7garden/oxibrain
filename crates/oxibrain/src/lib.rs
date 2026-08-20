@@ -9,6 +9,8 @@ mod ingest;
 pub mod models;
 pub mod pull_plan;
 mod render;
+pub mod vault;
+pub use vault::{PullSource, SyncReport};
 
 pub use config::BrainConfig;
 pub use models::SpaceInfo;
@@ -53,6 +55,9 @@ pub enum BriefTarget<'a> {
 }
 
 /// The brain. Embedded mode only in M0 (daemon/transport land in M4).
+/// Cloning shares the store writer actor and caches — cheap handle
+/// semantics used by the daemon's watcher threads.
+#[derive(Clone)]
 pub struct Brain {
     handle: Arc<StoreHandle>,
     clock: Arc<dyn ClockPort>,

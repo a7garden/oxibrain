@@ -1,4 +1,4 @@
-# Consumption Contract 1.1
+# Consumption Contract 1.2
 
 > `ARCHITECTURE.md` §19.2. This document pins the public surface consumers depend on and
 > the stability guarantees each tier carries. It is the contract between
@@ -10,6 +10,11 @@
 > `connect_endpoint`, `ClientHello`, and `ServerInfo`. None of these are shipped in
 > `oxibrain-client@0.2.0`; they are pinned to land in `oxibrain-client@0.3.x`. Existing
 > auth-first-message and `Scope`/`Capability` semantics are preserved unchanged.
+> **1.2 (2026-08-20)** — daemon-hosted vault watch (ADR-010): native RPC
+> `sync/run`, client `BrainClient::sync_run` + `SyncOutcome`, the
+> `oxibrain::vault` module (`sync_vault`, `pull_sources`, `SyncReport`,
+> `PullSource`), and `Brain: Clone` (cheap handle — Arc'd store actor and
+> caches). All additive; `spaces/list` noted below shipped in 0.5.0.
 
 ## Versioning
 
@@ -181,3 +186,19 @@ are **metadata only**: they never carry a token, never widen a scope, and never 
 a `Scope` check. A host that prefers to bypass the handshake (for example, a CI runner
 that already knows the daemon is at the default path) may continue to call the existing
 constructor; the additive surface is opt-in by the host.
+
+## Vault sync surface (1.2, shipped)
+
+`oxibrain sync` and the daemon share one implementation,
+`oxibrain::vault::sync_vault(&Brain, dir, space)`. The native RPC `sync/run`
+(`{dir, space}` → `SyncReport` JSON) is the daemon-attached path: it
+registers the directory as a pull source, runs one pass, and adopts a
+debounced watcher. Scoped sessions require `trusted_ingest` + membership in
+the target space. On the client:
+
+- `BrainClient::sync_run(dir, space) -> Result<SyncOutcome>` —
+  `{ new, modified, unchanged }` path lists, client-owned DTO.
+
+Registration lives in the store (`sources`, §4.2), so watched vaults survive
+daemon restarts; the daemon adopts them at startup
+(`BrainServer::start_source_watchers`).

@@ -28,6 +28,11 @@
 > `mode = pull`), the occurrence chain `occurrence_id = H(source_id, locator, predecessor,
 > content_hash)`, and the rule that legacy episodes (pre-event-path) are classified but never
 > re-ingested. D33 records the decision. Existing §5.6 derivation is unchanged.
+> v2.9 — Daemon-hosted vault watch (ADR-010). §4.2/§16.4: the daemon adopts
+> every registered pull source into a debounced watcher at startup; `oxibrain
+> sync` attaches to a running daemon via the `sync/run` native RPC instead of
+> failing on the P8 lock. `oxibrain::vault::{sync_vault, pull_sources}` is the
+> single implementation shared by CLI, RPC, and watcher.
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
@@ -2170,6 +2175,14 @@ path appends a new episode; the previous episode and its assertions remain (P1) 
 claims surface via `contradictions` and are removed with `retract`. Sync never retracts on
 its own. Legacy episodes (pre-event-path) participate in `Unchanged` classification only
 and are never re-ingested.
+
+When the store is held by a running daemon, `sync` attaches over the default
+socket and runs the same pass via the `sync/run` native RPC (registers the
+source, one pass, immediate watcher adoption). The daemon hosts the vault
+watchers (ADR-010): at startup it adopts every registered pull source into a
+debounced watcher — 2 s quiet period; the C4 minimum-diff half is
+content-hash classification, which makes unchanged re-scans no-ops. Scoped
+sessions need `trusted_ingest` + target-space membership to call `sync/run`.
 
 The CLI is a first-class product surface, not a debug tool.
 

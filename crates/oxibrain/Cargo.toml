@@ -16,6 +16,7 @@ http-llm = ["dep:oxibrain-llm-http"]
 
 [dependencies]
 oxibrain-core.workspace = true
+oxibrain-connectors.workspace = true
 oxibrain-store.workspace = true
 oxibrain-ports.workspace = true
 oxibrain-views.workspace = true

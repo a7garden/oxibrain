@@ -62,7 +62,25 @@ pub struct BrainServer {
     /// When set (authenticated transport), tool calls are gated by capability +
     /// space membership (DESIGN §11.2). `None` = trusted local channel.
     scope: Option<Scope>,
+    /// Daemon source-watching state (see [`SourceWatch`]). Clones share it,
+    /// so a watcher adopted by one session outlives that session as long as
+    /// the serving listener holds a clone.
+    sources: Arc<SourceWatch>,
 }
+
+/// Daemon source-watching state: which vault directories have a live
+/// debounced watcher (keyed by canonical path) and the keep-alive `notify`
+/// handles themselves — dropping a handle stops that watch.
+#[derive(Default)]
+struct SourceWatch {
+    watched: std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+    watchers: std::sync::Mutex<Vec<notify::RecommendedWatcher>>,
+}
+
+/// Debounce quiet period for vault source watchers (ECOSYSTEM C4: debounce;
+/// the minimum-diff half of the rule is content-hash classification, which
+/// makes an unchanged re-scan a no-op).
+const SOURCE_WATCH_QUIET: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl BrainServer {
     /// Open a Brain from a config directory as a trusted local server (no scope).
@@ -71,6 +89,7 @@ impl BrainServer {
         Ok(Self {
             brain: Arc::new(brain),
             scope: None,
+            sources: Arc::new(SourceWatch::default()),
         })
     }
 
@@ -79,6 +98,7 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: None,
+            sources: Arc::new(SourceWatch::default()),
         }
     }
 
@@ -89,6 +109,7 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: Some(scope),
+            sources: Arc::new(SourceWatch::default()),
         }
     }
 
@@ -97,7 +118,11 @@ impl BrainServer {
     /// Used by authenticated transports that share one brain across many
     /// connections, each resolved to its own scope.
     pub fn from_arc(brain: Arc<Brain>) -> Self {
-        Self { brain, scope: None }
+        Self {
+            brain,
+            scope: None,
+            sources: Arc::new(SourceWatch::default()),
+        }
     }
 
     /// Wrap a shared `Arc<Brain>` with an authorization scope.
@@ -105,6 +130,63 @@ impl BrainServer {
         Self {
             brain,
             scope: Some(scope),
+            sources: Arc::new(SourceWatch::default()),
+        }
+    }
+
+    /// Adopt every registered pull source (§4.2) into a debounced watcher.
+    /// Called once per serve entrypoint; idempotent — already-watched
+    /// directories are skipped.
+    pub async fn start_source_watchers(&self) {
+        let sources = match oxibrain::vault::pull_sources(&self.brain).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("source watch: enumerate pull sources: {e}");
+                return;
+            }
+        };
+        for s in sources {
+            self.ensure_watched(s.dir, s.space);
+        }
+    }
+
+    /// Watch `dir` into `space` unless already watched (idempotent per
+    /// canonical directory). The watcher's settled tick runs one
+    /// [`oxibrain::vault::sync_vault`] pass on this runtime.
+    fn ensure_watched(&self, dir: std::path::PathBuf, space: String) {
+        let canonical = dir.canonicalize().unwrap_or(dir);
+        {
+            let mut watched = self
+                .sources
+                .watched
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if !watched.insert(canonical.clone()) {
+                return;
+            }
+        }
+        let brain = (*self.brain).clone();
+        let target = canonical.clone();
+        let handle = tokio::runtime::Handle::current();
+        match oxibrain_connectors::spawn_quiet(&canonical, SOURCE_WATCH_QUIET, move || match handle
+            .block_on(oxibrain::vault::sync_vault(&brain, &target, &space))
+        {
+            Ok(r) if !r.new.is_empty() || !r.modified.is_empty() => tracing::info!(
+                new = r.new.len(),
+                modified = r.modified.len(),
+                unchanged = r.unchanged.len(),
+                "vault watcher sync"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("vault watcher sync failed: {e}"),
+        }) {
+            Ok(w) => self
+                .sources
+                .watchers
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(w),
+            Err(e) => tracing::warn!("watch {}: {e}", canonical.display()),
         }
     }
 
@@ -199,6 +281,56 @@ impl BrainServer {
                 .collect());
         }
         Ok(all)
+    }
+
+    /// `sync/run` — register a vault directory as a pull source and run one
+    /// sync pass (scan → classify → ingest via the event path, §4.2). The
+    /// daemon adopts the directory into a debounced watcher; registration
+    /// lives in the store, so it survives daemon restarts.
+    ///
+    /// Scope: the pass ingests at `Trusted` tier, so a scoped session needs
+    /// the `trusted_ingest` capability and membership in the target space.
+    /// The trusted local channel (anonymous daemon socket) is unrestricted.
+    async fn rpc_sync_run(&self, params: Option<&Value>) -> Result<Value, (i64, String)> {
+        let dir = params
+            .and_then(|p| p.get("dir"))
+            .and_then(|v| v.as_str())
+            .ok_or((
+                INVALID_PARAMS,
+                "missing 'dir' (vault directory)".to_string(),
+            ))?
+            .to_string();
+        let space = params
+            .and_then(|p| p.get("space"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("personal")
+            .to_string();
+        if let Some(scope) = &self.scope {
+            let now = SystemClock.now();
+            if scope.expires_at.is_some_and(|exp| now >= exp) {
+                return Err((UNAUTHORIZED, "token expired".to_string()));
+            }
+            if !scope.caps.contains(&Capability::TrustedIngest) {
+                return Err((
+                    UNAUTHORIZED,
+                    "sync/run requires the trusted_ingest capability".to_string(),
+                ));
+            }
+            let id = self
+                .brain
+                .lookup_space(&space)
+                .await
+                .map_err(|e| (INTERNAL_ERROR, format!("lookup_space: {e}")))?
+                .ok_or_else(|| (UNAUTHORIZED, format!("token not scoped to space '{space}'")))?;
+            if !scope.spaces.iter().any(|s| s == &id) {
+                return Err((UNAUTHORIZED, format!("token not scoped to space '{space}'")));
+            }
+        }
+        let report = oxibrain::vault::sync_vault(&self.brain, std::path::Path::new(&dir), &space)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, format!("sync: {e}")))?;
+        self.ensure_watched(std::path::PathBuf::from(dir), space);
+        serde_json::to_value(&report).map_err(|e| (INTERNAL_ERROR, e.to_string()))
     }
 
     /// Scope gate for resource reads: spaces are hard boundaries (§15.1) and
@@ -302,6 +434,14 @@ impl BrainServer {
             "spaces/list" => match msg.id {
                 Some(id) => match self.visible_spaces().await {
                     Ok(v) => Some(success(id, json!({ "spaces": v }))),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
+
+            "sync/run" => match msg.id {
+                Some(id) => match self.rpc_sync_run(msg.params.as_ref()).await {
+                    Ok(v) => Some(success(id, v)),
                     Err((code, m)) => Some(error(id, code, m)),
                 },
                 None => None,
@@ -1595,6 +1735,7 @@ where
 /// All diagnostics go to stderr — stdout is the protocol channel.
 pub async fn serve_stdio(brain: Brain) -> anyhow::Result<()> {
     let server = Arc::new(BrainServer::from_brain(brain));
+    server.start_source_watchers().await;
     run_session(server, tokio::io::stdin(), tokio::io::stdout()).await
 }
 
@@ -1616,7 +1757,7 @@ pub async fn serve_socket(brain: Brain, path: &std::path::Path) -> anyhow::Resul
     let listener =
         UnixListener::bind(path).map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))?;
     let server = Arc::new(BrainServer::from_brain(brain));
-    tracing::info!("oxibrain MCP listening on {}", path.display());
+    server.start_source_watchers().await;
     let shutdown = crate::daemon::shutdown_signal();
     tokio::pin!(shutdown);
     loop {
@@ -1657,7 +1798,8 @@ pub async fn serve_socket_auth(brain: Brain, path: &std::path::Path) -> anyhow::
     let listener =
         UnixListener::bind(path).map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))?;
     let brain = Arc::new(brain);
-    tracing::info!("oxibrain MCP (auth) listening on {}", path.display());
+    let watch_host = BrainServer::from_arc(brain.clone());
+    watch_host.start_source_watchers().await;
     let shutdown = crate::daemon::shutdown_signal();
     tokio::pin!(shutdown);
     loop {
@@ -1785,6 +1927,7 @@ pub async fn serve_http(
         .await
         .map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
     let server = Arc::new(BrainServer::from_brain(brain));
+    server.start_source_watchers().await;
     let ui_dir = ui_dir.map(std::sync::Arc::new);
     if ui_dir.is_some() {
         tracing::info!("oxibrain HTTP (UI + API) listening on http://{addr}");
@@ -4258,6 +4401,86 @@ mod tests {
             .await
             .unwrap();
         assert!(resp["error"].is_object(), "expected denial, got: {resp}");
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn sync_run_rpc_registers_syncs_and_is_idempotent() {
+        let (dir, server) = fresh_server().await;
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "# a\n").unwrap();
+
+        let call = |id: i64| {
+            msg(
+                id,
+                "sync/run",
+                Some(json!({ "dir": vault.path().to_string_lossy(), "space": "t" })),
+            )
+        };
+        let resp = server.handle(call(1)).await.unwrap();
+        assert!(resp["error"].is_null(), "sync/run failed: {resp}");
+        assert_eq!(resp["result"]["new"].as_array().unwrap().len(), 1);
+
+        // Registered as a pull source (§4.2) — survives daemon restarts.
+        let sources = oxibrain::vault::pull_sources(&server.brain).await.unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].space, "t");
+
+        // Second pass over an unchanged tree is a no-op.
+        let resp2 = server.handle(call(2)).await.unwrap();
+        assert!(resp2["error"].is_null(), "second sync/run failed: {resp2}");
+        assert_eq!(resp2["result"]["new"].as_array().unwrap().len(), 0);
+        assert_eq!(resp2["result"]["unchanged"].as_array().unwrap().len(), 1);
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn sync_run_rpc_requires_trusted_ingest_when_scoped() {
+        let (dir, server) = fresh_scoped(&[Capability::Read], &["alpha"]).await;
+        let vault = tempfile::tempdir().unwrap();
+        let resp = server
+            .handle(msg(
+                1,
+                "sync/run",
+                Some(json!({ "dir": vault.path().to_string_lossy(), "space": "alpha" })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], UNAUTHORIZED);
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn vault_watcher_ingests_new_file_after_settle() {
+        let (dir, server) = fresh_server().await;
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("a.md"), "# a\n").unwrap();
+
+        // Register + first pass (adopts the debounced watcher).
+        let resp = server
+            .handle(msg(
+                1,
+                "sync/run",
+                Some(json!({ "dir": vault.path().to_string_lossy(), "space": "t" })),
+            ))
+            .await
+            .unwrap();
+        assert!(resp["error"].is_null(), "sync/run failed: {resp}");
+        let before = server.brain.episode_count().await.unwrap();
+
+        // Touch the vault; the watcher must settle into a sync pass.
+        std::fs::write(vault.path().join("b.md"), "# b\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if server.brain.episode_count().await.unwrap() > before {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "watcher did not ingest the new file within 20s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
         drop(dir);
     }
 

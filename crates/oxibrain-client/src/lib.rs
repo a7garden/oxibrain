@@ -73,6 +73,14 @@ pub struct SpaceSummary {
     pub entity_count: i64,
 }
 
+/// One `sync/run` pass outcome — client-owned DTO, no engine types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncOutcome {
+    pub new: Vec<String>,
+    pub modified: Vec<String>,
+    pub unchanged: Vec<String>,
+}
+
 impl BrainClient {
     /// Connect to an oxibrain daemon at a Unix socket path (trusted, no token).
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self> {
@@ -423,6 +431,16 @@ impl BrainClient {
         let v = self.call_rpc_json("spaces/list", json!({})).await?;
         serde_json::from_value(v.get("spaces").cloned().unwrap_or(json!([])))
             .context("parse spaces/list result")
+    }
+
+    /// Register a vault directory as a pull source on the daemon and run one
+    /// sync pass (native RPC — not an MCP tool). The daemon adopts the
+    /// directory into a debounced watcher; registration survives restarts.
+    pub async fn sync_run(&mut self, dir: &str, space: &str) -> Result<SyncOutcome> {
+        let v = self
+            .call_rpc_json("sync/run", json!({ "dir": dir, "space": space }))
+            .await?;
+        serde_json::from_value(v).context("parse sync/run result")
     }
 }
 

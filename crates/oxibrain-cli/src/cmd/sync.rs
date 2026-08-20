@@ -3,7 +3,15 @@
 //! Scans DIR recursively for `.md`/`.html` files (oxibrain-connectors),
 //! classifies each against the ledger's event-path state for the vault source
 //! (`oxibrain_core::classify_event`), and ingests new/modified files via the
-//! event path with derived occurrence IDs (§4.2).
+//! event path with derived occurrence IDs (§4.2). The orchestration lives in
+//! `oxibrain::vault` — this command is arg parsing, printing, and transport
+//! selection.
+//!
+//! Two transports: with the store free, one embedded pass runs in-process.
+//! When the daemon holds the P8 advisory lock, the command attaches to it
+//! over the default socket and runs the same pass via the `sync/run` RPC —
+//! the daemon is the sole writer, so recurring ingestion is always
+//! daemon-hosted (ADR-010).
 //!
 //! Occurrence chain: `occurrence_id = H(source_id, locator, predecessor, content_hash)`.
 //! A → B → A creates three events because the predecessor differs.
@@ -11,156 +19,56 @@
 //! Legacy episodes (pre-event-identity) participate in Unchanged classification
 //! but are never re-ingested.
 
-use anyhow::{Context, bail};
-use oxibrain::{Brain, BrainConfig, IngestAttachment, SourceRef, TrustTier};
-use oxibrain_connectors::scan_directory;
-use oxibrain_core::{
-    SyncAction, SyncFile, classify_event, content_hash, occurrence_id, sync::LocatorState,
-};
-use oxibrain_ports::Timestamp;
-use std::collections::HashMap;
+use anyhow::Context;
+use oxibrain::{vault, vault::SyncReport};
+#[cfg(unix)]
+use oxibrain_client::default_socket_path;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
-
-/// Per-run outcome, returned for programmatic use and printed by the CLI.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct SyncReport {
-    pub new: Vec<String>,
-    pub unchanged: Vec<String>,
-    pub modified: Vec<String>,
-}
 
 pub async fn run(dir: &Path, root: &Path, space: &str) -> anyhow::Result<()> {
-    let report = sync(dir, root, space).await?;
+    let report = match oxibrain::Brain::open(oxibrain::BrainConfig::at(dir)).await {
+        Ok(brain) => vault::sync_vault(&brain, root, space).await?,
+        Err(oxibrain::BrainError::Locked { holder }) => {
+            eprintln!("note: store locked ({holder}); attaching to the daemon socket");
+            run_via_daemon(root, space).await?
+        }
+        Err(e) => return Err(e.into()),
+    };
     print_report(&report);
     Ok(())
 }
 
-/// Scan, classify, ingest via event path. The locator convention is the file's
-/// path relative to the sync root (forward slashes).
-pub async fn sync(dir: &Path, root: &Path, space: &str) -> anyhow::Result<SyncReport> {
-    if !root.is_dir() {
-        bail!("not a directory: {}", root.display());
-    }
-    let files = scan_directory(root);
-    let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
-
-    // Register the vault as a pull source. Source name = canonical path.
-    let source_name = root
-        .canonicalize()
-        .unwrap_or_else(|_| root.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
-    let source_id = brain
-        .ensure_source(&space_id, &source_name, "document_revision", "pull")
-        .await?;
-
-    // Fetch both classification inputs.
-    let legacy = brain.note_hashes(&space_id).await?;
-    let event_states = brain.locator_states(&space_id, &source_id).await?;
-
-    // Content is dropped after hashing; keep it per path for the ingest pass.
-    let mut contents: HashMap<String, (String, Timestamp)> = HashMap::new();
-    let sync_files: Vec<SyncFile> = files
-        .into_iter()
-        .filter_map(|f| {
-            let path = f.path.to_str()?.to_string();
-            let modified = systemtime_to_timestamp(f.modified);
-            let hash = content_hash(&f.content);
-            contents.insert(path.clone(), (f.content, modified));
-            Some(SyncFile {
-                path,
-                content_hash: hash,
-                modified,
-            })
-        })
-        .collect();
-
-    let mut report = SyncReport::default();
-    let now = brain.clock_now();
-    for action in classify_event(sync_files, &legacy, &event_states) {
-        match action {
-            SyncAction::New(f) => {
-                ingest_event_one(
-                    &brain,
-                    &space_id,
-                    &source_id,
-                    &contents,
-                    &event_states,
-                    &f,
-                    now,
-                )
-                .await?;
-                report.new.push(f.path);
-            }
-            SyncAction::Modified(f) => {
-                ingest_event_one(
-                    &brain,
-                    &space_id,
-                    &source_id,
-                    &contents,
-                    &event_states,
-                    &f,
-                    now,
-                )
-                .await?;
-                report.modified.push(f.path);
-            }
-            SyncAction::Unchanged(p) => report.unchanged.push(p),
-        }
-    }
-    Ok(report)
+/// Run one sync pass through the daemon's `sync/run` RPC (trusted local
+/// socket). Registers the vault as a pull source; the daemon adopts it into
+/// a debounced watcher.
+async fn run_via_daemon(root: &Path, space: &str) -> anyhow::Result<SyncReport> {
+    let socket = socket_path()?;
+    let mut client = oxibrain_client::BrainClient::connect(&socket)
+        .await
+        .with_context(|| format!("attach to daemon at {}", socket.display()))?;
+    let out = client
+        .sync_run(&root.to_string_lossy(), space)
+        .await
+        .context("sync/run on daemon")?;
+    Ok(SyncReport {
+        new: out.new,
+        modified: out.modified,
+        unchanged: out.unchanged,
+    })
 }
 
-async fn ingest_event_one(
-    brain: &Brain,
-    space_id: &str,
-    source_id: &str,
-    contents: &HashMap<String, (String, Timestamp)>,
-    event_states: &HashMap<String, LocatorState>,
-    f: &SyncFile,
-    now: Timestamp,
-) -> anyhow::Result<()> {
-    let (content, _occurred_at) = contents
-        .get(&f.path)
-        .with_context(|| format!("content missing for scanned path {}", f.path))?;
-
-    // Derive occurrence: predecessor is the latest occurrence for this locator.
-    let predecessor = event_states
-        .get(&f.path)
-        .map(|s| s.latest_occurrence_id.as_str());
-    let occ = occurrence_id(source_id, &f.path, predecessor, &f.content_hash);
-
-    let attachment = IngestAttachment {
-        source_id: source_id.into(),
-        occurrence_id: occ,
-        accepted_at: now,
-        principal: "sync".into(),
-        claims_json: "{}".into(),
-    };
-
-    brain
-        .ingest_event(
-            space_id,
-            content.clone(),
-            SourceRef::Note {
-                path: f.path.clone(),
-            },
-            TrustTier::Trusted,
-            Some(&attachment),
-            "vault-sync",
-        )
-        .await?;
-    Ok(())
+/// Resolve the daemon socket by the Oxi Foundation convention: explicit
+/// `$OXIBRAIN_SOCKET`, else `~/.oxi/brain/oxibrain.sock`.
+#[cfg(unix)]
+fn socket_path() -> anyhow::Result<std::path::PathBuf> {
+    default_socket_path().ok_or_else(|| {
+        anyhow::anyhow!("no daemon socket: $OXIBRAIN_SOCKET unset and $HOME unavailable")
+    })
 }
 
-fn systemtime_to_timestamp(t: std::time::SystemTime) -> Timestamp {
-    let millis = t
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    Timestamp(millis)
+#[cfg(not(unix))]
+fn socket_path() -> anyhow::Result<std::path::PathBuf> {
+    anyhow::bail!("daemon attach is only supported on Unix")
 }
 
 fn print_report(report: &SyncReport) {

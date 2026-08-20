@@ -3,6 +3,27 @@
 All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
+
+## [0.6.0] — 2026-08-20
+
+### Features
+
+- **Daemon-hosted vault watch (ADR-010)** — the C4 loop closes: the daemon
+  adopts every registered pull source into a debounced watcher (2 s quiet;
+  unchanged re-scans are no-ops via content-hash classification), so vault
+  edits become episodes without any consumer-side code. Registration lives in
+  the store and survives restarts.
+- **`sync/run` native RPC + daemon attach** — `oxibrain sync <dir>` now works
+  with a running daemon: on the P8 advisory lock it attaches over the default
+  socket and runs the pass via the new RPC (register → sync → adopt watcher).
+  Scoped sessions need `trusted_ingest` + target-space membership.
+- **`oxibrain::vault` module** — `sync_vault` / `pull_sources` moved out of
+  the CLI so CLI, RPC, and watcher share one implementation (P6).
+  `BrainClient::sync_run` returns the typed `SyncOutcome` DTO. `Brain` is
+  now `Clone` (cheap Arc'd handle) for watcher threads.
+- Docs: ARCHITECTURE v2.9, CONSUMPTION_CONTRACT 1.2, ADR-010; the 2026-08-20
+  space-enumeration design's "consumer-owned watch" note is superseded.
+
 ## [0.5.0] — 2026-08-20
 
 ### Features

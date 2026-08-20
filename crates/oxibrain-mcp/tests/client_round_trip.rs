@@ -213,3 +213,27 @@ async fn client_lists_spaces_over_socket() {
     assert!(spaces.iter().any(|s| s.name == "work"));
     assert!(spaces.iter().all(|s| !s.id.is_empty()));
 }
+
+#[tokio::test]
+async fn client_sync_run_registers_and_syncs_vault() {
+    let (_dir, sock) = spawn_server().await;
+    let mut client = BrainClient::connect(&sock).await.expect("connect");
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("note.md"), "# hello\n").unwrap();
+
+    let out = client
+        .sync_run(&vault.path().to_string_lossy(), "work")
+        .await
+        .expect("sync_run");
+    assert_eq!(out.new, vec!["note.md".to_string()]);
+    assert!(out.modified.is_empty());
+    assert!(out.unchanged.is_empty());
+
+    // Idempotent: unchanged on the second pass.
+    let again = client
+        .sync_run(&vault.path().to_string_lossy(), "work")
+        .await
+        .expect("sync_run again");
+    assert!(again.new.is_empty());
+    assert_eq!(again.unchanged, vec!["note.md".to_string()]);
+}
