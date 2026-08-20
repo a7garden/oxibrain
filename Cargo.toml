@@ -18,24 +18,24 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.4.0"
+version = "0.5.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/a7garden/oxibrain"
 rust-version = "1.85"
 
 [workspace.dependencies]
-oxibrain = { path = "crates/oxibrain", version = "0.4.0" }
-oxibrain-core = { path = "crates/oxibrain-core", version = "0.4.0" }
-oxibrain-index = { path = "crates/oxibrain-index", version = "0.4.0" }
-oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.4.0" }
-oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.4.0" }
-oxibrain-llm-local = { path = "crates/oxibrain-llm-local", version = "0.4.0" }
-oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.4.0" }
-oxibrain-client = { path = "crates/oxibrain-client", version = "0.4.0" }
-oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.4.0" }
-oxibrain-store = { path = "crates/oxibrain-store", version = "0.4.0" }
-oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.4.0" }
-oxibrain-views = { path = "crates/oxibrain-views", version = "0.4.0" }
+oxibrain = { path = "crates/oxibrain", version = "0.5.0" }
+oxibrain-core = { path = "crates/oxibrain-core", version = "0.5.0" }
+oxibrain-index = { path = "crates/oxibrain-index", version = "0.5.0" }
+oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.5.0" }
+oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.5.0" }
+oxibrain-llm-local = { path = "crates/oxibrain-llm-local", version = "0.5.0" }
+oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.5.0" }
+oxibrain-client = { path = "crates/oxibrain-client", version = "0.5.0" }
+oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.5.0" }
+oxibrain-store = { path = "crates/oxibrain-store", version = "0.5.0" }
+oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.5.0" }
+oxibrain-views = { path = "crates/oxibrain-views", version = "0.5.0" }
 blake3 = "1.5"
 hex = "0.4"
 unicode-normalization = "0.1"

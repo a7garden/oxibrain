@@ -3,7 +3,38 @@
 All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
-## [Unreleased]
+## [0.5.0] — 2026-08-20
+
+### Features
+
+- **Space enumeration, end to end** — spaces are discoverable, not just
+  creatable: `ledger::list_spaces` (canonical `(created_at, id)` order with
+  live episode/entity counts), `Brain::list_spaces` + `SpaceInfo` on the
+  stable facade surface (compat-registered, consumption-contracted), the
+  native `spaces/list` JSON-RPC method and `spaces://` static resource on the
+  daemon (both scope-filtered), a typed `BrainClient::list_spaces()` returning
+  the client-owned `SpaceSummary` DTO, and the read-only `oxibrain spaces`
+  CLI verb (`Brain::open_ro` — no advisory lock, coexists with a running
+  daemon). The fifteen-tool MCP cap is untouched: first-party operations ride
+  the native RPC layer beside `handshake` and `reproject`.
+- **ADR-009: topology unification deferred, honestly** — §16.1 no longer
+  promises a one-trait `Brain::connect`. `Brain` is the embedded surface,
+  `oxibrain-client::BrainClient` the remote surface (ECOSYSTEM C6);
+  unification is post-v1 with a stated trigger. CONSUMPTION_CONTRACT 1.1
+  gains `list_spaces`, `lookup_space`, and `SpaceInfo`.
+
+### Fixes
+
+- **`resources/read` scope bypass (security)** — resource reads skipped the
+  capability + space-membership gate that tool calls enforce; a scoped token
+  could read `space://` URIs of spaces outside its scope. All non-`spaces://`
+  schemes are now gated before any database work; `spaces://` self-filters to
+  the session's membership. Regression-tested.
+- **Scope gates no longer write on denial** — both `enforce_scope` and the new
+  resource gate resolved space ids via write-creating `ensure_space`, leaving
+  shadow space rows behind denied probes (an existence-enumeration side
+  channel). They now use the read-only `Brain::lookup_space`. Resource reads
+  also check `scope.expires_at`, matching tool calls.
 
 ## [0.4.0] — 2026-08-19
 
