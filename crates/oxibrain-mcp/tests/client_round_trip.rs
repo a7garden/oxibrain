@@ -198,3 +198,18 @@ async fn connect_endpoint_handshake_with_token_combines_auth_and_capability() {
         .expect("ingest");
     assert!(ingested.contains("Ingested as episode"));
 }
+
+#[tokio::test]
+async fn client_lists_spaces_over_socket() {
+    let (_dir, sock) = spawn_server().await;
+    let mut client = BrainClient::connect(&sock).await.expect("connect");
+
+    let _ = client
+        .ingest("preparing the work space", "work", "seed.md")
+        .await
+        .expect("ingest");
+
+    let spaces = client.list_spaces().await.expect("list_spaces");
+    assert!(spaces.iter().any(|s| s.name == "work"));
+    assert!(spaces.iter().all(|s| !s.id.is_empty()));
+}

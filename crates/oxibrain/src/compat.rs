@@ -23,7 +23,10 @@ fn _check_constructors(
 /// Method-reference checks — verify each method exists on the Brain type.
 fn _check_methods(_brain: &Brain) {
     // Ingestion
+
     let _ = Brain::ensure_space;
+    let _ = Brain::lookup_space;
+    let _ = Brain::list_spaces;
     let _ = Brain::ingest_note;
     let _ = Brain::ingest;
     let _ = Brain::get_episode;
@@ -104,6 +107,7 @@ fn _check_types() {
     _assert::<crate::RedactionClosure>();
     _assert::<crate::RedactionResult>();
     _assert::<crate::AuditRow>();
+    _assert::<crate::SpaceInfo>();
 }
 
 #[cfg(test)]

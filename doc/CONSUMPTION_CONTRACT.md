@@ -42,6 +42,8 @@ The `oxibrain` crate re-exports everything consumers need. The public API is:
 ### Ingestion
 
 - `Brain::ensure_space(name) -> Result<String>`
+- `Brain::lookup_space(name) -> Result<Option<String>, BrainError>`
+- `Brain::list_spaces() -> Result<Vec<SpaceInfo>>`
 - `Brain::ingest_note(space, path, content, occurred_at) -> Result<String>`
 - `Brain::ingest(space, content, source, trust, extractor_id) -> Result<String>`
 - `Brain::get_episode(id) -> Result<Option<Episode>>`
@@ -106,7 +108,7 @@ All re-exported from `oxibrain::*`:
 `BrainError`, `ClockPort`, `LlmPort`, `LlmRequest`, `LlmResponse`, `SystemClock`,
 `Timestamp`, `Capability`, `CapabilitySet`, `Scope`, `TokenInfo`, `AuditEntry`,
 `RedactTarget`, `RedactionClosure`, `RedactionResult`, `AuditRow`,
-`Declaration`, `EntityRef`, `DeclObject`.
+`Declaration`, `EntityRef`, `DeclObject`, `SpaceInfo`.
 
 ## Compatibility test
 

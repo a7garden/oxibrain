@@ -12,7 +12,7 @@ use crate::protocol::{
 use include_dir::{Dir, include_dir};
 use oxibrain::{
     Brain, BrainConfig, BrainError, BriefTarget, Capability, DeclObject, Declaration, EntityRef,
-    IngestAttachment, RedactTarget, Scope, SourceRef, Timestamp, TrustTier,
+    IngestAttachment, RedactTarget, Scope, SourceRef, SpaceInfo, Timestamp, TrustTier,
 };
 use oxibrain_client::protocol::{ClientHello, ClientOperation};
 use oxibrain_core::retrieval::{
@@ -146,17 +146,27 @@ impl BrainServer {
                 format!("token lacks '{}' (expired={expired})", cap.as_str()),
             ));
         }
-        // Space membership: resolve the content-derived id, then check. The
-        // space is created only after the capability gate passes.
+        // Space membership: resolve the content-derived id via a read-only
+        // lookup (not `ensure_space`, which would create a row on denied
+        // reads — a shadow-row leak + existence-enumeration side channel).
+        // The space already exists by virtue of being in `scope.spaces`,
+        // so a `None` here means the caller asked for a space the scope
+        // does not authorize.
         let space = args
             .get("space")
             .and_then(|v| v.as_str())
             .unwrap_or("personal");
-        let space_id = self
+        let space_id = match self
             .brain
-            .ensure_space(space)
+            .lookup_space(space)
             .await
-            .map_err(|e| (INTERNAL_ERROR, format!("ensure_space: {e}")))?;
+            .map_err(|e| (INTERNAL_ERROR, format!("lookup_space: {e}")))?
+        {
+            Some(id) => id,
+            None => {
+                return Err((UNAUTHORIZED, format!("token not scoped to space '{space}'")));
+            }
+        };
         if !scope.spaces.iter().any(|s| s == &space_id) {
             return Err((UNAUTHORIZED, format!("token not scoped to space '{space}'")));
         }
@@ -171,6 +181,63 @@ impl BrainServer {
                 ));
             }
         }
+        Ok(())
+    }
+
+    /// Spaces the current session may see. `None` scope (trusted local
+    /// channel) sees all; a scoped session sees only its membership.
+    async fn visible_spaces(&self) -> Result<Vec<SpaceInfo>, (i64, String)> {
+        let all = self
+            .brain
+            .list_spaces()
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+        if let Some(scope) = &self.scope {
+            return Ok(all
+                .into_iter()
+                .filter(|s| scope.spaces.iter().any(|sid| sid == &s.id))
+                .collect());
+        }
+        Ok(all)
+    }
+
+    /// Scope gate for resource reads: spaces are hard boundaries (§15.1) and
+    /// resources are queries. Requires Read capability + unexpired when a
+    /// scope is present. Resolves the space id with a read-only lookup so
+    /// denied reads do not create shadow rows (P-scope).
+    async fn enforce_scope_resource(&self, space_name: &str) -> Result<(), (i64, String)> {
+        let Some(scope) = &self.scope else {
+            return Ok(());
+        };
+        let now = SystemClock.now();
+        let expired = scope.expires_at.is_some_and(|exp| now >= exp);
+        if expired {
+            return Err((UNAUTHORIZED, "token expired".to_string()));
+        }
+        if !scope.caps.contains(&Capability::Read) {
+            return Err((UNAUTHORIZED, "token lacks read capability".into()));
+        }
+        let id = match self
+            .brain
+            .lookup_space(space_name)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, format!("lookup_space: {e}")))?
+        {
+            Some(id) => id,
+            None => {
+                return Err((
+                    UNAUTHORIZED,
+                    format!("token not scoped to space '{space_name}'"),
+                ));
+            }
+        };
+        if !scope.spaces.iter().any(|s| s == &id) {
+            return Err((
+                UNAUTHORIZED,
+                format!("token not scoped to space '{space_name}'"),
+            ));
+        }
+
         Ok(())
     }
 
@@ -232,6 +299,14 @@ impl BrainServer {
                 },
                 None => None,
             },
+            "spaces/list" => match msg.id {
+                Some(id) => match self.visible_spaces().await {
+                    Ok(v) => Some(success(id, json!({ "spaces": v }))),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
+
             other => msg
                 .id
                 .map(|id| error(id, METHOD_NOT_FOUND, format!("unknown method: {other}"))),
@@ -955,6 +1030,11 @@ impl BrainServer {
                 "name": "Space: personal",
                 "description": "Space overview: entity count, episode count, contradictions, recent entities.",
                 "mimeType": "application/json"
+            }, {
+                "uri": "spaces://",
+                "name": "All spaces",
+                "description": "Spaces this session may see: id, name, created_at, episode/entity counts.",
+                "mimeType": "application/json"
             }],
             "resourceTemplates": [{
                 "uriTemplate": "space://{name}",
@@ -1003,17 +1083,22 @@ impl BrainServer {
             .collect();
         // For space:// URIs the path IS the space name. For entity/episode/graph
         // URIs, the space comes from the ?space= query param (default: personal).
+
         let space_name = if scheme == "space" {
             path
         } else {
             qp.get("space").copied().unwrap_or("personal")
         };
+        // Scope gate: spaces are hard boundaries (§15.1). The `spaces://`
+        // scheme self-filters via visible_spaces below, so it is exempt.
+        if scheme != "spaces" {
+            self.enforce_scope_resource(space_name).await?;
+        }
         let space_id = self
             .brain
             .ensure_space(space_name)
             .await
             .map_err(|e| (INTERNAL_ERROR, format!("ensure_space: {e}")))?;
-
         let text = match scheme {
             "space" => {
                 let cards = self
@@ -1110,6 +1195,12 @@ impl BrainServer {
                     .await
                     .map_err(|e| (INTERNAL_ERROR, format!("timeline: {e}")))?;
                 serde_json::to_string_pretty(&entries).unwrap_or_default()
+            }
+            "spaces" => {
+                // `spaces://` was exempted from the per-space gate above and
+                // self-filters: visible_spaces honors the session scope.
+                let list = self.visible_spaces().await?;
+                serde_json::to_string_pretty(&json!({ "spaces": list })).unwrap_or_default()
             }
             other => {
                 return Err((
@@ -2756,6 +2847,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn denied_resource_read_does_not_create_space() {
+        // Security regression: denied reads must not leak the name through a
+        // shadow row in spaces (existence-enumeration side channel).
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let alpha = brain.ensure_space("alpha").await.unwrap();
+        let scope = Scope {
+            spaces: vec![alpha],
+            caps: [Capability::Read].into_iter().collect(),
+            ..Default::default()
+        };
+        let server = BrainServer::from_brain_scoped(brain, scope);
+        let resp = server
+            .handle(msg(
+                1,
+                "resources/read",
+                Some(json!({ "uri": "space://beta" })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            resp["error"].is_object(),
+            "foreign-space read must be denied; got: {resp}"
+        );
+        // No shadow row: beta must not appear in list_spaces.
+        let spaces = server.brain.list_spaces().await.unwrap();
+        let names: Vec<&str> = spaces.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            !names.contains(&"beta"),
+            "denied read must not create a 'beta' space; got: {names:?}"
+        );
+        assert_eq!(names, vec!["alpha"]);
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn expired_scope_denies_resources() {
+        // Consistency with the tool gate: resource reads must also honor
+        // scope.expires_at, even when the requested space IS in the scope.
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let sid = brain.ensure_space("t").await.unwrap();
+        let scope = Scope {
+            spaces: vec![sid],
+            caps: [Capability::Read].into_iter().collect(),
+            expires_at: Some(oxibrain_ports::Timestamp::from_millis(1)),
+            ..Default::default()
+        };
+        let server = BrainServer::from_brain_scoped(brain, scope);
+        let resp = server
+            .handle(msg(
+                1,
+                "resources/read",
+                Some(json!({ "uri": "space://t" })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp["error"]["code"], UNAUTHORIZED,
+            "expired scope must deny resource read of its own space; got: {resp}"
+        );
+        drop(dir);
+    }
+
+    #[tokio::test]
     async fn run_session_round_trips_over_a_byte_stream() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
         // client=a, server=b: a writes → b reads, b writes → a reads.
@@ -4062,6 +4218,72 @@ mod tests {
         assert_eq!(resp["error"]["code"], METHOD_NOT_FOUND);
     }
 
+    #[tokio::test]
+    async fn spaces_list_rpc_lists_all_when_unscoped() {
+        let (dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("work").await.unwrap();
+        let resp = server.handle(msg(1, "spaces/list", None)).await.unwrap();
+        let arr = resp["result"]["spaces"].as_array().unwrap();
+        assert!(arr.iter().any(|s| s["name"] == json!("work")));
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn spaces_list_rpc_scoped_filters_to_membership() {
+        // fresh_scoped(&[Capability::Read], &["alpha"]) — pattern exists at ~line 2568
+        let (dir, server) = fresh_scoped(&[Capability::Read], &["alpha"]).await;
+        let _ = server.brain.ensure_space("beta").await.unwrap();
+        let resp = server.handle(msg(1, "spaces/list", None)).await.unwrap();
+        let names: Vec<&str> = resp["result"]["spaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["alpha"]);
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn resources_read_denies_foreign_space_under_scope() {
+        // Security regression: resources/read previously bypassed enforce_scope.
+        let (dir, server) = fresh_scoped(&[Capability::Read], &["alpha"]).await;
+        let _ = server.brain.ensure_space("beta").await.unwrap();
+        let resp = server
+            .handle(msg(
+                1,
+                "resources/read",
+                Some(json!({ "uri": "space://beta" })),
+            ))
+            .await
+            .unwrap();
+        assert!(resp["error"].is_object(), "expected denial, got: {resp}");
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn spaces_resource_lists_scoped_spaces() {
+        let (dir, server) = fresh_scoped(&[Capability::Read], &["alpha"]).await;
+        let _ = server.brain.ensure_space("beta").await.unwrap();
+        let resp = server
+            .handle(msg(
+                1,
+                "resources/read",
+                Some(json!({ "uri": "spaces://" })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["contents"][0]["text"].as_str().unwrap();
+        let v: Value = serde_json::from_str(text).unwrap();
+        let names: Vec<&str> = v["spaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["alpha"]);
+        drop(dir);
+    }
     #[tokio::test]
     async fn http_transport_rejects_non_loopback() {
         let dir = tempfile::TempDir::new().unwrap();

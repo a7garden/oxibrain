@@ -50,6 +50,60 @@ pub fn get_space(conn: &Connection, id: &str) -> Result<Option<String>, BrainErr
     Ok(name)
 }
 
+/// Look up a space id by name (read-only). `Ok(None)` when the name has no
+/// row. Use this in scope gates instead of `ensure_space` to avoid creating
+/// rows on denied reads (P-scope: existence-enumeration side channel).
+pub fn lookup_space_by_name(conn: &Connection, name: &str) -> Result<Option<String>, BrainError> {
+    let id = match conn.query_row(
+        "SELECT id FROM spaces WHERE name = ?1",
+        params![name],
+        |r| r.get(0),
+    ) {
+        Ok(id) => Some(id),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(sql_err(e)),
+    };
+    Ok(id)
+}
+
+/// A space row with live counts. Decision-free fetch (P9).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaceRow {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub episode_count: i64,
+    pub entity_count: i64,
+}
+
+/// List all spaces with episode/entity counts, ordered by (created_at, id).
+/// Canonical order — same store, same rows, same order.
+pub fn list_spaces(conn: &Connection) -> Result<Vec<SpaceRow>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.id, s.name, s.created_at,
+                (SELECT COUNT(*) FROM episodes e WHERE e.space_id = s.id),
+                (SELECT COUNT(*) FROM entities en WHERE en.space_id = s.id)
+             FROM spaces s
+             ORDER BY s.created_at, s.id",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![], |r| {
+            Ok(SpaceRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                created_at: r.get(2)?,
+                episode_count: r.get(3)?,
+                entity_count: r.get(4)?,
+            })
+        })
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    Ok(rows)
+}
+
 /// Next monotonic seq for a space.
 pub fn next_seq(conn: &Connection, space: &str) -> Result<u64, BrainError> {
     let max: Option<i64> = conn

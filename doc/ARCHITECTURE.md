@@ -1,6 +1,14 @@
 # oxibrain — Architecture
-> **Version:** v2.9 · **Date:** 2026-08-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
-> **v2.9 — Embedded repair/operations console.** The console ships inside the `oxibrain`
+> **Version:** v2.10 · **Date:** 2026-08-20 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.10 — Space enumeration and first-party RPC.** Spaces are enumerable
+> (`Brain::list_spaces`, `oxibrain spaces`, `spaces://` resource, native
+> `spaces/list` RPC) — scoped sessions see only their membership, and
+> `resources/read` is now scope-gated like tools (the gap was found and fixed
+> with tests). §16.1 is aligned with ADR-009: `Brain` is the embedded surface,
+> `oxibrain-client` the remote surface; the one-trait unification is post-v1
+> with a stated trigger. The fifteen-tool MCP cap is unchanged — first-party
+> operations ride the native RPC layer.
+> v2.9 — Embedded repair/operations console. The console ships inside the `oxibrain`
 > binary via `include_dir!` against the bundle committed inside `oxibrain-mcp`
 > (`crates/oxibrain-mcp/assets/dist/`, vite's outDir — §16.6). `oxibrain serve --http
 > 127.0.0.1:18080` now serves the UI without `--ui-dir`. The console's scope is
@@ -1909,7 +1917,9 @@ only way to make "views do not reach the database" checkable rather than aspirat
 ### 15.1 Spaces
 
 Every episode, entity, statement, and query is scoped. Spaces are hard boundaries: no query,
-traversal, or **write** crosses one.
+traversal, or **write** crosses one. Enumeration and resources obey the same boundary: a scoped
+session lists and reads only the spaces in its scope; resource reads are gated exactly like
+tool calls.
 
 **A space is a privacy boundary, never an application boundary.** Several apps writing to one
 space is the entire point — the brain can only connect last week's note to a Tuesday routine to
@@ -2057,7 +2067,7 @@ let pg  = brain.brief(Target::Entity(id)).await?;
 brain.declare(Statement::new(alice, "works_on", projectx)).valid_from(date).await?;
 ```
 
-`Brain` is one trait in both modes: a consumer changes topology by changing one line.
+Two typed surfaces (ADR-009): `Brain` is the embedded surface — full API including port injection; `oxibrain-client::BrainClient` is the remote surface for daemon topology (ECOSYSTEM C6). Unification is post-v1, triggered by a consumer needing runtime topology switching; LLM-injecting methods cannot cross a process boundary by construction.
 
 ### 16.2 MCP surface
 
@@ -2081,13 +2091,16 @@ brain.declare(Statement::new(alice, "works_on", projectx)).valid_from(date).awai
 
 **Fifteen. That is the cap.** Adding a sixteenth requires removing one.
 
-Resources: `space://`, `entity://{id}`, `episode://{id}`, `graph://{entity}?depth=n`.
+Resources: `spaces://` (list), `space://`, `entity://{id}`, `episode://{id}`, `graph://{entity}?depth=n`.
 
 **Schema evolution is additive, as §19.4 requires.** The v1.0 `search` and `traverse` schemas
 never exposed `as_of` or `min_confidence` (F29), so adding them is purely additive — no client
 breaks, and the new expressiveness is opt-in. `mode` remains a string enum whose values are now
 preset names. The one **corrective** change: `recall`'s advertised description promised layers
 that were never populated (F30); the description must match what is returned.
+
+Native JSON-RPC methods — `handshake`, `reproject`, `spaces/list` — are the first-party surface; they
+are not MCP tools and do not count against the cap.
 
 ### 16.3 Concurrency, budgets, observability
 
@@ -2127,6 +2140,7 @@ that were never populated (F30); the description must match what is returned.
 
 ```
 oxibrain init | doctor | stats
+oxibrain spaces                         # list spaces with counts (read-only)
 oxibrain ingest <path|-> [--source kind] [--space s] [--watch]  # trust is server-evaluated
 oxibrain sync <dir> [--space s]                     # vault sync: idempotent, occurred_at = mtime
 oxibrain ask "<question>" [--as-of DATE] [--global] [--explain]

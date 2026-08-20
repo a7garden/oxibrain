@@ -22,6 +22,7 @@
 
 pub mod discovery;
 pub mod foundation_package;
+
 pub mod protocol;
 
 pub use discovery::{BrainEndpoint, DiscoveryError, default_socket_path};
@@ -37,6 +38,7 @@ pub use protocol::{
 };
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -58,6 +60,17 @@ pub struct BrainClient {
     writer: tokio::net::unix::OwnedWriteHalf,
     reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     next_id: AtomicU64,
+}
+
+/// A space as enumerated by [`BrainClient::list_spaces`] — client-owned DTO, no engine types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaceSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "created_at")]
+    pub created_at_ms: i64,
+    pub episode_count: i64,
+    pub entity_count: i64,
 }
 
 impl BrainClient {
@@ -382,6 +395,34 @@ impl BrainClient {
             bail!("ping failed: no result");
         }
         Ok(())
+    }
+
+    /// Send a raw JSON-RPC request (non-tool method, e.g. `spaces/list`) and
+    /// return the parsed `result`. Protocol errors map to `Err`.
+    pub async fn call_rpc_json(&mut self, method: &str, params: Value) -> Result<Value> {
+        let id = self.alloc_id();
+        let req = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        self.send(&req).await?;
+        let resp = self.recv().await?;
+        if let Some(err) = resp.get("error") {
+            bail!(
+                "{}",
+                err.get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error")
+            );
+        }
+        resp.get("result")
+            .cloned()
+            .context("missing result in response")
+    }
+
+    /// Enumerate spaces the daemon exposes to this session (native RPC — not an
+    /// MCP tool). Millis on the wire; convert to your own time type.
+    pub async fn list_spaces(&mut self) -> Result<Vec<SpaceSummary>> {
+        let v = self.call_rpc_json("spaces/list", json!({})).await?;
+        serde_json::from_value(v.get("spaces").cloned().unwrap_or(json!([])))
+            .context("parse spaces/list result")
     }
 }
 

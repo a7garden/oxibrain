@@ -39,6 +39,8 @@ pub enum Command {
     },
     /// Show store statistics.
     Stats,
+    /// List all spaces with counts. Read-only; safe with a running daemon.
+    Spaces,
     /// Health check.
     Doctor,
     /// Back up the store.

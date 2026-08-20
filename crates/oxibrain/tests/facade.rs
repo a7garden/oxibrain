@@ -63,3 +63,16 @@ async fn read_only_open_fails_on_missing_store() {
         "expected not-found error, got: {msg}"
     );
 }
+
+#[tokio::test]
+async fn list_spaces_returns_created_spaces() {
+    let dir = TempDir::new().unwrap();
+    let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+    let _ = brain.ensure_space("work").await.unwrap();
+    let _ = brain.ensure_space("personal").await.unwrap();
+    let spaces = brain.list_spaces().await.unwrap();
+    let names: Vec<&str> = spaces.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"work"));
+    assert!(names.contains(&"personal"));
+    assert!(spaces.iter().all(|s| s.created_at.millis() > 0));
+}

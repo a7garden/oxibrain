@@ -11,6 +11,7 @@ pub mod pull_plan;
 mod render;
 
 pub use config::BrainConfig;
+pub use models::SpaceInfo;
 
 // Read-only boilerplate: wrap a closure to be run on a reader connection,
 // shipped to a blocking thread. Capture needed values by move before calling.
@@ -132,6 +133,32 @@ impl Brain {
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+    /// Look up a space id by name without creating it (read-only). `Ok(None)`
+    /// when the name has no row. Scope gates call this instead of
+    /// `ensure_space` so denied reads do not create shadow rows.
+    pub async fn lookup_space(&self, name: &str) -> Result<Option<String>, BrainError> {
+        let name = name.to_string();
+        read_op!(self.handle, |conn| ledger::lookup_space_by_name(
+            conn, &name
+        ))
+    }
+
+    /// List all spaces with live counts, ordered by (created_at, id).
+    pub async fn list_spaces(&self) -> Result<Vec<SpaceInfo>, BrainError> {
+        read_op!(self.handle, |conn| {
+            let rows = ledger::list_spaces(conn)?;
+            Ok(rows
+                .into_iter()
+                .map(|r| SpaceInfo {
+                    id: r.id,
+                    name: r.name,
+                    created_at: Timestamp::from_millis(r.created_at),
+                    episode_count: r.episode_count,
+                    entity_count: r.entity_count,
+                })
+                .collect())
+        })
     }
     /// Ingest a note episode. Returns the episode id (content-derived).
     pub async fn ingest_note(

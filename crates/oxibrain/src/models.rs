@@ -6,7 +6,7 @@
 //! changing weights must change the extractor id, or a silent quality
 //! change would poison the extraction cache.
 
-use oxibrain_ports::BrainError;
+use oxibrain_ports::{BrainError, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio_stream::StreamExt as _;
@@ -261,6 +261,16 @@ pub fn cli_progress(downloaded: u64, total: u64) {
         let tot = total as f64 / (1 << 20) as f64;
         eprintln!("  {dl:6.0} / {tot:6.0} MiB");
     }
+}
+
+/// A space as seen by callers: identity plus live counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpaceInfo {
+    pub id: String,
+    pub name: String,
+    pub created_at: Timestamp,
+    pub episode_count: i64,
+    pub entity_count: i64,
 }
 
 #[cfg(test)]
