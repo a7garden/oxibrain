@@ -4,8 +4,14 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
-## [0.6.0] — 2026-08-20
+## [Unreleased]
+### Fixes
 
+- **Root inbox file exclusions** — `Chat.md` and `Later.md` at the vault root are
+  excluded from ingestion, while similarly named notes in subfolders remain
+  eligible.
+
+## [0.6.0] — 2026-08-20
 ### Features
 
 - **Daemon-hosted vault watch (ADR-010)** — the C4 loop closes: the daemon

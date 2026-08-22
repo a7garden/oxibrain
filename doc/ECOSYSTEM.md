@@ -1,14 +1,16 @@
 # The oxi Ecosystem — Three-Plane Topology
 
-> **Version:** v1.0 · **Date:** 2026-08-17 · aligned to `ARCHITECTURE.md` v2.5
+> **Version:** v1.1 · **Date:** 2026-08-21 · aligned to `ARCHITECTURE.md` v2.10
 > **Status:** Canonical for *how the oxi apps compose* and the order in which that happens.
 > Per-app internals remain canonical in each app's own docs.
 > **Companion:** `doc/ARCHITECTURE.md` (oxibrain itself). For the per-app public surface
 > that oxi apps depend on, see `doc/CONSUMPTION_CONTRACT.md` — this file does not restate
 > unstable API details.
-> **Supersedes:** v0.2 (2026-08-11) — the v0.2 four-app / one-brain framing remains a
-> useful narrative, but the topology now names three explicit planes and the Foundation v1
-> contract that connects them.
+> **Supersedes:** v1.0 (2026-08-17) — the three-plane topology and C1–C8 framing are
+> unchanged; C5 is retitled from "one writer per subtree" to *"One installation root,
+> one owner per subtree"* and now recognizes a **shared user file space** at
+> `~/.oxi/vault/` (the `oxi-frontmatter` contract governs its writes; per-app overrides
+> on vault path/space warn loudly, never silently diverge).
 
 ---
 
@@ -145,21 +147,53 @@ what makes "when did I change my mind about this?" answerable. Debounce and a
 minimum-diff threshold keep this from becoming version spam; consolidation compacts old
 revisions (`ARCHITECTURE.md` §13).
 
-### C5 — One installation root, one writer per subtree
+### C5 — One installation root, one owner per subtree
 
 ```
 ~/.oxi/
-├── config.toml                  # shared: which brain, which space, provider settings
+├── config.toml                  # shared: which brain, which space, [vault] path/space
 ├── foundation/v1/               # Foundation contract — non-secret, every host reads
 │   ├── profiles.json
 │   └── packages.lock
-└── brain/                       # oxibrain store — daemon is the sole writer
-    └── oxibrain.sock            # default listening socket
+├── brain/                       # oxibrain store — daemon is the sole writer
+│   └── oxibrain.sock            # default listening socket
+└── vault/                       # SHARED USER FILE SPACE (oxios + oximemo write;
+    │                            #  oxi-frontmatter contract governs; see disciplines below)
+    ├── oximemo.toml             # vault config (owned by oximemo)
+    ├── <folder>/<slug>.md       # user memos (frontmatter required)
+    ├── Chat.md, Later.md, …     # oxios app files (BodyOnly — no frontmatter)
+    └── _assets/, .trash/, .git/ # app machinery (oximemo) + git history (oxios)
 ```
 
-One root, one config file, one daemon. Each subtree has exactly one writer. Apps
-discover the brain by convention (`~/.oxi/brain/oxibrain.sock` or `$OXIBRAIN_SOCKET`),
-not configuration, so a fresh install of any app finds the existing brain with no setup.
+One root, one config file, one daemon. **Owned subtrees keep exactly one writer:**
+the daemon writes `brain/` and nothing else; hosts never write `foundation/v1/`. The
+`vault/` subtree is a **shared user file space** — multiple apps may write into it,
+and three disciplines make that safe:
+
+1. **Every write goes through the `oxi-frontmatter` contract.** Atomic
+   tmp+fsync+rename, a single frontmatter block, unknown-key- and app-table-preserving
+   serialization. Direct `fs::write` to a vault `.md` is a contract violation.
+2. **No derived state inside `vault/`.** No app places an index, cache, or lock file
+   inside the vault — derived state lives in each app's own support directory. The
+   vault is files, frontmatter, and git; everything else is rebuildable from that.
+3. **Per-file last-writer-wins, cross-app visibility by frontmatter.** When two apps
+   touch the same file, last-writer-wins resolves the conflict; cross-app visibility
+   for memo indexing is by frontmatter convention (a `---` block ⇒ memo, no block ⇒
+   `BodyOnly`), never by reserved filenames.
+
+**Vault resolution, as shipped.** `~/.oxi/config.toml` `[vault].space` is the
+ecosystem-canonical brain space — both apps read it for vault ingestion, and a
+per-app space setting only applies when the ecosystem key is absent.
+`[vault].path` is honored by oxios (tier 2 of `kernel.knowledge_root` →
+`[vault].path` → `~/.oxi/vault`) and by the ecosystem migration tooling; oximemo
+in this release does not read it — it opens the default `~/.oxi/vault`, with a
+custom root set per-app via `--vault` or `OXIMEMO_VAULT`. Per-app overrides can
+therefore **diverge silently today** — a split pair fragments the vault: a second
+space registration leaves one space with a single full pass and no watcher.
+Operators running custom roots must keep both apps on one tree; a loud cross-app
+mismatch warning is future work. Apps discover the brain by convention
+(`~/.oxi/brain/oxibrain.sock` or `$OXIBRAIN_SOCKET`), not configuration, so a
+fresh install of any app finds the existing brain with no setup.
 
 ### C6 — Integration is a client dependency, never a fork
 

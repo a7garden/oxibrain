@@ -28,10 +28,11 @@ pub struct MarkdownFile {
 ///
 /// Files whose extension is neither `.md` nor `.html` (case-insensitive) are
 /// ignored, as are per-folder templates (`TEMPLATE.md`, `TEMPLATE.html`),
-/// vault config files (`oximemo.toml`, legacy `config.toml`), the `_assets/`
-/// directory, and any directory whose name starts with a dot (e.g. `.trash/`).
-/// Unreadable files are skipped and a warning is logged but do not abort the
-/// scan. Results are sorted by path for deterministic downstream consumption.
+/// root-reserved oxios inbox files — excluded from ingestion only, and vault
+/// config files (`oximemo.toml`, legacy `config.toml`). The `_assets/` directory
+/// and any directory whose name starts with a dot (e.g. `.trash/`) are also
+/// ignored. Unreadable files are skipped and a warning is logged but do not abort
+/// the scan. Results are sorted by path for deterministic downstream consumption.
 ///
 /// For `.html` notes, the frontmatter comment (oximemo spec §3.1) is stripped
 /// and the body is converted to plain text via [`crate::html::html_to_text`]
@@ -61,6 +62,18 @@ pub fn scan_directory(dir: &Path) -> Vec<MarkdownFile> {
             Some(n) => n,
             None => continue,
         };
+        if path
+            .strip_prefix(dir)
+            .map(|relative| {
+                relative
+                    .parent()
+                    .is_none_or(|parent| parent.as_os_str().is_empty())
+            })
+            .unwrap_or(false)
+            && matches!(file_name, "Chat.md" | "Later.md")
+        {
+            continue;
+        }
 
         // Per-folder templates and vault config are not notes. The legacy
         // config filename matches `paths::LEGACY_CONFIG_NAME` in oximemo.
@@ -236,6 +249,25 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, PathBuf::from("real.html"));
         assert_eq!(files[0].content, "note");
+    }
+    #[test]
+    fn scan_skips_root_chat_and_later_but_not_folder_chat() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "Chat.md", "inbox");
+        write(dir.path(), "Later.md", "later");
+        write(
+            dir.path(),
+            "notes/Chat.md",
+            "a user memo that must be ingested",
+        );
+
+        let names: Vec<String> = scan_directory(dir.path())
+            .into_iter()
+            .map(|f| f.path.display().to_string())
+            .collect();
+        assert!(!names.iter().any(|p| p == "Chat.md"));
+        assert!(!names.iter().any(|p| p == "Later.md"));
+        assert!(names.iter().any(|p| p == "notes/Chat.md"));
     }
 
     #[test]
