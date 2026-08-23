@@ -224,8 +224,8 @@ and never broadens scope.
 
 ### 3.1 oximemo — capture and write (experience plane)
 
-Card-based memo app for macOS. Plain `.md` + TOML frontmatter as the source of truth;
-`redb` metadata index; `tantivy` BM25; GUI/CLI parity. It remains the ecosystem's
+Card-based memo app for macOS. Plain `.md` + YAML-subset frontmatter as the source of
+truth; `redb` metadata index; `tantivy` BM25; GUI/CLI parity. It remains the ecosystem's
 authoring interface.
 
 Two guardrails stay:
@@ -236,6 +236,18 @@ Two guardrails stay:
 2. **The "no AI" promise survives.** oximemo still contains no model, no prompt, no
    embedding. Intelligence arrives over a socket from the brain, always in a panel the
    user can close.
+
+**Copilot delegation (2026-08-23 amendment, RFC-050-style):** oximemo may additionally
+act as a **selective dispatcher for an external terminal-agent CLI the user has
+explicitly activated** (v1: `oxios run --json --session`; any verified non-interactive
+CLI contract qualifies). This does not weaken either guardrail: the capture path is
+untouched, oximemo authors no instruction text (it hands the agent a declarative
+context block plus a pointer to the deployed `SKILL.md` contract), and the turn runs
+as one subprocess whose approvals, sandboxing, and providers remain the chosen
+agent's own policy — oximemo never attaches permission-bypass flags. Vault writes
+follow the frontmatter contract and the agent's policy; oximemo labels observed
+changes without claiming causality. Agent discovery never runs on the app-startup or
+capture paths, and the whole surface hides when no agent is activated (C1).
 
 **Brain integration:** vault connector (watch → episode). Panels: related notes,
 contradictions, entities mentioned, "you wrote about this before". All read-only, all
