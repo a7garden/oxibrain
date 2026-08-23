@@ -237,3 +237,32 @@ async fn client_sync_run_registers_and_syncs_vault() {
     assert!(again.new.is_empty());
     assert_eq!(again.unchanged, vec!["note.md".to_string()]);
 }
+
+#[tokio::test]
+async fn client_episodes_for_locator_round_trips_chain() {
+    let (_dir, sock) = spawn_server().await;
+    let mut client = BrainClient::connect(&sock).await.expect("connect");
+    let vault = tempfile::tempdir().unwrap();
+    let dir_s = vault.path().to_string_lossy().into_owned();
+    std::fs::write(vault.path().join("note.md"), "# v1\n").unwrap();
+    let _ = client.sync_run(&dir_s, "work").await.expect("sync_run 1");
+    std::fs::write(vault.path().join("note.md"), "# v2\n").unwrap();
+    let _ = client.sync_run(&dir_s, "work").await.expect("sync_run 2");
+
+    let eps = client
+        .episodes_for_locator(&dir_s, "note.md", "work")
+        .await
+        .expect("episodes_for_locator");
+    assert_eq!(eps.len(), 2, "A→B chain of two revisions");
+    assert_eq!(eps[0].content, "# v1\n");
+    assert_eq!(eps[1].content, "# v2\n");
+    assert!(eps[0].seq < eps[1].seq);
+
+    // Unregistered dir → empty chain, not an error.
+    let other = tempfile::tempdir().unwrap();
+    let eps = client
+        .episodes_for_locator(&other.path().to_string_lossy(), "note.md", "work")
+        .await
+        .expect("unregistered dir is an empty chain");
+    assert!(eps.is_empty());
+}

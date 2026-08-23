@@ -333,6 +333,50 @@ impl BrainServer {
         serde_json::to_value(&report).map_err(|e| (INTERNAL_ERROR, e.to_string()))
     }
 
+    /// `episodes/for_locator` — the occurrence-chain history of one vault
+    /// file (§4.2.1): every episode for `<dir>/<locator>`, oldest first,
+    /// full content included. Read-only vault-history query (Consumption
+    /// Contract 1.3); never creates source rows.
+    ///
+    /// Scope: a read query — a scoped session needs the `read` capability
+    /// and membership in the target space (same gate as resources).
+    async fn rpc_episodes_for_locator(
+        &self,
+        params: Option<&Value>,
+    ) -> Result<Value, (i64, String)> {
+        let dir = params
+            .and_then(|p| p.get("dir"))
+            .and_then(|v| v.as_str())
+            .ok_or((
+                INVALID_PARAMS,
+                "missing 'dir' (vault directory)".to_string(),
+            ))?
+            .to_string();
+        let locator = params
+            .and_then(|p| p.get("locator"))
+            .and_then(|v| v.as_str())
+            .ok_or((
+                INVALID_PARAMS,
+                "missing 'locator' (file path relative to the vault root)".to_string(),
+            ))?
+            .to_string();
+        let space = params
+            .and_then(|p| p.get("space"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("personal")
+            .to_string();
+        self.enforce_scope_resource(&space).await?;
+        let episodes = oxibrain::vault::episodes_for_vault_file(
+            &self.brain,
+            std::path::Path::new(&dir),
+            &space,
+            &locator,
+        )
+        .await
+        .map_err(|e| (INTERNAL_ERROR, format!("episodes/for_locator: {e}")))?;
+        serde_json::to_value(&episodes).map_err(|e| (INTERNAL_ERROR, e.to_string()))
+    }
+
     /// Scope gate for resource reads: spaces are hard boundaries (§15.1) and
     /// resources are queries. Requires Read capability + unexpired when a
     /// scope is present. Resolves the space id with a read-only lookup so
@@ -441,6 +485,14 @@ impl BrainServer {
 
             "sync/run" => match msg.id {
                 Some(id) => match self.rpc_sync_run(msg.params.as_ref()).await {
+                    Ok(v) => Some(success(id, v)),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
+
+            "episodes/for_locator" => match msg.id {
+                Some(id) => match self.rpc_episodes_for_locator(msg.params.as_ref()).await {
                     Ok(v) => Some(success(id, v)),
                     Err((code, m)) => Some(error(id, code, m)),
                 },
@@ -4447,6 +4499,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp["error"]["code"], UNAUTHORIZED);
+        drop(dir);
+    }
+
+    #[tokio::test]
+    async fn episodes_for_locator_returns_chain_after_syncs() {
+        let (dir, server) = fresh_server().await;
+        let vault = tempfile::tempdir().unwrap();
+        let vp = vault.path().to_path_buf();
+        std::fs::write(vp.join("a.md"), "# a v1\n").unwrap();
+        let call = |id, locator: &str, dir: &str| {
+            msg(
+                id,
+                "episodes/for_locator",
+                Some(json!({ "dir": dir, "locator": locator, "space": "t" })),
+            )
+        };
+        let dir_s = vp.to_string_lossy().into_owned();
+
+        // Register + first version.
+        let _ = server
+            .handle(msg(
+                1,
+                "sync/run",
+                Some(json!({ "dir": dir_s.clone(), "space": "t" })),
+            ))
+            .await
+            .unwrap();
+        // Second version — A → B chain of length 2.
+        std::fs::write(vp.join("a.md"), "# a v2\n").unwrap();
+        let _ = server
+            .handle(msg(
+                2,
+                "sync/run",
+                Some(json!({ "dir": dir_s.clone(), "space": "t" })),
+            ))
+            .await
+            .unwrap();
+
+        let resp = server.handle(call(3, "a.md", &dir_s)).await.unwrap();
+        assert!(
+            resp["error"].is_null(),
+            "episodes/for_locator failed: {resp}"
+        );
+        let arr = resp["result"].as_array().unwrap();
+        assert_eq!(arr.len(), 2, "A→B must yield two chain entries");
+        assert_eq!(arr[0]["content"].as_str().unwrap(), "# a v1\n");
+        assert_eq!(arr[1]["content"].as_str().unwrap(), "# a v2\n");
+
+        // Unknown locator → empty array, not an error.
+        let resp = server.handle(call(4, "nope.md", &dir_s)).await.unwrap();
+        assert!(resp["error"].is_null());
+        assert_eq!(resp["result"].as_array().unwrap().len(), 0);
+
+        // Scoped session without read capability is rejected.
+        let (sdir, scoped) = fresh_scoped(&[Capability::TrustedIngest], &["alpha"]).await;
+        let resp = scoped
+            .handle(msg(
+                5,
+                "episodes/for_locator",
+                Some(json!({ "dir": dir_s, "locator": "a.md", "space": "alpha" })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], UNAUTHORIZED);
+        drop(sdir);
         drop(dir);
     }
 

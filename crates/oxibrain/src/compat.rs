@@ -45,6 +45,7 @@ fn _check_methods(_brain: &Brain) {
     let _ = Brain::resolve_entity_id;
     let _ = Brain::list_entities;
     let _ = Brain::list_merges;
+    let _ = Brain::episodes_for_locator;
 
     // Mutation
     let _ = Brain::declare;
