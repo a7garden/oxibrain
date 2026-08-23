@@ -234,8 +234,9 @@ Two guardrails stay:
    `Option`×2 → overlay → save. The ≤16 ms budget is CI-measured, not a past
    achievement.
 2. **The "no AI" promise survives.** oximemo still contains no model, no prompt, no
-   embedding. Intelligence arrives over a socket from the brain, always in a panel the
-   user can close.
+   embedding. Intelligence arrives from outside — over a socket from the brain, or
+   via the user-activated delegated agent CLI (see the copilot amendment below) —
+   always in a panel the user can close.
 
 **Copilot delegation (2026-08-23 amendment, RFC-050-style):** oximemo may additionally
 act as a **selective dispatcher for an external terminal-agent CLI the user has
