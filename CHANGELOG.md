@@ -5,6 +5,18 @@ squash-merged.
 
 
 ## [Unreleased]
+### Added
+
+- **Per-note revision history — `Brain::episodes_for_locator` (Consumption
+  Contract 1.3)** — the read side of the vault occurrence chain (§4.2.1):
+  every episode ingested for `<dir>/<locator>`, oldest first, full content
+  per revision. Native RPC `episodes/for_locator` (read capability gated;
+  not a 16th MCP tool). Client `oxibrain-client@0.7.0` adds
+  `BrainClient::episodes_for_locator` + the `EpisodeSummary` DTO. ADR-011
+  records why vault git history stays consumer-owned
+  (`oxi-vault-git@0.1.0`) and why the read-only occurrence query is the
+  read-side complement.
+
 ### Fixes
 
 - **Root inbox file exclusions** — `Chat.md` and `Later.md` at the vault root are

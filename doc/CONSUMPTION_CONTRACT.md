@@ -72,6 +72,7 @@ The `oxibrain` crate re-exports everything consumers need. The public API is:
 - `Brain::why(space, statement_id) -> Result<ExplainBlock>`
 - `Brain::resolve_entity_id(space, ty, surface) -> Result<Option<String>>`
 - `Brain::list_entities(space, limit) -> Result<Vec<Entity>>`
+- `Brain::list_merges(space) -> Result<Vec<EntityMerge>>`
 - `Brain::episodes_for_locator(space, source_id, locator) -> Result<Vec<Episode>>`
   — the occurrence chain (§4.2.1) of one vault file, oldest first, full
   content per revision. Dir-based convenience:
