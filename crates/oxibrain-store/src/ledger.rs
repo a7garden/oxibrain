@@ -407,6 +407,85 @@ pub fn locator_states(
     Ok(out)
 }
 
+/// Every event-path episode for one locator of a source, oldest first —
+/// the occurrence chain (§4.2.1) of a single vault file, full content
+/// included. One query; decision-free (P9). Redacted episodes are excluded.
+pub fn episodes_for_locator(
+    conn: &Connection,
+    space: &str,
+    source_id: &str,
+    locator: &str,
+) -> Result<Vec<Episode>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, space_id, seq, content_hash, content, source_kind, source_ref,
+                    trust, kind, occurred_at, ingested_at, redacted_at, content_compacted
+             FROM episodes
+             WHERE space_id = ?1 AND source_id = ?2 AND source_ref = ?3
+               AND redacted_at IS NULL
+             ORDER BY seq ASC",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space, source_id, locator], |r| {
+            let ch_blob: Vec<u8> = r.get(3)?;
+            let mut ch = [0u8; 32];
+            if ch_blob.len() == 32 {
+                ch.copy_from_slice(&ch_blob);
+            }
+            let content: String = r.get(4)?;
+            // Transparent decompression — same contract as get_episode.
+            let content = if content.is_empty() {
+                let compacted: Option<Vec<u8>> = r.get(12)?;
+                match compacted {
+                    Some(bytes) => String::from_utf8(bytes).unwrap_or_default(),
+                    None => content,
+                }
+            } else {
+                content
+            };
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)? as u64,
+                ch,
+                content,
+                r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, i64>(9)?,
+                r.get::<_, i64>(10)?,
+                r.get::<_, Option<i64>>(11)?,
+            ))
+        })
+        .map_err(sql_err)?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, space, seq, ch, content, sk, sr, trust_s, kind_s, occ, ing, red) =
+            row.map_err(sql_err)?;
+        let source = decode_source(&sk, sr)?;
+        let trust = TrustTier::parse_db(&trust_s)
+            .ok_or_else(|| BrainError::Corruption(format!("bad trust tier: {trust_s}")))?;
+        let kind = EpisodeKind::parse_db(&kind_s)
+            .ok_or_else(|| BrainError::Corruption(format!("bad episode kind: {kind_s}")))?;
+        out.push(Episode {
+            id,
+            space,
+            seq,
+            content_hash: ContentHash(ch),
+            content,
+            source,
+            trust,
+            kind,
+            occurred_at: Timestamp(occ),
+            ingested_at: Timestamp(ing),
+            redacted_at: red.map(Timestamp),
+        });
+    }
+    Ok(out)
+}
+
 fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainError> {
     match kind {
         "note" => Ok(SourceRef::Note {

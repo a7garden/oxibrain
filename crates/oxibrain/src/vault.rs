@@ -59,6 +59,36 @@ pub async fn pull_sources(brain: &Brain) -> Result<Vec<PullSource>, BrainError> 
     Ok(out)
 }
 
+/// Read the occurrence-chain history of one vault file: every episode
+/// ingested for `<root>/<locator>`, oldest first, full content included
+/// (§4.2.1). Read-only. The vault must already be registered by a prior
+/// `sync_vault` / `sync/run`; an unregistered dir yields an empty chain —
+/// history queries never create source rows.
+pub async fn episodes_for_vault_file(
+    brain: &Brain,
+    root: &Path,
+    space: &str,
+    locator: &str,
+) -> Result<Vec<oxibrain_core::Episode>, BrainError> {
+    let space_id = brain
+        .lookup_space(space)
+        .await?
+        .ok_or_else(|| BrainError::Config(format!("unknown space: {space}")))?;
+    // Source-name convention shared with sync_vault: the canonical path.
+    let source_name = root
+        .canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let sources = brain.list_sources(&space_id).await?;
+    let Some(src) = sources.iter().find(|s| s.name == source_name) else {
+        return Ok(Vec::new());
+    };
+    brain
+        .episodes_for_locator(&space_id, &src.id, locator)
+        .await
+}
+
 /// Scan, classify, ingest via the event path. The locator convention is the
 /// file's path relative to the sync root (forward slashes).
 pub async fn sync_vault(brain: &Brain, root: &Path, space: &str) -> Result<SyncReport, BrainError> {

@@ -1,4 +1,4 @@
-# Consumption Contract 1.2
+# Consumption Contract 1.3
 
 > `ARCHITECTURE.md` §19.2. This document pins the public surface consumers depend on and
 > the stability guarantees each tier carries. It is the contract between
@@ -15,6 +15,11 @@
 > `oxibrain::vault` module (`sync_vault`, `pull_sources`, `SyncReport`,
 > `PullSource`), and `Brain: Clone` (cheap handle — Arc'd store actor and
 > caches). All additive; `spaces/list` noted below shipped in 0.5.0.
+> **1.3 (2026-08-23)** — per-note revision history: `Brain::episodes_for_locator`
+> (stable Query), `oxibrain::vault::episodes_for_vault_file` (dir-based read-only
+> resolution), native RPC `episodes/for_locator`, and client
+> `BrainClient::episodes_for_locator` + `EpisodeSummary` (client 0.7.0). Read-only;
+> never creates source rows. All additive.
 
 ## Versioning
 
@@ -67,7 +72,12 @@ The `oxibrain` crate re-exports everything consumers need. The public API is:
 - `Brain::why(space, statement_id) -> Result<ExplainBlock>`
 - `Brain::resolve_entity_id(space, ty, surface) -> Result<Option<String>>`
 - `Brain::list_entities(space, limit) -> Result<Vec<Entity>>`
-- `Brain::list_merges(space) -> Result<Vec<EntityMerge>>`
+- `Brain::episodes_for_locator(space, source_id, locator) -> Result<Vec<Episode>>`
+  — the occurrence chain (§4.2.1) of one vault file, oldest first, full
+  content per revision. Dir-based convenience:
+  `oxibrain::vault::episodes_for_vault_file(&Brain, root, space, locator)`
+  resolves the source by canonical path (read-only — an unregistered dir
+  yields an empty chain).
 
 ### Mutation
 
@@ -202,3 +212,14 @@ the target space. On the client:
 Registration lives in the store (`sources`, §4.2), so watched vaults survive
 daemon restarts; the daemon adopts them at startup
 (`BrainServer::start_source_watchers`).
+
+## Vault history surface (1.3, shipped)
+
+The native RPC `episodes/for_locator` (`{dir, locator, space}` → array of
+`Episode` JSON, oldest first) is the read side of the occurrence chain.
+Scope: a read query — scoped sessions need the `read` capability and
+membership in the target space (same gate as `resources/read`). On the
+client:
+
+- `BrainClient::episodes_for_locator(dir, locator, space) -> Result<Vec<EpisodeSummary>>`
+  — `{id, seq, content, occurred_at_ms, ingested_at_ms}`, client-owned DTO.

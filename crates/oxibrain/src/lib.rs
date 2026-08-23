@@ -201,6 +201,23 @@ impl Brain {
         ))
     }
 
+    /// Every event-path episode for one locator of a source, oldest first —
+    /// the occurrence chain (§4.2.1) of a single vault file with full
+    /// content. The read side of vault history (Consumption Contract 1.3).
+    pub async fn episodes_for_locator(
+        &self,
+        space: &str,
+        source_id: &str,
+        locator: &str,
+    ) -> Result<Vec<Episode>, BrainError> {
+        let space = space.to_string();
+        let source_id = source_id.to_string();
+        let locator = locator.to_string();
+        read_op!(self.handle, |conn| ledger::episodes_for_locator(
+            conn, &space, &source_id, &locator
+        ))
+    }
+
     /// Current time from the configured clock. Exposed for callers that need
     /// a Timestamp without going through an ingest method.
     pub fn clock_now(&self) -> Timestamp {

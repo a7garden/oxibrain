@@ -81,6 +81,20 @@ pub struct SyncOutcome {
     pub unchanged: Vec<String>,
 }
 
+/// One revision of a vault file from `episodes/for_locator` — the occurrence
+/// chain (§4.2.1), oldest first. Client-owned DTO trimmed to what history
+/// UIs render; `seq` orders the chain, `occurred_at_ms` timestamps it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodeSummary {
+    pub id: String,
+    pub seq: u64,
+    pub content: String,
+    #[serde(rename = "occurred_at")]
+    pub occurred_at_ms: i64,
+    #[serde(rename = "ingested_at")]
+    pub ingested_at_ms: i64,
+}
+
 impl BrainClient {
     /// Connect to an oxibrain daemon at a Unix socket path (trusted, no token).
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self> {
@@ -441,6 +455,25 @@ impl BrainClient {
             .call_rpc_json("sync/run", json!({ "dir": dir, "space": space }))
             .await?;
         serde_json::from_value(v).context("parse sync/run result")
+    }
+
+    /// Occurrence-chain history of one vault file (Consumption Contract 1.3):
+    /// every episode ingested for `<dir>/<locator>`, oldest first, full
+    /// content per revision. Read-only; an unregistered dir yields an empty
+    /// chain.
+    pub async fn episodes_for_locator(
+        &mut self,
+        dir: &str,
+        locator: &str,
+        space: &str,
+    ) -> Result<Vec<EpisodeSummary>> {
+        let v = self
+            .call_rpc_json(
+                "episodes/for_locator",
+                json!({ "dir": dir, "locator": locator, "space": space }),
+            )
+            .await?;
+        serde_json::from_value(v).context("parse episodes/for_locator result")
     }
 }
 
