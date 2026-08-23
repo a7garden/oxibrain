@@ -1,16 +1,15 @@
 # The oxi Ecosystem — Three-Plane Topology
 
-> **Version:** v1.1 · **Date:** 2026-08-21 · aligned to `ARCHITECTURE.md` v2.10
+> **Version:** v1.2 · **Date:** 2026-08-23 · aligned to `ARCHITECTURE.md` v2.10
 > **Status:** Canonical for *how the oxi apps compose* and the order in which that happens.
 > Per-app internals remain canonical in each app's own docs.
 > **Companion:** `doc/ARCHITECTURE.md` (oxibrain itself). For the per-app public surface
 > that oxi apps depend on, see `doc/CONSUMPTION_CONTRACT.md` — this file does not restate
 > unstable API details.
-> **Supersedes:** v1.0 (2026-08-17) — the three-plane topology and C1–C8 framing are
-> unchanged; C5 is retitled from "one writer per subtree" to *"One installation root,
-> one owner per subtree"* and now recognizes a **shared user file space** at
-> `~/.oxi/vault/` (the `oxi-frontmatter` contract governs its writes; per-app overrides
-> on vault path/space warn loudly, never silently diverge).
+> **Supersedes:** v1.1 (2026-08-21) — C1–C8 unchanged. v1.2 records that vault git
+> history is a shared consumer-owned crate (`oxi-vault-git`, ADR-011) and that the
+> brain exposes the occurrence chain read-only (`episodes_for_locator`,
+> Consumption Contract 1.3). §C5's tree comment updated accordingly.
 
 ---
 
@@ -162,7 +161,7 @@ revisions (`ARCHITECTURE.md` §13).
     ├── oximemo.toml             # vault config (owned by oximemo)
     ├── <folder>/<slug>.md       # user memos (frontmatter required)
     ├── Chat.md, Later.md, …     # oxios app files (BodyOnly — no frontmatter)
-    └── _assets/, .trash/, .git/ # app machinery (oximemo) + git history (oxios)
+    └── _assets/, .trash/, .git/ # app machinery (oximemo) + shared git history (oxi-vault-git, oximemo + oxios)
 ```
 
 One root, one config file, one daemon. **Owned subtrees keep exactly one writer:**
