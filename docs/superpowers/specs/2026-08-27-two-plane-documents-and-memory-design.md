@@ -369,11 +369,30 @@ removes the ambient-authority hazard that let a test suite write to the
 production brain — a one-shot CLI with an explicit `--dir` has no well-known
 socket to reach.
 
-Two consequences to accept, both already true in the current code:
-`Brain::open` takes the advisory lock even for read commands
-(`cmd/ask.rs:7` and 25 siblings), so a running daemon still blocks CLI use. A
-follow-up (out of scope here) should route read commands through `open_ro` and
-give write commands the daemon-attach fallback that only `sync` has today.
+**Concurrency is part of this design, not a follow-up.** A daemon that is
+optional in theory but mandatory in practice is not optional. Today every CLI
+command — including pure reads — goes through `Brain::open`, which takes the
+exclusive advisory flock (`store/lock.rs:16-31`, fail-fast `BrainError::Locked`).
+So a running daemon blocks even `oxibrain ask`, and stopping the daemon breaks
+any GUI client. Both halves of that trap must go:
+
+1. **Read commands route through `Brain::open_ro`.** The method already exists
+   and is already documented as "No advisory lock, no writer actor. Can coexist
+   with a running daemon — WAL mode allows concurrent readers"
+   (`oxibrain/src/lib.rs:106-108`) — and no CLI command uses it. Converting
+   `ask`, `page`, `entity show`, `contradictions`, `stats`, `why`, `timeline`,
+   `export`, and `doctor` is a routing change, not new machinery.
+2. **Write commands take the lock for the operation, not the process.** Open
+   exclusive, do the work, drop the handle, with a bounded retry on `Locked`
+   (default 5 attempts over ~2 s) so two concurrent one-shot writers queue
+   instead of failing.
+
+With both in place the topologies compose: any number of concurrent readers,
+one writer at a time, daemon present or absent. The daemon's only remaining
+justification is **model residency** — it keeps the embedding and extraction
+models loaded, which matters for dense search and capture-time extraction and
+not at all for lexical or document retrieval, neither of which touches a model.
+It is therefore an opt-in performance mode, and daemonless is the default.
 
 ## 5. Invariants and tests
 
@@ -403,6 +422,10 @@ New invariants, each with a test that fails on a plausible bug:
    cases, since chunking and trigram FTS are the language-sensitive parts.
 9. **Migration.** v10 → v11 up-test from a fixture; legacy `document_revision`
    episodes still readable and still lexically retrievable afterwards.
+10. **Daemonless concurrency.** With a daemon holding the store, every read
+    command still succeeds (`open_ro`, no lock). With no daemon, two concurrent
+    one-shot writers both complete — one retries, neither fails. This is the
+    test that keeps "the daemon is optional" true.
 
 ## 6. Migration (schema v11)
 
