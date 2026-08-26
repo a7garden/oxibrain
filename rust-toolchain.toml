@@ -1,3 +1,6 @@
 [toolchain]
-channel = "1.85"
+# Exact patch version: the cargo-deny action's Docker image preinstalls
+# "1.85.0-x86_64-unknown-linux-musl"; a bare "1.85" makes rustup look for
+# a toolchain under that literal name and fail the override check.
+channel = "1.85.0"
 components = ["rustfmt", "clippy"]
