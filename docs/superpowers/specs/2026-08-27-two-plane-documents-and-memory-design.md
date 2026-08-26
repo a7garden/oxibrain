@@ -7,9 +7,9 @@
 > remains in the immutable episode ledger.
 > **Supersedes on acceptance:** ADR-010 (daemon-hosted vault watch) and the
 > daemon/discovery portions of ADR-007. Amends ADR-011 and the Consumption
-> Contract. Requires `ARCHITECTURE.md` §1.3, §3 P8, §4.2–4.3, §5.1, §9.1,
-> §15.7, §16, §23; `ECOSYSTEM.md`; and `CONSUMPTION_CONTRACT.md` to change in
-> the same implementation cutover.
+> Contract. Requires `ARCHITECTURE.md` §1.3, §3 P1/P8, §4.2–4.3, §5.1,
+> §9.1, §15.7, §16, §23; `ECOSYSTEM.md`; and `CONSUMPTION_CONTRACT.md`
+> to change in the same implementation cutover.
 
 ## 1. Problem
 
@@ -144,14 +144,21 @@ ADR-011 remains authoritative about writes:
 `brain.db` retains P8: exactly one writer at a time. What changes is the lifetime
 of ownership.
 
-- A read operation calls `Brain::open_ro`, performs the read, and drops it.
-- A write operation acquires the advisory lock, opens a fresh writer, performs
-  all short database writes, and drops the handle.
+- Public `Brain` becomes a cheap-clone runtime facade containing immutable
+  `BrainConfig`, ports, and optional process-level `ModelRuntime`; it contains no
+  `StoreHandle`, writer actor, reader pool, or advisory lock.
+- `Brain::open(config)` validates/configures the runtime and, when migration is
+  needed, acquires and releases a short migration lock before returning.
+- A read method opens `StoreHandle::open_ro`, performs the read, and drops it.
+- A write method acquires the advisory lock, opens a fresh writer, performs all
+  short database writes, and drops the handle.
+- `Brain::open_ro` is removed from the public facade because read/write mode now
+  belongs to each method, not the lifetime of `Brain`.
 - A lock collision retries with bounded exponential backoff: 25 ms, 50 ms,
   100 ms, 200 ms, 400 ms, 800 ms, then returns `BrainError::Locked` with the
   holder path. The total wait is under two seconds.
-- A model, tokenizer, or embedder may live in a process-level `ModelRuntime`.
-  It is independent of `Brain` and owns no store handle.
+- A model, tokenizer, or embedder may live in `ModelRuntime` without owning a
+  database handle.
 - Resolution state must be rebuilt or generation-validated on each write
   operation. No process may retain a mutable store-derived index after releasing
   the writer lock.
@@ -197,8 +204,9 @@ can accidentally reach.
 External MCP hosts use the same stdio command. The MCP tool cap remains fifteen.
 The embedded HTTP console uses the same request executor and is foreground-only.
 
-The Rust `Brain` facade remains available for direct in-process callers. The CLI,
-MCP, HTTP, and client transports all sequence the same facade operations.
+The Rust `Brain` facade remains the canonical direct in-process surface, with
+the new handle-free semantics above. CLI, MCP, HTTP, and client transports all
+invoke the same methods.
 
 ## 4. Document root configuration
 
@@ -240,10 +248,13 @@ Rules:
 - a missing root is skipped and surfaced in freshness/doctor output; it does not
   make memory retrieval fail.
 
-On a fresh or upgraded installation, oxibrain may seed exactly one known default:
-`alias = "vault"`, `path = "~/.oxi/vault"`, `space = "personal"`, and only when
-that directory exists. It never imports paths from the legacy `sources` table.
-Custom roots require an explicit config edit.
+Default vault seeding happens only during an explicit `oxibrain init` whose
+resolved data directory is the canonical default `~/.oxi/brain` and for which
+the user did not pass `--dir`. In that one case, if `~/.oxi/vault` exists, init
+may create `alias = "vault"`, `path = "~/.oxi/vault"`, `space = "personal"`.
+An explicit or temporary `--dir` never reads, writes, or references the default
+vault. Upgrade-time open never seeds roots. Legacy `sources` rows are never
+imported. Custom roots require an explicit config edit.
 
 ## 5. gix integration
 
@@ -305,12 +316,14 @@ between a file save and the authoring application's commit consumer.
 Document references are path references:
 
 ```text
-doc://<root-alias>/<locator>[@<revision>]
+doc://<root-alias>/<percent-encoded-locator>[?rev=<revision>]
 ```
 
+- every locator path segment is UTF-8 percent-encoded, so `@`, `?`, `#`, spaces,
+  and non-ASCII filenames are unambiguous;
 - unpinned references resolve the current locator;
-- pinned references are allowed only when the revision is a git blob reachable
-  from the repository;
+- pinned references use the `rev` query parameter and are allowed only when the
+  revision is a git blob reachable from the repository;
 - plain-root pinning is rejected because oxibrain stores no historical bytes;
 - rename changes the locator and document ID, so an old reference dangles;
 - gix history may offer a best-effort rename suggestion, but it never silently
@@ -326,7 +339,23 @@ chains remain in the ledger and are exposed only through an explicit
 `legacy_document_history` operator path during migration review. Git commits are
 never disguised as episodes.
 
+### 5.4 Memory-to-document references
+
+An explicit declaration may use a `doc://` URI as a `DocumentRef` typed literal.
+`DocumentRef` is registered in the predicate registry rather than special-cased
+in the fold; its validator parses the URI, resolves the alias inside the
+declaration's space, and records the canonical URI bytes. For example, "this
+handbook is our team standard" creates a declaration episode whose object is the
+document reference. It does not copy or extract the referenced content. The fold
+records what the user declared about the document, while retrieval resolves the
+document separately under the caller's space. A missing or changed reference
+affects rendering and `doctor`, never the truth row that records the declaration.
+
 ## 6. Document cache database
+
+`oxibrain-store` remains the only crate that names rusqlite and owns both cache
+connections and migrations. `oxibrain-connectors` only observes files and git;
+`oxibrain-core` only computes plans; the `oxibrain` facade sequences them.
 
 `documents.db` starts at its own schema version 1. It is not `brain.db` schema
 v11 and has no foreign keys into `brain.db`.
@@ -352,6 +381,7 @@ CREATE TABLE documents (
   space        TEXT NOT NULL,
   locator      TEXT NOT NULL,
   revision     TEXT NOT NULL,
+  media_type   TEXT NOT NULL,
   bytes        INTEGER NOT NULL,
   modified_at  INTEGER NOT NULL,
   indexed_at   INTEGER NOT NULL,
@@ -398,8 +428,12 @@ CREATE VIRTUAL TABLE doc_vectors USING vec0(
 );
 ```
 
-The FTS tables contain the lexical index of chunk text; `doc_chunks` does not
-store a second plaintext copy. The source file remains authoritative.
+FTS indexes the deterministic decoded text produced by the document connector;
+`doc_chunks` does not store a second plaintext copy. `revision` still identifies
+the raw source bytes. Each supported format has a versioned decoder that returns
+`DecodedDocument { media_type, text }`: Markdown/frontmatter handling and
+HTML-to-text conversion happen before chunking, and chunk spans address UTF-8
+bytes in `DecodedDocument.text`, not necessarily the raw file.
 
 `doc_vectors` cannot enforce a normal foreign key. Reconciliation must explicitly
 delete vectors for every removed or changed document before deleting chunks.
@@ -410,11 +444,15 @@ Chunk IDs include revision, so a new revision can never inherit an old vector.
 - document schema version;
 - chunker version;
 - lexical tokenizer version;
+- document decoder version;
 - embedding model ID and digest;
 - embedding dimension.
 
-A chunker or tokenizer change rebuilds chunks and FTS. An embedding model or
-digest change deletes all document vectors without touching lexical state.
+A decoder, chunker, or tokenizer change rebuilds decoded chunks and FTS. An
+embedding model or digest change deletes all document vectors without touching
+lexical state. A root `config_hash` change clears and rebuilds that root inside
+the cache; changing an alias creates a new identity and leaves any old
+`doc://` reference dangling.
 
 `documents.db`, its WAL files, and all document rows are excluded from backup,
 export, and truth reprojection. Deleting the database and rebuilding changes only
@@ -435,7 +473,7 @@ The scan produces a sorted manifest:
 pub struct FileObservation {
     pub locator: String,
     pub bytes: u64,
-    pub modified_ns: i128,
+    pub modified_ns: i64,
     pub revision_hint: Option<String>,
 }
 ```
@@ -456,16 +494,25 @@ current worktree.
 P9 applies explicitly:
 
 ```text
-connector: scan filesystem + gix → RootObservation
-store:     fetch cached manifest  → CachedRoot
-core:      plan_reconcile(CachedRoot, RootObservation) → ReconcilePlan
-facade:    read changed bytes, chunk, apply plan, sequence retries
-store:     apply plan atomically
+config:    parse aliases             → ConfiguredRoots
+store:     fetch cached aliases      → CachedRoots
+core:      diff_roots(...)           → KeepRoot | ResetRoot | RemoveRoot
+connector: scan kept/reset roots     → RootObservation
+store:     fetch cached manifest     → CachedRoot
+core:      plan_reconcile(...)       → ReconcilePlan
+facade:    read changed bytes, decode, chunk, sequence retries
+store:     apply root + file plans atomically
 ```
 
-`plan_reconcile` is pure and returns every observed path in exactly one class:
-`Unchanged`, `Add`, `Replace`, `Delete`, or `Skip(reason)`. It is property-tested
-for conservation and deterministic ordering.
+`diff_roots` removes every cached alias absent from config and resets an alias
+whose path, space, filter, size limit, or decoder configuration changed. Removal
+explicitly deletes that root's vectors and FTS rows before cascading through
+documents and chunks. Thus a deconfigured root cannot consume candidate slots or
+survive longer than the next document query.
+
+`plan_reconcile` is pure and returns every observed or cached path in exactly one
+class: `Unchanged`, `Add`, `Replace`, `Delete`, or `Skip(reason)`. Both planners
+are property-tested for conservation and deterministic ordering.
 
 ### 7.3 Exact lexical freshness
 
@@ -506,15 +553,16 @@ FTS/vector retrieval first returns chunk IDs. Before returning text, the facade:
 
 1. resolves root alias and locator through config;
 2. rejects traversal and symlink changes;
-3. reads the current file;
-4. verifies its revision equals `documents.revision`;
-5. verifies span boundaries against the bytes;
-6. returns the verbatim slice.
+3. reads the current raw file and verifies its revision equals
+   `documents.revision`;
+4. runs the versioned decoder for `documents.media_type`;
+5. verifies span boundaries against the decoded UTF-8 bytes;
+6. returns the verbatim decoded-text slice.
 
 If revision verification fails, the hit is discarded, that root is reconciled
 once, and retrieval is retried once. A second change returns a freshness warning
-rather than mismatched text. A hit is never labeled with a revision whose bytes
-were not read.
+rather than mismatched text. A hit is never labeled with a revision whose raw
+bytes were not read, and no raw-file span is applied to transformed text.
 
 ## 8. Retrieval and context
 
@@ -565,8 +613,9 @@ same authorized space; it never means all spaces.
 `ContextInput` in core gains `documents: Vec<DocumentExcerpt>`. The facade fetches
 memory from `brain.db`, documents from `documents.db` and the filesystem, then
 calls pure `pack`. `Documents` is inserted between `QueryNeighborhood` and
-`RecentEpisodes`. Each excerpt carries `[doc://alias/locator@revision]` and is
-counted with `TokenizerPort` like every other layer.
+`RecentEpisodes`. Each excerpt carries
+`[doc://alias/percent-encoded-locator?rev=revision]` and is counted with
+`TokenizerPort` like every other layer.
 
 Legacy `document` and `document_revision` episodes remain in the ledger but are
 excluded from default memory search, recent-episode context, and extraction.
@@ -650,8 +699,6 @@ They are replaced by:
 - operation-scoped database handles;
 - explicit stdio/HTTP session processes.
 
-`serve` remains a foreground/session transport command, never a daemon.
-
 ## 11. Migration
 
 ### 11.1 `brain.db` schema v11
@@ -661,14 +708,17 @@ The v11 migration:
 1. drops `ingest_jobs`;
 2. leaves every episode and source row untouched;
 3. removes `ingest_jobs` from `EXPORT_TABLES`;
-4. makes import skip removed operational tables with a logged compatibility
-   notice rather than failing a pre-v11 export;
+4. makes import skip the specifically retired `ingest_jobs` table with a logged
+   compatibility notice while still rejecting every other unknown table;
 5. bumps the projection version so default memory indexes rebuild without legacy
    document episodes.
 
 Pull source rows cannot be deleted because legacy episodes and source policies
 reference them. They remain provenance-only legacy rows. No runtime code lists,
 watches, or writes them after migration.
+
+Default source listing and source-policy UI exclude `mode = 'pull'`; `doctor`
+shows those rows only in a labeled legacy-provenance section.
 
 Before dropping the queue, migration records the eligible pending count for the
 post-migration report. The query-derived backlog recovers every eligible episode;
@@ -746,39 +796,45 @@ bug.
    an empty Git index; gix discovery returns the HEAD files and history.
 6. **Dirty worktree freshness.** Change and add files without committing; the
    next query uses BLAKE3 revisions and returns current bytes.
-7. **Deletion completeness.** Delete a file; document, chunks, both FTS tables,
+7. **Decoder/span consistency.** Index Markdown with frontmatter and transformed
+   HTML; returned spans slice the decoded text and carry the raw-byte revision.
+8. **Deletion completeness.** Delete a file; document, chunks, both FTS tables,
    and vectors contain no reachable row.
-8. **Vector revision safety.** Replace a document at the same locator and
-   ordinals; no old vector survives, and new chunk IDs differ.
-9. **Model invalidation.** Change embedding model digest at the same dimension;
-   vectors are cleared and dense coverage reports zero until rebuilt.
-10. **Materialization race.** Modify a file between FTS hit and slice; no
+9. **Root removal completeness.** Remove or repoint an alias in config; its old
+   documents, chunks, FTS rows, and vectors disappear on the next query.
+10. **Vector revision safety.** Replace a document at the same locator and
+    ordinals; no old vector survives, and new chunk IDs differ.
+11. **Model invalidation.** Change embedding model digest at the same dimension;
+    vectors are cleared and dense coverage reports zero until rebuilt.
+12. **Materialization race.** Modify a file between FTS hit and decode; no
     mismatched text/revision pair is returned.
-11. **Reconcile conservation.** Every observed/cached locator lands in exactly
-    one reconciliation class; order is deterministic.
-12. **Concurrent cache writers.** Two processes reconcile the same changed root;
+13. **Reconcile conservation.** Every configured/cached root and every
+    observed/cached locator lands in exactly one reconciliation class; order is
+    deterministic.
+14. **Concurrent cache writers.** Two processes reconcile the same changed root;
     final rows match one serial reconciliation with no duplicate or orphan.
-13. **Daemonless readers.** Multiple processes read memory concurrently while a
+15. **Daemonless readers.** Multiple processes read memory concurrently while a
     short memory writer completes.
-14. **Daemonless writers.** Two one-shot memory writers contend; both complete in
+16. **Daemonless writers.** Two one-shot memory writers contend; both complete in
     serial order or one receives the bounded, explicit lock error—never partial
     state.
-15. **No production ambient authority.** A process with a temp `--dir` has no API
-    or discovery path that can open `~/.oxi/brain`.
-16. **Pending recovery.** Crash after episode commit but before extraction write;
+17. **No production ambient authority.** A process with a temporary explicit
+    `--dir` has no API, discovery, seed, or fallback path that opens
+    `~/.oxi/brain` or reads `~/.oxi/vault`.
+18. **Pending recovery.** Crash after episode commit but before extraction write;
     `extract --pending` finds exactly that eligible episode.
-17. **Legacy exclusion.** Legacy document primary episodes never enter extraction,
+19. **Legacy exclusion.** Legacy document primary episodes never enter extraction,
     memory search, or recent context.
-18. **Migration FK safety.** Upgrade the production-shaped v10 fixture with
+20. **Migration FK safety.** Upgrade the production-shaped v10 fixture with
     episodes referencing pull sources; migration succeeds and references remain.
-19. **Cross-version import.** Import a pre-v11 export containing `ingest_jobs`;
-    durable tables import and the removed operational rows are logged/skipped.
-20. **Space isolation.** A both-target query returns memory and documents from the
+21. **Cross-version import.** Import a pre-v11 export containing `ingest_jobs`;
+    durable tables import and only the retired operational rows are logged/skipped.
+22. **Space isolation.** A both-target query returns memory and documents from the
     authorized space only.
-21. **P11 parity.** Document lexical recall gap across writing-system property
+23. **P11 parity.** Document lexical recall gap across writing-system property
     classes stays within ten percentage points.
-22. **MCP cap.** The stdio server still exposes at most fifteen MCP tools.
-23. **Session lifetime.** Closing stdio terminates the child and leaves no socket,
+24. **MCP cap.** The stdio server still exposes at most fifteen MCP tools.
+25. **Session lifetime.** Closing stdio terminates the child and leaves no socket,
     launchd job, database lock, or background worker.
 
 ## 14. Documentation and contract changes
@@ -787,22 +843,47 @@ Acceptance of this spec requires one coordinated documentation revision, not
 stale follow-up notes:
 
 - `ARCHITECTURE.md`
+  - P1 is scoped explicitly to the memory plane: ledger-derived memory
+    projections remain replayable, while document ranking is reconstructed from
+    configured files and git;
   - P8 becomes operation-scoped one-writer-per-store;
-  - deployment modes remove daemon ownership;
-  - data flow separates document cache from episodes;
-  - zones list `documents.db` as disposable ranking cache;
-  - extraction stages remove the durable job state machine;
-  - product shape replaces daemon subcommand with session transports;
-  - Foundation socket discovery is removed.
+  - §1.3 product shape removes the daemon and names CLI, caller-owned stdio/HTTP
+    sessions, and the library;
+  - §4.2 data flow separates the document cache from episodes;
+  - §4.3 deployment modes remove daemon ownership and ambient discovery;
+  - §5.1 lists `documents.db` as a disposable filesystem-derived cache;
+  - §9.1 removes the durable job state machine;
+  - §15.7 removes Foundation socket discovery;
+  - §16 replaces daemon commands with explicit session transports.
 - ADR-010 becomes Superseded.
 - ADR-011 keeps consumer-owned git writes and replaces semantic occurrence
   history with read-only gix document history.
 - ADR-007 socket/discovery clauses are superseded by explicit stdio process
   launch; auth/scope semantics remain for protocol sessions.
-- `CONSUMPTION_CONTRACT.md` removes `sync/run`, socket discovery, and
-  `episodes_for_locator`; adds explicit stdio launch and `document_history`.
-- `ECOSYSTEM.md` replaces watcher/daemon integration with explicit documents
-  config and session child processes.
+- `CONSUMPTION_CONTRACT.md`
+  - removes `sync/run`, `episodes_for_locator`, `default_socket_path`,
+    `connect_default`, `connect_endpoint`, and the default-socket handshake;
+  - replaces remote discovery with
+    `LocalProcessEndpoint { executable, dir }`, both fields explicit;
+  - changes `Brain::query`/client search from `RankingResult` to
+    `SearchResponse`;
+  - removes public `Brain::open_ro`; `Brain: Clone` now means a handle-free
+    runtime facade rather than a shared writer actor;
+  - replaces lease-based `extract_pending` and `job_status` with
+    `extract_uncached(limit)` and `pending_extraction_stats`;
+  - adds `document_history -> Vec<DocumentRevision>`;
+  - records the coordinated breaking-version bumps:
+    oxibrain workspace crates `0.6 → 0.7` and `oxibrain-client 0.7 → 0.8`.
+- `ECOSYSTEM.md`
+  - rewrites the §0/§1.2 plane and topology tables to remove the daemon as sole
+    writer;
+  - rewrites C4: document revisions live in consumer-owned git and the disposable
+    cache, never as new episodes;
+  - rewrites C8: an explicit caller-owned stdio child replaces socket discovery
+    and handshake;
+  - replaces watcher/source registration with `documents.toml`;
+  - keeps C1 and C3: primary apps work without oxibrain, and oxibrain never writes
+    a vault.
 - CLI help and operator docs state that no service installation is required.
 
 ## 15. Operator decision for this machine
