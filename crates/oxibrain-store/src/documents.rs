@@ -162,9 +162,10 @@ impl DocumentsLock {
                 _file: file,
                 _path: lock_path,
             }),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(BrainError::Busy(
-                format!("another oxibrain process holds {}", lock_path.display()),
-            )),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(BrainError::Busy(format!(
+                "another oxibrain process holds {}",
+                lock_path.display()
+            ))),
             Err(e) => Err(io_err(e)),
         }
     }
@@ -300,7 +301,7 @@ impl DocumentCache {
             let (alias, space, generation) = row.map_err(sql_err)?;
             let fingerprint: RootFingerprint = self
                 .meta_get(&root_fp_key(&alias))?
- .and_then(|json| serde_json::from_str(&json).ok())
+                .and_then(|json| serde_json::from_str(&json).ok())
                 .ok_or_else(|| {
                     BrainError::Corruption(format!(
                         "doc_roots row {alias} has no serialized fingerprint"
@@ -347,13 +348,11 @@ impl DocumentCache {
 
     /// Current generation for one root. Returns 0 if the alias has no row.
     pub fn generation(&self, alias: &str) -> Result<i64, BrainError> {
-        let row: Result<i64, rusqlite::Error> = self
-            .conn
-            .query_row(
-                "SELECT generation FROM doc_roots WHERE alias = ?1",
-                params![alias],
-                |r| r.get(0),
-            );
+        let row: Result<i64, rusqlite::Error> = self.conn.query_row(
+            "SELECT generation FROM doc_roots WHERE alias = ?1",
+            params![alias],
+            |r| r.get(0),
+        );
         match row {
             Ok(g) => Ok(g),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
@@ -715,13 +714,11 @@ impl DocumentCache {
     /// Read a key from `cache_meta`. Mirrors `crate::meta::get` but on the
     /// `documents.db` `cache_meta` table.
     pub fn meta_get(&self, key: &str) -> Result<Option<String>, BrainError> {
-        let row: Result<String, rusqlite::Error> = self
-            .conn
-            .query_row(
-                "SELECT value FROM cache_meta WHERE key = ?1",
-                params![key],
-                |r| r.get(0),
-            );
+        let row: Result<String, rusqlite::Error> = self.conn.query_row(
+            "SELECT value FROM cache_meta WHERE key = ?1",
+            params![key],
+            |r| r.get(0),
+        );
         match row {
             Ok(v) => Ok(Some(v)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -875,10 +872,8 @@ fn apply_file_actions(
     upserts: &[DocumentUpsert],
 ) -> Result<(), BrainError> {
     // Build a map: locator -> DocumentUpsert for O(1) lookup.
-    let upsert_by_loc: std::collections::HashMap<&str, &DocumentUpsert> = upserts
-        .iter()
-        .map(|u| (u.locator.as_str(), u))
-        .collect();
+    let upsert_by_loc: std::collections::HashMap<&str, &DocumentUpsert> =
+        upserts.iter().map(|u| (u.locator.as_str(), u)).collect();
 
     for action in actions {
         match action {
@@ -900,7 +895,10 @@ fn apply_file_actions(
                 })?;
                 upsert_document(tx, alias, space, upsert)?;
             }
-            FileAction::Skip { locator: _, reason: _ } => {
+            FileAction::Skip {
+                locator: _,
+                reason: _,
+            } => {
                 // Skipped files are surfaced by the connector separately; the
                 // pure planner never emits Skip, so this is recorded only at
                 // the apply-stage report boundary (out of scope for this
@@ -1009,11 +1007,8 @@ fn upsert_document(
         params![&document_id],
     )
     .map_err(sql_err)?;
-    tx.execute(
-        "DELETE FROM documents WHERE id = ?1",
-        params![&document_id],
-    )
-    .map_err(sql_err)?;
+    tx.execute("DELETE FROM documents WHERE id = ?1", params![&document_id])
+        .map_err(sql_err)?;
     tx.execute(
         "DELETE FROM doc_manifest WHERE root_alias = ?1 AND locator = ?2",
         params![alias, &upsert.locator],
@@ -1121,17 +1116,16 @@ mod tests {
         }
     }
 
-    fn upsert(
-        locator: &str,
-        revision: &str,
-        text: &str,
-        chunks: usize,
-    ) -> DocumentUpsert {
+    fn upsert(locator: &str, revision: &str, text: &str, chunks: usize) -> DocumentUpsert {
         let mut cu = Vec::with_capacity(chunks);
         let per = text.len() / chunks.max(1);
         for i in 0..chunks {
             let s = i * per;
-            let e = if i + 1 == chunks { text.len() } else { (i + 1) * per };
+            let e = if i + 1 == chunks {
+                text.len()
+            } else {
+                (i + 1) * per
+            };
             cu.push(ChunkUpsert {
                 ordinal: i as u32,
                 span_start: s,
@@ -1223,7 +1217,9 @@ mod tests {
     #[test]
     fn apply_replace_removes_old_chunks_and_inserts_new() {
         let (_dir, cache) = temp_cache();
-        cache.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
         let old_chunk_id = {
             let conn = &cache.conn;
             conn.query_row(
@@ -1270,7 +1266,9 @@ mod tests {
     #[test]
     fn apply_delete_removes_everything() {
         let (_dir, cache) = temp_cache();
-        cache.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
         let fingerprint = fp("vault", "personal");
         let plan = ApplyPlan {
             root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
@@ -1295,7 +1293,9 @@ mod tests {
     #[test]
     fn remove_root_cascades_through_vectors_and_fts() {
         let (_dir, cache) = temp_cache();
-        cache.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
 
         // Insert a fake vector to verify cascade.
         let chunk_id: String = cache
@@ -1307,7 +1307,9 @@ mod tests {
             )
             .unwrap();
         let emb = vec![0.0f32; EMBEDDING_DIM];
-        cache.upsert_vectors(&[(chunk_id.clone(), emb.clone())]).unwrap();
+        cache
+            .upsert_vectors(&[(chunk_id.clone(), emb.clone())])
+            .unwrap();
         assert_eq!(count(&cache.conn, "doc_vectors"), 1);
 
         // Now Remove the root.
@@ -1331,7 +1333,9 @@ mod tests {
     #[test]
     fn reset_root_rebuilds_at_generation_one() {
         let (_dir, cache) = temp_cache();
-        cache.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
         assert_eq!(cache.generation("vault").unwrap(), 1);
 
         // Reset clears everything, then we re-add at generation 1.
@@ -1358,7 +1362,9 @@ mod tests {
     #[test]
     fn cas_mismatch_returns_busy_and_no_partial_state() {
         let (_dir, cache) = temp_cache();
-        cache.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
 
         // Caller's snapshot expected gen 0 (a stale view).
         let fingerprint = fp("vault", "personal");
@@ -1390,7 +1396,9 @@ mod tests {
     fn rebuild_equivalence_after_drop_and_rebuild() {
         // Build one cache, snapshot row counts.
         let (dir1, cache1) = temp_cache();
-        cache1.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache1
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
         let snap1 = snapshot_counts(&cache1);
         drop(cache1);
         // Drop the file from disk.
@@ -1399,7 +1407,9 @@ mod tests {
         let _ = std::fs::remove_file(dir1.path().join("documents.db-shm"));
         // Reopen + reapply identical plan.
         let cache2 = DocumentCache::open_rw(dir1.path()).unwrap();
-        cache2.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache2
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
         let snap2 = snapshot_counts(&cache2);
         assert_eq!(snap1, snap2);
     }
@@ -1427,9 +1437,7 @@ mod tests {
             ];
             let actions = upserts
                 .iter()
-                .map(|u| {
-                    FileAction::Add(obs(&u.locator, u.bytes, &u.revision))
-                })
+                .map(|u| FileAction::Add(obs(&u.locator, u.bytes, &u.revision)))
                 .collect();
             ApplyPlan {
                 root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
@@ -1468,11 +1476,7 @@ mod tests {
         let pending = cache.pending_vector_chunks("personal", 100).unwrap();
         assert_eq!(pending.len(), 3);
         assert!(pending.iter().all(|(id, _)| id != &chunk_id));
-        assert!(
-            pending
-                .iter()
-                .all(|(_, t)| expected_texts.contains(t))
-        );
+        assert!(pending.iter().all(|(_, t)| expected_texts.contains(t)));
 
         // clear_vectors wipes the channel but leaves chunks.
         cache.clear_vectors().unwrap();
@@ -1484,7 +1488,9 @@ mod tests {
     #[test]
     fn search_fts_finds_indexed_text() {
         let (_dir, cache) = temp_cache();
-        cache.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
 
         // Build an upsert with known text.
         let plan = {
@@ -1534,7 +1540,9 @@ mod tests {
     #[test]
     fn chunks_returns_known_ids() {
         let (_dir, cache) = temp_cache();
-        cache.apply(&add_plan("vault", "personal", "notes/a.md", "rev1")).unwrap();
+        cache
+            .apply(&add_plan("vault", "personal", "notes/a.md", "rev1"))
+            .unwrap();
         let id: String = cache
             .conn
             .query_row(

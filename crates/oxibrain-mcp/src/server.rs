@@ -97,10 +97,7 @@ impl BrainServer {
     /// Used by authenticated transports that share one brain across many
     /// connections, each resolved to its own scope.
     pub fn from_arc(brain: Arc<Brain>) -> Self {
-        Self {
-            brain,
-            scope: None,
-        }
+        Self { brain, scope: None }
     }
 
     /// Wrap a shared `Arc<Brain>` with an authorization scope.
@@ -110,7 +107,6 @@ impl BrainServer {
             scope: Some(scope),
         }
     }
-
 
     /// Resolve a space name to its content-derived ID, creating it if absent.
     async fn ensure_space(&self, name: &str) -> Result<String, ToolErr> {
@@ -205,7 +201,6 @@ impl BrainServer {
         Ok(all)
     }
 
-
     /// Scope gate for resource reads: spaces are hard boundaries (§15.1) and
     /// resources are queries. Requires Read capability + unexpired when a
     /// scope is present. Resolves the space id with a read-only lookup so
@@ -250,10 +245,7 @@ impl BrainServer {
     /// `extract_uncached`): capability + expiry check only. These methods do
     /// not take a space, so there is no membership to enforce; a trusted
     /// local channel (`scope == None`) skips the check.
-    async fn enforce_scope_capability(
-        &self,
-        cap: Capability,
-    ) -> Result<(), (i64, String)> {
+    async fn enforce_scope_capability(&self, cap: Capability) -> Result<(), (i64, String)> {
         let Some(scope) = &self.scope else {
             return Ok(());
         };
@@ -938,10 +930,7 @@ impl BrainServer {
     /// `resources/read`: spaces are hard boundaries and history is a read.
     /// Returns an array of `{revision, committed_at_ms, content}` oldest
     /// first; `content` is the committed text (lossy UTF-8 on the wire).
-    async fn rpc_document_history(
-        &self,
-        args: Option<&Value>,
-    ) -> Result<Value, (i64, String)> {
+    async fn rpc_document_history(&self, args: Option<&Value>) -> Result<Value, (i64, String)> {
         let params = args.ok_or((INVALID_PARAMS, "missing 'params'".into()))?;
         let space = params
             .get("space")
@@ -955,10 +944,7 @@ impl BrainServer {
             .get("locator")
             .and_then(Value::as_str)
             .ok_or((INVALID_PARAMS, "missing required argument 'locator'".into()))?;
-        let limit = params
-            .get("limit")
-            .and_then(Value::as_u64)
-            .unwrap_or(20) as usize;
+        let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
 
         self.enforce_scope_resource(space).await?;
         let revisions = self
@@ -998,10 +984,7 @@ impl BrainServer {
     /// episodes through the server's configured extractor (the operator
     /// repair path behind `oxibrain extract --pending`). Write-gated: the
     /// call projects assertions into the store.
-    async fn rpc_extract_uncached(
-        &self,
-        args: Option<&Value>,
-    ) -> Result<Value, (i64, String)> {
+    async fn rpc_extract_uncached(&self, args: Option<&Value>) -> Result<Value, (i64, String)> {
         let limit = args
             .and_then(|a| a.get("limit"))
             .and_then(Value::as_u64)
@@ -1641,13 +1624,7 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    session_loop(
-        server,
-        BufReader::new(reader),
-        None,
-        BufWriter::new(writer),
-    )
-    .await
+    session_loop(server, BufReader::new(reader), None, BufWriter::new(writer)).await
 }
 
 /// The bidirectional framing loop. Shared by `run_session` and `auth_session`.
@@ -1789,11 +1766,7 @@ pub async fn serve_stdio_at(dir: &std::path::Path) -> anyhow::Result<()> {
 ///   written and the session ends.
 /// - Anything else runs as a trusted local session (the parent process owns
 ///   the pipes, so the channel itself is the trust boundary).
-pub async fn run_session_gated<R, W>(
-    brain: Arc<Brain>,
-    reader: R,
-    writer: W,
-) -> anyhow::Result<()>
+pub async fn run_session_gated<R, W>(brain: Arc<Brain>, reader: R, writer: W) -> anyhow::Result<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -1826,9 +1799,9 @@ where
         .ok()
         .and_then(|m| m.id)
         .unwrap_or(Value::Null);
-    let token = serde_json::from_str::<Value>(&first).ok().and_then(|v| {
-        v.get("params")?.get("token")?.as_str().map(String::from)
-    });
+    let token = serde_json::from_str::<Value>(&first)
+        .ok()
+        .and_then(|v| v.get("params")?.get("token")?.as_str().map(String::from));
 
     let server = match token {
         Some(token) => match brain.verify_token(&token).await {
@@ -4480,7 +4453,6 @@ mod tests {
         assert!(resp["error"].is_object(), "expected denial, got: {resp}");
         drop(dir);
     }
-
 
     #[tokio::test]
     async fn spaces_resource_lists_scoped_spaces() {

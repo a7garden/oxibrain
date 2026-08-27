@@ -41,7 +41,7 @@ impl LlmPort for AlwaysFail {
     async fn generate_constrained(
         &self,
         _: LlmRequest,
-    _grammar: &str,
+        _grammar: &str,
     ) -> Result<LlmResponse, BrainError> {
         Err(BrainError::Model("synthetic failure".into()))
     }
@@ -167,7 +167,10 @@ async fn search_documents_detects_in_place_edit() {
     };
     let response = brain.search(q).await.unwrap();
     assert!(
-        response.documents.iter().any(|d| d.text.contains("second version")),
+        response
+            .documents
+            .iter()
+            .any(|d| d.text.contains("second version")),
         "expected fresh edit to be visible: {:?}",
         response.documents
     );
@@ -301,11 +304,17 @@ async fn remember_with_failing_llm_yields_captured_pending_and_recovers() {
         .await
         .expect("remember should not error even with failing LLM");
     match outcome {
-        CaptureOutcome::CapturedPending { episode_id, pending } => {
+        CaptureOutcome::CapturedPending {
+            episode_id,
+            pending,
+        } => {
             assert!(!episode_id.is_empty());
             assert!(pending >= 1);
         }
-        CaptureOutcome::Captured { episode_id, extracted } => {
+        CaptureOutcome::Captured {
+            episode_id,
+            extracted,
+        } => {
             panic!("unexpectedly got Captured with {extracted} extracted for {episode_id}");
         }
     }
@@ -315,7 +324,10 @@ async fn remember_with_failing_llm_yields_captured_pending_and_recovers() {
 
     // The backlog remains until extract_uncached runs.
     let recovered = brain.extract_uncached(10).await.unwrap();
-    assert!(recovered >= 1, "extract_uncached should report >= 1 processed episode");
+    assert!(
+        recovered >= 1,
+        "extract_uncached should report >= 1 processed episode"
+    );
 }
 
 #[tokio::test]
@@ -451,7 +463,9 @@ async fn search_response_keeps_planes_separate_when_both_requested() {
         .into_iter()
         .collect(),
     };
-    let SearchResponse { memory, documents, .. } = brain.search(q).await.unwrap();
+    let SearchResponse {
+        memory, documents, ..
+    } = brain.search(q).await.unwrap();
     // Memory plane is empty (no episodes ingested) but must be present.
     assert!(memory.is_empty(), "memory should be empty");
     assert!(

@@ -407,7 +407,6 @@ pub fn locator_states(
     Ok(out)
 }
 
-
 fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainError> {
     match kind {
         "note" => Ok(SourceRef::Note {

@@ -138,7 +138,10 @@ async fn client_auth_read_only_denies_extract_uncached() {
     // drain the backlog through it.
     let (_dir, mut client, _secret) = spawn_auth_server(&[Capability::Read]).await;
     let result = client.extract_uncached(5).await;
-    assert!(result.is_err(), "extract_uncached should be denied by scope");
+    assert!(
+        result.is_err(),
+        "extract_uncached should be denied by scope"
+    );
 }
 
 #[tokio::test]
@@ -170,7 +173,9 @@ async fn client_auth_invalid_token_fails_connection() {
 async fn handshake_then_tool_call_over_session() {
     let (_dir, mut client) = spawn_server().await;
     let caps = client
-        .handshake(oxibrain_client::protocol::default_client_hello("round-trip/0.1"))
+        .handshake(oxibrain_client::protocol::default_client_hello(
+            "round-trip/0.1",
+        ))
         .await
         .expect("handshake");
     assert_eq!(caps.server_name, "oxibrain");

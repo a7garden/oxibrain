@@ -39,7 +39,10 @@ pub async fn run(dir: &Path) -> anyhow::Result<()> {
     // Memory-plane extraction backlog.
     let pending = brain.pending_extraction_stats().await?;
     match pending.oldest_seq {
-        Some(seq) => println!("pending extraction: {} episode(s), oldest seq {seq}", pending.count),
+        Some(seq) => println!(
+            "pending extraction: {} episode(s), oldest seq {seq}",
+            pending.count
+        ),
         None => println!("pending extraction: none"),
     }
 

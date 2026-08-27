@@ -21,11 +21,11 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 use oxibrain::{Brain, BrainConfig, Capability, Scope};
+use oxibrain_client::BrainClient;
 use oxibrain_client::protocol::{
     ClientOperation, HandshakeError, PROTOCOL_VERSION_MAX, PROTOCOL_VERSION_MIN,
     default_client_hello, parse_handshake_error,
 };
-use oxibrain_client::BrainClient;
 use oxibrain_mcp::{BrainServer, run_session, run_session_gated};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -74,18 +74,17 @@ async fn spawn_auth_server(caps: &[Capability]) -> (tempfile::TempDir, BrainClie
 }
 
 /// A raw duplex end for hand-crafted requests (incompatible versions etc.).
-async fn raw_session() -> (tempfile::TempDir, BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>, tokio::io::WriteHalf<tokio::io::DuplexStream>) {
+async fn raw_session() -> (
+    tempfile::TempDir,
+    BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    tokio::io::WriteHalf<tokio::io::DuplexStream>,
+) {
     let dir = tempfile::TempDir::new().unwrap();
     let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
     let (client_side, server_side) = tokio::io::duplex(8192);
     let (sr, sw) = tokio::io::split(server_side);
     tokio::spawn(async move {
-        let _ = run_session(
-            Arc::new(BrainServer::from_brain(brain)),
-            sr,
-            sw,
-        )
-        .await;
+        let _ = run_session(Arc::new(BrainServer::from_brain(brain)), sr, sw).await;
     });
     let (cr, cw) = tokio::io::split(client_side);
     (dir, BufReader::new(cr), cw)

@@ -67,7 +67,14 @@ impl Repo {
         let parents: Vec<ObjectId> = self.head.into_iter().collect();
         let commit_id = self
             .repo
-            .commit_as(s, s, self.ref_name.as_str(), message, tree_id.detach(), parents)
+            .commit_as(
+                s,
+                s,
+                self.ref_name.as_str(),
+                message,
+                tree_id.detach(),
+                parents,
+            )
             .unwrap();
         let detached = commit_id.detach();
         self.head = Some(detached);
@@ -107,10 +114,7 @@ fn snapshot_lists_head_files() {
     let dir = TempDir::new().unwrap();
     let mut repo = Repo::init(dir.path());
     repo.commit(
-        &[
-            ("a.md", b"# alpha"),
-            ("nested/deep/b.md", b"# beta beta"),
-        ],
+        &[("a.md", b"# alpha"), ("nested/deep/b.md", b"# beta beta")],
         1_000,
         "initial",
     );
@@ -248,10 +252,7 @@ fn rename_hint_ambiguous_returns_none() {
     let mut repo = Repo::init(dir.path());
     repo.commit(&[("old.md", b"same payload")], 1_000, "add");
     repo.commit(
-        &[
-            ("left.md", b"same payload"),
-            ("right.md", b"same payload"),
-        ],
+        &[("left.md", b"same payload"), ("right.md", b"same payload")],
         2_000,
         "fork",
     );

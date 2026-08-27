@@ -152,7 +152,9 @@ async fn spawn_local_client_round_trip_and_native_methods() {
 
     // Foundation handshake over the child's stdio.
     let caps = client
-        .handshake(oxibrain_client::protocol::default_client_hello("cli-test/0.1"))
+        .handshake(oxibrain_client::protocol::default_client_hello(
+            "cli-test/0.1",
+        ))
         .await
         .expect("handshake");
     assert_eq!(caps.server_name, "oxibrain");
@@ -208,10 +210,9 @@ async fn spawn_local_with_token_round_trip() {
     use std::sync::Arc;
 
     let dir = tempfile::TempDir::new().unwrap();
-    let brain =
-        Brain::with_clock(BrainConfig::at(dir.path()), Arc::new(SystemClock))
-            .await
-            .unwrap();
+    let brain = Brain::with_clock(BrainConfig::at(dir.path()), Arc::new(SystemClock))
+        .await
+        .unwrap();
     let space_id = brain.ensure_space("personal").await.unwrap();
     let scope = Scope {
         spaces: vec![space_id],
@@ -229,9 +230,7 @@ async fn spawn_local_with_token_round_trip() {
     // Read cap works.
     let _ = client.contradictions("personal").await.expect("read");
     // Ingest is denied by the Read-only scope.
-    let denied = client
-        .ingest("should be denied", "personal", "no.md")
-        .await;
+    let denied = client.ingest("should be denied", "personal", "no.md").await;
     assert!(denied.is_err(), "ingest must be denied by scope");
 }
 
@@ -275,7 +274,8 @@ fn stdio_child_never_touches_fake_home() {
 
     let after = snapshot(fake_home.path());
     assert_eq!(
-        before, after,
+        before,
+        after,
         "serve --stdio with explicit --dir must not touch $HOME \
          (created: {:?}, missing: {:?})",
         after.difference(&before).collect::<Vec<_>>(),

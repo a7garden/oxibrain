@@ -52,7 +52,7 @@ use oxibrain_core::documents::{
 use oxibrain_core::retrieval::{Query as CoreQuery, QueryMode as CoreQueryMode, SearchPlane};
 use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
 use oxibrain_store::documents::{
-    ApplyPlan, ChunkUpsert as StoreChunkUpsert, CachedChunk, DocumentCache, DocumentUpsert,
+    ApplyPlan, CachedChunk, ChunkUpsert as StoreChunkUpsert, DocumentCache, DocumentUpsert,
     FtsTable, RootApply as StoreRootApply,
 };
 use oxibrain_store::ledger;
@@ -149,10 +149,7 @@ impl Brain {
             dense_channel_ran = self.embedder.is_some()
                 && matches!(q.mode, CoreQueryMode::Hybrid | CoreQueryMode::Dense);
             if dense_channel_ran {
-                freshness.dense_coverage = self
-                    .dense_coverage(&doc_q.space)
-                    .await
-                    .unwrap_or(None);
+                freshness.dense_coverage = self.dense_coverage(&doc_q.space).await.unwrap_or(None);
             }
         }
 
@@ -372,14 +369,18 @@ impl Brain {
                          AND NOT EXISTS (SELECT 1 FROM extractions x WHERE x.episode_id = e.id)";
         self.read(move |conn| {
             let count: i64 = conn
-                .query_row(&format!("SELECT COUNT(*) FROM episodes e {FILTER}"), [], |r| {
-                    r.get(0)
-                })
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM episodes e {FILTER}"),
+                    [],
+                    |r| r.get(0),
+                )
                 .map_err(|e| BrainError::Storage(format!("pending count: {e}")))?;
             let oldest_seq: Option<i64> = conn
-                .query_row(&format!("SELECT MIN(e.seq) FROM episodes e {FILTER}"), [], |r| {
-                    r.get(0)
-                })
+                .query_row(
+                    &format!("SELECT MIN(e.seq) FROM episodes e {FILTER}"),
+                    [],
+                    |r| r.get(0),
+                )
                 .ok();
             Ok(PendingStats {
                 count: count.max(0) as u64,
@@ -513,8 +514,7 @@ impl Brain {
         // Pure root-set diff (decisions in core).
         let fingerprints: Vec<RootFingerprint> =
             configured.iter().map(|(_, fp)| fp.clone()).collect();
-        let root_actions =
-            oxibrain_core::documents::diff_roots(&fingerprints, &cached_roots);
+        let root_actions = oxibrain_core::documents::diff_roots(&fingerprints, &cached_roots);
 
         // Per kept/reset root: scan → plan → payload.
         let mut roots_apply: Vec<StoreRootApply> = Vec::new();
@@ -801,10 +801,7 @@ impl Brain {
         };
 
         // RRF fusion (k=60) within the documents plane.
-        let fused = rrf_fuse(
-            &[&word, &ngram, knn.as_deref().unwrap_or(&[])],
-            60,
-        );
+        let fused = rrf_fuse(&[&word, &ngram, knn.as_deref().unwrap_or(&[])], 60);
         if fused.is_empty() {
             return Ok(Vec::new());
         }
@@ -820,8 +817,7 @@ impl Brain {
         };
 
         // Materialize per hit; knn is cross-space so enforce the space here.
-        let fused_score: std::collections::HashMap<String, f64> =
-            fused.into_iter().collect();
+        let fused_score: std::collections::HashMap<String, f64> = fused.into_iter().collect();
         let mut out: Vec<DocumentHit> = Vec::with_capacity(chunks.len());
         for ch in chunks {
             if ch.space != space {
@@ -957,7 +953,6 @@ impl Brain {
         Ok(ratio_or_none(embedded, total))
     }
 }
-
 
 /// Coverage ratio; `None` when there are no chunks to cover.
 fn ratio_or_none(embedded: u64, total: u64) -> Option<f64> {

@@ -258,7 +258,11 @@ impl Brain {
                         &space,
                         &extractor_id,
                     )?;
-                    out.extend(ids.into_iter().take(remaining).map(|id| (space.clone(), id)));
+                    out.extend(
+                        ids.into_iter()
+                            .take(remaining)
+                            .map(|id| (space.clone(), id)),
+                    );
                 }
                 Ok(out)
             })
@@ -354,13 +358,8 @@ impl Brain {
             let space_owned = space_owned.clone();
             let extractor_id = extractor_id.clone();
             self.read(move |conn| {
-                let all =
-                    oxibrain_store::consolidation::find_episode_clusters(conn, &space_owned)?;
-                oxibrain_store::consolidation::filter_pending_clusters(
-                    conn,
-                    &extractor_id,
-                    &all,
-                )
+                let all = oxibrain_store::consolidation::find_episode_clusters(conn, &space_owned)?;
+                oxibrain_store::consolidation::filter_pending_clusters(conn, &extractor_id, &all)
             })
             .await?
         };
@@ -452,12 +451,11 @@ impl Brain {
             let mut ids = Vec::new();
             for (episode_ids, text) in &summaries {
                 let member_hash = oxibrain_store::consolidation::hash_member_set(episode_ids);
-                let shared_entities =
-                    oxibrain_store::consolidation::entities_for_episodes(
-                        conn,
-                        &space_owned,
-                        episode_ids,
-                    )?;
+                let shared_entities = oxibrain_store::consolidation::entities_for_episodes(
+                    conn,
+                    &space_owned,
+                    episode_ids,
+                )?;
                 let uncertainty = oxibrain_store::consolidation::uncertainty_for_cluster(
                     conn,
                     &space_owned,
@@ -534,12 +532,10 @@ impl Brain {
         let pending_groups: Vec<oxibrain_store::consolidation::CommunityGroup> = {
             let extractor_id = extractor_id.clone();
             self.read(move |conn| {
-                let done =
-                    oxibrain_store::consolidation::completed_clusters(conn, &extractor_id)?;
+                let done = oxibrain_store::consolidation::completed_clusters(conn, &extractor_id)?;
                 let mut kept = Vec::new();
                 for g in groups {
-                    let h =
-                        oxibrain_store::consolidation::hash_community_member_set(&g.entity_ids);
+                    let h = oxibrain_store::consolidation::hash_community_member_set(&g.entity_ids);
                     if !done.contains(&hex::encode(h)) {
                         kept.push(g);
                     }

@@ -395,7 +395,8 @@ impl BrainClient {
         limit: usize,
         planes: &[&str],
     ) -> Result<SearchResponseDto> {
-        self.call_search(query, space, mode, limit, Some(planes)).await
+        self.call_search(query, space, mode, limit, Some(planes))
+            .await
     }
 
     async fn call_search(
@@ -646,7 +647,10 @@ mod tests {
         assert_eq!(dto.memory.len(), 1);
         assert_eq!(dto.documents.len(), 1);
         assert_eq!(dto.documents[0].modified_at_ms, 1700000000000i64);
-        assert_eq!(dto.freshness.skipped_roots, vec![("missing".into(), "root not found".into())]);
+        assert_eq!(
+            dto.freshness.skipped_roots,
+            vec![("missing".into(), "root not found".into())]
+        );
         assert_eq!(dto.freshness.skipped_files, 2);
         assert!(dto.freshness.dense_coverage.is_none());
     }
@@ -661,6 +665,9 @@ mod tests {
         let result = BrainClient::spawn_local(endpoint).await;
         let elapsed = start.elapsed();
         assert!(result.is_err(), "must error on missing executable");
-        assert!(elapsed.as_secs() < 5, "took {elapsed:?}, expected fast failure");
+        assert!(
+            elapsed.as_secs() < 5,
+            "took {elapsed:?}, expected fast failure"
+        );
     }
 }

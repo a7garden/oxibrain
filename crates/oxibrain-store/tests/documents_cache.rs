@@ -77,10 +77,7 @@ fn open_creates_schema_v1() {
         cache.user_version().unwrap(),
         oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION
     );
-    assert_eq!(
-        oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION,
-        1
-    );
+    assert_eq!(oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION, 1);
     assert!(dir.path().join("documents.db").exists());
 }
 
@@ -186,7 +183,9 @@ fn apply_replace_clears_old_chunks_fts_and_writes_new() {
 fn apply_delete_removes_everything() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")])).unwrap();
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")]))
+        .unwrap();
 
     let plan = oxibrain_store::documents::ApplyPlan {
         root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
@@ -217,7 +216,9 @@ fn apply_delete_removes_everything() {
 fn remove_root_cascade_clears_vectors_and_fts_first() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")])).unwrap();
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")]))
+        .unwrap();
 
     // Add a fake vector so we can verify the cascade touches it.
     let chunk_id: String = cache
@@ -256,7 +257,9 @@ fn remove_root_cascade_clears_vectors_and_fts_first() {
 fn reset_root_rebuilds_at_generation_one() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")])).unwrap();
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")]))
+        .unwrap();
     assert_eq!(cache.generation("vault").unwrap(), 1);
 
     let plan = oxibrain_store::documents::ApplyPlan {
@@ -278,7 +281,9 @@ fn reset_root_rebuilds_at_generation_one() {
 fn cas_mismatch_returns_busy_and_no_partial_state() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")])).unwrap();
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")]))
+        .unwrap();
 
     // Caller snapshot thinks the cache is at gen 0 — a stale view.
     let plan = oxibrain_store::documents::ApplyPlan {
@@ -370,7 +375,10 @@ fn embedded_count_pending_clear_vectors() {
         .unwrap();
     let (embedded, total) = cache.embedded_count("personal").unwrap();
     assert_eq!((embedded, total), (1, 4));
-    assert_eq!(cache.pending_vector_chunks("personal", 100).unwrap().len(), 3);
+    assert_eq!(
+        cache.pending_vector_chunks("personal", 100).unwrap().len(),
+        3
+    );
 
     cache.clear_vectors().unwrap();
     let (embedded, total) = cache.embedded_count("personal").unwrap();
@@ -381,11 +389,17 @@ fn embedded_count_pending_clear_vectors() {
 fn freshness_counters_after_apply() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan("vault", "personal", &[
-        ("notes/a.md", "rev1"),
-        ("notes/b.md", "rev1"),
-        ("notes/c.md", "rev1"),
-    ])).unwrap();
+    cache
+        .apply(&add_plan(
+            "vault",
+            "personal",
+            &[
+                ("notes/a.md", "rev1"),
+                ("notes/b.md", "rev1"),
+                ("notes/c.md", "rev1"),
+            ],
+        ))
+        .unwrap();
 
     // The list_roots API + generation API together give freshness info:
     // one root, generation 1, three files in the manifest.
@@ -398,38 +412,37 @@ fn freshness_counters_after_apply() {
     // must report KeepRoot (not ResetRoot), or the cache would rebuild
     // on every query.
     let configured = fp("vault", "personal");
-    let diff = oxibrain_core::documents::diff_roots(
-        std::slice::from_ref(&configured),
-        &roots,
-    );
-    assert_eq!(
-        diff,
-        vec![("vault".to_owned(), RootAction::KeepRoot)]
-    );
+    let diff = oxibrain_core::documents::diff_roots(std::slice::from_ref(&configured), &roots);
+    assert_eq!(diff, vec![("vault".to_owned(), RootAction::KeepRoot)]);
     let manifest = cache.root_manifest("vault").unwrap();
     assert_eq!(manifest.len(), 3);
-    let mut locators: Vec<&str> = manifest.iter().map(|m: &CachedFile| m.locator.as_str()).collect();
+    let mut locators: Vec<&str> = manifest
+        .iter()
+        .map(|m: &CachedFile| m.locator.as_str())
+        .collect();
     locators.sort();
-    assert_eq!(
-        locators,
-        vec!["notes/a.md", "notes/b.md", "notes/c.md"]
-    );
+    assert_eq!(locators, vec!["notes/a.md", "notes/b.md", "notes/c.md"]);
 }
 
 #[test]
 fn search_fts_finds_indexed_text() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan(
-        "vault",
-        "personal",
-        &[("notes/a.md", "rev1"), ("notes/b.md", "rev1")],
-    )).unwrap();
+    cache
+        .apply(&add_plan(
+            "vault",
+            "personal",
+            &[("notes/a.md", "rev1"), ("notes/b.md", "rev1")],
+        ))
+        .unwrap();
 
     let hits = cache
         .search_fts("personal", FtsTable::Word, "alpha", 10)
         .unwrap();
-    assert!(!hits.is_empty(), "FTS word search must hit the indexed chunk");
+    assert!(
+        !hits.is_empty(),
+        "FTS word search must hit the indexed chunk"
+    );
     for (chunk_id, score) in &hits {
         let n: i64 = cache
             .conn
@@ -446,18 +459,19 @@ fn search_fts_finds_indexed_text() {
     let hits = cache
         .search_fts("personal", FtsTable::Ngram, "bravo", 10)
         .unwrap();
-    assert!(!hits.is_empty(), "FTS ngram search must hit the indexed chunk");
+    assert!(
+        !hits.is_empty(),
+        "FTS ngram search must hit the indexed chunk"
+    );
 }
 
 #[test]
 fn search_fts_quotes_punctuation() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan(
-        "vault",
-        "personal",
-        &[("notes/x.md", "rev1")],
-    )).unwrap();
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/x.md", "rev1")]))
+        .unwrap();
     // Replace with text that contains punctuation.
     let plan = oxibrain_store::documents::ApplyPlan {
         root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
@@ -483,22 +497,18 @@ fn meta_get_and_set_roundtrip() {
     let cache = open(dir.path());
     assert_eq!(cache.meta_get("anything").unwrap(), None);
     cache.meta_set("anything", "v1").unwrap();
-    assert_eq!(
-        cache.meta_get("anything").unwrap().as_deref(),
-        Some("v1")
-    );
+    assert_eq!(cache.meta_get("anything").unwrap().as_deref(), Some("v1"));
     cache.meta_set("anything", "v2").unwrap();
-    assert_eq!(
-        cache.meta_get("anything").unwrap().as_deref(),
-        Some("v2")
-    );
+    assert_eq!(cache.meta_get("anything").unwrap().as_deref(), Some("v2"));
 }
 
 #[test]
 fn chunks_returns_metadata_for_known_ids() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")])).unwrap();
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")]))
+        .unwrap();
     let chunk_id: String = cache
         .conn
         .query_row(
@@ -527,7 +537,9 @@ fn chunks_returns_metadata_for_known_ids() {
 fn knn_returns_nearest_chunk_ids() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")])).unwrap();
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")]))
+        .unwrap();
 
     // Fetch the two chunk ids and embed them with distinct vectors.
     let mut stmt = cache
@@ -571,7 +583,9 @@ fn replace_removes_old_vectors_and_changes_chunk_ids() {
     // ordinals; no old vector survives, and new chunk ids differ.
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
-    cache.apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")])).unwrap();
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")]))
+        .unwrap();
 
     let old_ids: Vec<String> = {
         let mut stmt = cache
@@ -667,10 +681,7 @@ fn assert_row_counts(cache: &DocumentCache, table: &str, expected: i64) {
         .conn
         .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
         .unwrap();
-    assert_eq!(
-        n, expected,
-        "expected {expected} rows in {table}, got {n}"
-    );
+    assert_eq!(n, expected, "expected {expected} rows in {table}, got {n}");
 }
 
 fn snapshot_counts(cache: &DocumentCache) -> [i64; 6] {

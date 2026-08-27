@@ -18,13 +18,8 @@ pub async fn run(dir: &Path, limit: Option<usize>) -> anyhow::Result<()> {
     let clock = Arc::new(SystemClock);
     let brain = match provider.tokenizer.clone() {
         Some(tok) => {
-            Brain::with_llm_and_tokenizer(
-                BrainConfig::at(dir),
-                clock,
-                provider.port.clone(),
-                tok,
-            )
-            .await?
+            Brain::with_llm_and_tokenizer(BrainConfig::at(dir), clock, provider.port.clone(), tok)
+                .await?
         }
         None => Brain::with_llm(BrainConfig::at(dir), clock, provider.port.clone()).await?,
     };

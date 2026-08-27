@@ -30,11 +30,7 @@ pub async fn run(
                 alias: "vault".into(),
                 path: seed_path.clone(),
                 space: "personal".into(),
-                include: vec![
-                    "**/*.md".into(),
-                    "**/*.txt".into(),
-                    "**/*.html".into(),
-                ],
+                include: vec!["**/*.md".into(), "**/*.txt".into(), "**/*.html".into()],
                 exclude: vec![
                     "**/.git/**".into(),
                     "**/.DS_Store".into(),

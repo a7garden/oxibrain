@@ -4,14 +4,16 @@
 
 mod compat;
 pub mod config;
+pub mod document_plane;
 mod extraction;
 mod ingest;
 pub mod models;
 pub mod pull_plan;
 mod render;
-pub mod document_plane;
 pub use config::BrainConfig;
-pub use document_plane::{DocumentFreshness, DocumentHit, IndexOptions, PendingStats, SearchResponse};
+pub use document_plane::{
+    DocumentFreshness, DocumentHit, IndexOptions, PendingStats, SearchResponse,
+};
 
 pub use models::SpaceInfo;
 
@@ -77,7 +79,10 @@ pub struct Brain {
 pub enum CaptureOutcome {
     /// Episode appended; extraction succeeded inline. `extracted` counts
     /// the claims projected from this episode.
-    Captured { episode_id: String, extracted: usize },
+    Captured {
+        episode_id: String,
+        extracted: usize,
+    },
     /// Episode appended; extraction did not run or failed (no LLM port,
     /// provider error, validation failure). The episode stays on the
     /// backlog; `pending` is the backlog size after this capture.
@@ -472,10 +477,8 @@ impl Brain {
     ) -> Result<Vec<oxibrain_core::Belief>, BrainError> {
         let space = space.to_string();
         let entity_id = entity_id.to_string();
-        self.read(move |conn| {
-            query::beliefs_as_of(conn, &space, &entity_id, Some(valid_at), None)
-        })
-        .await
+        self.read(move |conn| query::beliefs_as_of(conn, &space, &entity_id, Some(valid_at), None))
+            .await
     }
 
     /// All contradicted statements in a space.
@@ -583,10 +586,8 @@ impl Brain {
         limit: usize,
     ) -> Result<Vec<oxibrain_store::knowledge::EntityCard>, BrainError> {
         let space = space.to_string();
-        self.read(move |conn| {
-            oxibrain_store::knowledge::list_entity_cards(conn, &space, limit)
-        })
-        .await
+        self.read(move |conn| oxibrain_store::knowledge::list_entity_cards(conn, &space, limit))
+            .await
     }
 
     /// List merge records in a space, most recent first.
@@ -646,10 +647,8 @@ impl Brain {
     ) -> Result<oxibrain_store::timeline::DiffResult, BrainError> {
         let space = space.to_string();
         let entity_id = entity_id.to_string();
-        self.read(move |conn| {
-            oxibrain_store::timeline::diff(conn, &space, &entity_id, at_a, at_b)
-        })
-        .await
+        self.read(move |conn| oxibrain_store::timeline::diff(conn, &space, &entity_id, at_a, at_b))
+            .await
     }
 
     pub async fn why(
@@ -659,10 +658,8 @@ impl Brain {
     ) -> Result<oxibrain_store::explain::ExplainBlock, BrainError> {
         let space = space.to_string();
         let statement_id = statement_id.to_string();
-        self.read(move |conn| {
-            oxibrain_store::explain::why(conn, &space, &statement_id)
-        })
-        .await
+        self.read(move |conn| oxibrain_store::explain::why(conn, &space, &statement_id))
+            .await
     }
 
     // ── Briefs ────────────────────────────────────────────────────────────
@@ -744,10 +741,8 @@ impl Brain {
 
     pub async fn rebuild_communities(&self, space: &str) -> Result<(), BrainError> {
         let space = space.to_string();
-        self.write(move |conn| {
-            oxibrain_store::communities::rebuild_communities(conn, &space)
-        })
-        .await
+        self.write(move |conn| oxibrain_store::communities::rebuild_communities(conn, &space))
+            .await
     }
 
     pub async fn community_members(
@@ -767,19 +762,15 @@ impl Brain {
         let space = space.to_string();
         let now = self.clock.now();
         let config = oxibrain_core::lifecycle::DecayConfig::default();
-        self.write(move |conn| {
-            oxibrain_store::lifecycle::apply_decay(conn, &space, now, &config)
-        })
-        .await
+        self.write(move |conn| oxibrain_store::lifecycle::apply_decay(conn, &space, now, &config))
+            .await
     }
 
     pub async fn compact(&self, space: &str) -> Result<usize, BrainError> {
         let space = space.to_string();
         let now = self.clock.now();
-        self.write(move |conn| {
-            oxibrain_store::lifecycle::compact_episodes(conn, &space, now, 90)
-        })
-        .await
+        self.write(move |conn| oxibrain_store::lifecycle::compact_episodes(conn, &space, now, 90))
+            .await
     }
 
     pub async fn assemble_context(
@@ -898,13 +889,7 @@ impl Brain {
         let issued_by = issued_by.to_string();
         let label = label.map(String::from);
         self.write(move |conn| {
-            oxibrain_store::security::issue_token(
-                conn,
-                &scope,
-                &issued_by,
-                label.as_deref(),
-                now,
-            )
+            oxibrain_store::security::issue_token(conn, &scope, &issued_by, label.as_deref(), now)
         })
         .await
     }
@@ -997,8 +982,7 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
         let llm = self.require_llm()?.clone();
-        self.extract_one_with(space, episode_id, config, llm)
-            .await
+        self.extract_one_with(space, episode_id, config, llm).await
     }
 
     /// Extract a single episode synchronously with an explicit LLM provider.
@@ -1068,10 +1052,8 @@ impl Brain {
     ) -> Result<Vec<String>, BrainError> {
         let space = space.to_string();
         let eids = entity_ids.to_vec();
-        self.read(move |conn| {
-            oxibrain_store::query::statements_for_entities(conn, &space, &eids)
-        })
-        .await
+        self.read(move |conn| oxibrain_store::query::statements_for_entities(conn, &space, &eids))
+            .await
     }
 
     /// Extract all triples from a space's current projection.

@@ -345,12 +345,7 @@ impl GitDocumentReader {
             let Some(blob_id) = blob else {
                 continue; // path absent here; the deletion itself is not a revision
             };
-            let content = self
-                .repo
-                .find_blob(blob_id)
-                .map_err(gix_err)?
-                .data
-                .to_vec();
+            let content = self.repo.find_blob(blob_id).map_err(gix_err)?.data.to_vec();
             commits.push((
                 i,
                 DocumentRevision {
@@ -367,11 +362,7 @@ impl GitDocumentReader {
         }
         // Oldest first: ascending commit time; among equal timestamps the
         // later walk position (older commit in a newest-first walk) wins.
-        commits.sort_by(|(pa, a), (pb, b)| {
-            a.committed_at
-                .cmp(&b.committed_at)
-                .then(pb.cmp(pa))
-        });
+        commits.sort_by(|(pa, a), (pb, b)| a.committed_at.cmp(&b.committed_at).then(pb.cmp(pa)));
         Ok(commits.into_iter().map(|(_, rev)| rev).collect())
     }
 
@@ -516,7 +507,9 @@ fn find_blob_in_tree(
         }
         current = entry.oid.to_owned();
     }
-    Err(BrainError::Invalid(format!("unreachable tree walk: {rel_path}")))
+    Err(BrainError::Invalid(format!(
+        "unreachable tree walk: {rel_path}"
+    )))
 }
 
 /// Hex-encode the blake3 digest of `bytes`.
