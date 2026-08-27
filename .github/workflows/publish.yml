@@ -55,15 +55,20 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: bash scripts/publish.sh
 
+      # Published crates re-resolve dependencies fresh from the registry (no
+      # lock file ships), so they must also compile on a recent toolchain —
+      # not just our MSRV 1.85. human_format 1.2.x (via prodash → gix) uses
+      # let-chains that need >1.85, so the smoke runs on stable.
       - name: Consumer smoke (published crates resolve from the registry)
         run: |
+          rustup toolchain install stable --profile minimal
           dir=$(mktemp -d)
-          cargo new --lib "$dir/consumer" --name oxibrain_consumer
+          cargo +stable new --lib "$dir/consumer" --name oxibrain_consumer
           cd "$dir/consumer"
           # oxibrain-cli ships the actual `oxibrain` binary users install — the
           # facade/mcp/client libs alone would not catch a broken CLI publish.
-          cargo add --quiet oxibrain oxibrain-client oxibrain-mcp oxibrain-cli
-          cargo check --quiet
+          cargo +stable add --quiet oxibrain oxibrain-client oxibrain-mcp oxibrain-cli
+          cargo +stable check --quiet
           echo "consumer smoke ok: latest published oxibrain stack (incl. cli) resolves and compiles"
 
       - name: Create GitHub release
