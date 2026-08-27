@@ -13,6 +13,7 @@ pub async fn run(dir: &Path, question: &str, space: &str) -> anyhow::Result<()> 
         as_of: None,
         limit: 20,
         min_confidence: 0.0,
+        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
     };
     let result = brain.query(q).await?;
     println!(

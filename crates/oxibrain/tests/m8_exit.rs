@@ -103,6 +103,7 @@ async fn search_as_of_returns_different_result_set() {
         as_of: None,
         limit: 20,
         min_confidence: 0.0,
+        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
     };
     let no_asof = brain.query(q_no_asof).await.expect("query no-as-of");
 
@@ -116,6 +117,7 @@ async fn search_as_of_returns_different_result_set() {
         as_of: Some(Timestamp(1_500)),
         limit: 20,
         min_confidence: 0.0,
+        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
     };
     let asof = brain.query(q_asof).await.expect("query as-of");
 

@@ -84,6 +84,7 @@ async fn hybrid_query_finds_declared_knowledge() {
         as_of: None,
         limit: 10,
         min_confidence: 0.0,
+        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
     };
     let _result = brain.query(q).await.expect("query");
     // The query pipeline ran end-to-end; whether declarative statements surface

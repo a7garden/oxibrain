@@ -64,6 +64,7 @@ async fn rank_truncation_drops_are_attributed() {
         as_of: None,
         limit: 2,
         min_confidence: 0.0,
+        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
     };
     let result = brain.query(q).await.expect("query");
 

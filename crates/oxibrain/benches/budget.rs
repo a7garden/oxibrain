@@ -110,6 +110,8 @@ fn bench_hybrid_query(c: &mut Criterion) {
                         as_of: None,
                         limit: 20,
                         min_confidence: 0.0,
+                        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory)
+                            .collect(),
                     })
                     .await
                     .expect("query");

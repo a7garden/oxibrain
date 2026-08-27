@@ -47,6 +47,9 @@ pub fn assemble_context(
         as_of: None,
         limit: 10,
         min_confidence: 0.0,
+        // Context assembly reads the memory ledger only; the documents
+        // plane is served by documents.db, never from here.
+        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
     };
     let ranking = query::hybrid_query(conn, &q, None)?;
     for item in &ranking.items {

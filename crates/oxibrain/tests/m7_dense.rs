@@ -141,6 +141,7 @@ async fn reproject_embeds_entities_and_dense_knn_finds_them() {
             as_of: None,
             limit: 5,
             min_confidence: 0.0,
+            planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
         })
         .await
         .expect("dense query");
@@ -169,6 +170,7 @@ async fn reproject_embeds_entities_and_dense_knn_finds_them() {
             as_of: None,
             limit: 5,
             min_confidence: 0.0,
+            planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
         })
         .await
         .expect("dense query 2");
@@ -196,6 +198,7 @@ async fn dense_mode_without_embedder_returns_explicit_error() {
             as_of: None,
             limit: 5,
             min_confidence: 0.0,
+            planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
         })
         .await
         .expect_err("dense without embedder must error");

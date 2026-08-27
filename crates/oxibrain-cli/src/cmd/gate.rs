@@ -431,6 +431,7 @@ async fn run_arm(
         as_of,
         limit: 15,
         min_confidence: 0.0,
+        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
     };
     let result = brain.query(query).await.context(arm.label())?;
     // Render the top-K ranked statements by id (`id | subject predicate

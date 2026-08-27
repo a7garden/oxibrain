@@ -21,6 +21,7 @@ pub async fn run_dropped(
         as_of: None,
         limit: 20,
         min_confidence,
+        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
     };
     let result = brain.query(q).await?;
     if result.dropped.is_empty() {

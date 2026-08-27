@@ -168,17 +168,17 @@ impl BrainServer {
         let brain = (*self.brain).clone();
         let target = canonical.clone();
         let handle = tokio::runtime::Handle::current();
-        match oxibrain_connectors::spawn_quiet(&canonical, SOURCE_WATCH_QUIET, move || match handle
-            .block_on(oxibrain::vault::sync_vault(&brain, &target, &space))
-        {
-            Ok(r) if !r.new.is_empty() || !r.modified.is_empty() => tracing::info!(
-                new = r.new.len(),
-                modified = r.modified.len(),
-                unchanged = r.unchanged.len(),
-                "vault watcher sync"
-            ),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("vault watcher sync failed: {e}"),
+        match oxibrain_connectors::watch::spawn_quiet(&canonical, SOURCE_WATCH_QUIET, move || {
+            match handle.block_on(oxibrain::vault::sync_vault(&brain, &target, &space)) {
+                Ok(r) if !r.new.is_empty() || !r.modified.is_empty() => tracing::info!(
+                    new = r.new.len(),
+                    modified = r.modified.len(),
+                    unchanged = r.unchanged.len(),
+                    "vault watcher sync"
+                ),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("vault watcher sync failed: {e}"),
+            }
         }) {
             Ok(w) => self
                 .sources
@@ -679,6 +679,9 @@ impl BrainServer {
             as_of: i64_arg_opt(args, "as_of").map(oxibrain_ports::Timestamp),
             limit,
             min_confidence: f32_arg_or(args, "min_confidence", 0.0),
+            // Memory-plane only for now; the `planes` tool argument lands
+            // with the documents plane (two-plane Task 7).
+            planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
         };
         let result = self.brain.search(q).await.map_err(ToolErr::run)?;
         to_json(&result)
