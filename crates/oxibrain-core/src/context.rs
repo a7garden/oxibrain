@@ -22,6 +22,11 @@ pub enum LayerKind {
     PinnedFacts,
     HighSalienceBeliefs,
     QueryNeighborhood,
+    /// Document-plane excerpts (Daemonless Two-Plane §6.7). Positioned
+    /// between QueryNeighborhood and RecentEpisodes: it shares the
+    /// query-driven nature of the neighborhood and the verbatim-text
+    /// cost of episodes, so it sits with both.
+    Documents,
     Summaries,
     RecentEpisodes,
 }

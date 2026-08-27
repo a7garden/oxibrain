@@ -9,11 +9,36 @@
 
 use crate::knowledge::{EntityId, StatementId};
 use oxibrain_ports::Timestamp;
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 // Re-export the M8 rank types so existing import paths
 // (`oxibrain_core::retrieval::RankingResult` etc.) continue to resolve.
 pub use crate::rank::{DropReason, DroppedItem, RankedItem, RankingResult};
+
+/// Which retrieval planes a query should hit (Daemonless Two-Plane §2.3).
+///
+/// `Memory` covers the episode/entity/statement ledger and its projections.
+/// `Documents` covers the chunk index in `documents.db`. A query may target
+/// either or both. Memory and document scores are never compared directly:
+/// each plane produces its own ranked list.
+///
+/// Naming note: this enum is `SearchPlane`, not `SearchTarget`, to avoid
+/// colliding with the legacy hit-target enum `SearchTarget` below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchPlane {
+    Memory,
+    Documents,
+}
+
+fn default_planes() -> BTreeSet<SearchPlane> {
+    let mut set = BTreeSet::new();
+    set.insert(SearchPlane::Memory);
+    set.insert(SearchPlane::Documents);
+    set
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Query {
@@ -26,6 +51,10 @@ pub struct Query {
     pub limit: usize,
     #[serde(default)]
     pub min_confidence: f32,
+    /// Which planes to query. Defaults to both. An empty set means
+    /// "neither", which is a valid degenerate request and returns no hits.
+    #[serde(default = "default_planes")]
+    pub planes: BTreeSet<SearchPlane>,
 }
 
 fn default_limit() -> usize {

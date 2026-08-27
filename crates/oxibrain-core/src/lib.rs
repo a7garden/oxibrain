@@ -36,12 +36,17 @@ pub use fold::{StatementEntry, fold};
 
 pub mod confidence;
 pub mod context;
+pub mod documents;
 pub mod eval;
 pub mod extraction;
 pub mod lifecycle;
 pub mod rank;
 pub mod retrieval;
 pub mod security;
+pub use documents::{
+    CachedFile, CachedRootMeta, FileAction, FileObservation, RootAction, RootFingerprint,
+    chunk_id as document_chunk_id, diff_roots, document_id, plan_reconcile,
+};
 pub mod uncertainty;
 pub use uncertainty::{Uncertainty, UncertaintyInput, compute as compute_uncertainty};
 pub mod pipeline;
@@ -69,9 +74,8 @@ pub use sync::{
 };
 
 pub use context::{ContextBudget, ContextLayer, ContextResult, LayerKind, estimate_tokens_rough};
-pub use lifecycle::{CompactionConfig, DecayConfig, SalienceEntry, salience};
 pub use retrieval::{
-    Direction, PredicateFilter, Query, QueryMode, SearchHit, SearchTarget, Strategy, TraversalEdge,
-    TraversalNode, TraversalResult, TraversalSpec,
+    Direction, PredicateFilter, Query, QueryMode, SearchHit, SearchPlane, SearchTarget, Strategy,
+    TraversalEdge, TraversalNode, TraversalResult, TraversalSpec,
 };
 pub use stats::SpaceStats;

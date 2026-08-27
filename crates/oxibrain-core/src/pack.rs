@@ -89,6 +89,20 @@ pub struct SummaryWithUncertainty {
     pub uncertainty: Option<crate::uncertainty::Uncertainty>,
 }
 
+/// Document chunk excerpt included verbatim in the assembled context
+/// (Daemonless Two-Plane §6.7). Score is the document-plane retrieval
+/// score (BM25 or 1-RRF etc.); the memory and document planes are never
+/// compared numerically, so this score lives only inside its layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentExcerpt {
+    /// Stable URI for the chunk. Format: `doc://<alias>/<pct-locator>?rev=<revision>`.
+    pub uri: String,
+    /// Verbatim decoded slice of the chunk text.
+    pub text: String,
+    /// Document-plane score (BM25 or 1-RRF component).
+    pub score: f32,
+}
+
 /// §12.3 input — the raw material pack turns into a context.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContextInput {
@@ -97,6 +111,10 @@ pub struct ContextInput {
     pub neighborhood: Vec<RenderedEdge>,
     pub episodes: Vec<EpisodeExcerpt>,
     pub summaries: Vec<SummaryWithUncertainty>,
+    /// Document-plane excerpts (Daemonless Two-Plane §6.7). Order is
+    /// caller-controlled (already ranked by the document plane).
+    #[serde(default)]
+    pub documents: Vec<DocumentExcerpt>,
 }
 
 // ── §12.3 policy ────────────────────────────────────────────────────────────
@@ -113,7 +131,6 @@ pub enum BeliefForm {
     /// Adds source episode ids.
     WithProvenance,
 }
-
 /// Reserve share per layer. The Profile layer's reservation is a floor
 /// (§12.3): pack must always emit at least that many tokens for it if
 /// the budget permits. Other reservations are ceilings.
@@ -124,6 +141,7 @@ pub struct Reserve {
     pub pinned_tokens: usize,
     pub beliefs_tokens: usize,
     pub neighborhood_tokens: usize,
+    pub documents_tokens: usize,
     pub summaries_tokens: usize,
     pub episodes_tokens: usize,
 }
@@ -139,13 +157,20 @@ impl Reserve {
         let pinned = budget / 20;
         let beliefs = budget / 3;
         let neighborhood = budget / 8;
+        // Documents share the neighborhood's reservation floor (§12.3,
+        // Daemonless Two-Plane §6.7): both layers are query-driven graph
+        // expansions of bounded size. When neither query layer has hits,
+        // the reservation is unused.
+        let documents = neighborhood;
         let summaries = budget / 10;
-        let episodes = budget.saturating_sub(profile + pinned + beliefs + neighborhood + summaries);
+        let episodes = budget
+            .saturating_sub(profile + pinned + beliefs + neighborhood + documents + summaries);
         Self {
             profile_tokens: profile,
             pinned_tokens: pinned,
             beliefs_tokens: beliefs,
             neighborhood_tokens: neighborhood,
+            documents_tokens: documents,
             summaries_tokens: summaries,
             episodes_tokens: episodes,
         }
@@ -175,10 +200,9 @@ impl PackPolicy {
     }
 }
 
-/// Pack a `ContextInput` to the budget under `PackPolicy`. The function is
-/// pure: time-invariant, no I/O, no model. Layer order is fixed (§12.2):
+/// Layer order is fixed (§12.2, Daemonless Two-Plane §6.7):
 /// Profile first (always), then Pinned, HighSalienceBeliefs,
-/// QueryNeighborhood, Summaries, RecentEpisodes.
+/// QueryNeighborhood, Documents, Summaries, RecentEpisodes.
 ///
 /// Strategy:
 /// 1. Render every belief using `belief_form`.
@@ -270,6 +294,37 @@ pub fn pack(
                 kind: LayerKind::QueryNeighborhood,
                 text,
                 estimated_tokens: tokens,
+                provenance: prov,
+            });
+        }
+    }
+
+    // 4.5 Documents — verbatim excerpts from the document plane
+    // (Daemonless Two-Plane §6.7). Each excerpt carries its stable
+    // `doc://` URI as provenance. The score lives only inside this
+    // layer — memory and document scores are never compared.
+    if !input.documents.is_empty() {
+        let mut text = String::new();
+        let mut prov: Vec<String> = Vec::with_capacity(input.documents.len());
+        let mut used = 0usize;
+        let ceiling = policy.reserve.documents_tokens.min(remaining);
+        for d in &input.documents {
+            let line = format!("[{}] {}\n", d.uri, d.text);
+            let tokens = tokenizer.count(&line);
+            if used + tokens > remaining || used + tokens > ceiling.max(used) {
+                break;
+            }
+            text.push_str(&line);
+            prov.push(d.uri.clone());
+            used += tokens;
+        }
+        if !text.is_empty() {
+            total_tokens += used;
+            remaining = remaining.saturating_sub(used);
+            layers.push(ContextLayer {
+                kind: LayerKind::Documents,
+                text,
+                estimated_tokens: used,
                 provenance: prov,
             });
         }
