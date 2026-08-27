@@ -24,6 +24,8 @@ hex.workspace = true
 thiserror.workspace = true
 oxibrain-core.workspace = true
 oxibrain-ports.workspace = true
+gix = { workspace = true, features = ["excludes"] }
 
 [dev-dependencies]
+gix = { workspace = true, features = ["excludes", "tree-editor"] }
 tempfile.workspace = true
