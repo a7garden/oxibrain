@@ -30,7 +30,7 @@ pub enum Command {
     },
     /// Show store statistics.
     Stats,
-    /// List all spaces with counts. Read-only; safe with a running daemon.
+    /// List all spaces with counts. Read-only.
     Spaces,
     /// Health check.
     Doctor,
@@ -128,21 +128,17 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCmd,
     },
+    /// Serve the brain over stdio (default) or loopback HTTP.
     Serve {
-        /// Listen on a Unix-domain socket path instead of stdio.
-        #[arg(long)]
-        socket: Option<PathBuf>,
-        /// Listen on loopback HTTP (e.g. `127.0.0.1:8080`) instead of stdio.
+        /// Serve a newline-delimited JSON-RPC session on stdin/stdout (the
+        /// default when no transport flag is given). A caller-owned child —
+        /// the daemonless transport of the two-plane design.
+        #[arg(long, conflicts_with = "http")]
+        stdio: bool,
+        /// Serve loopback HTTP (e.g. `127.0.0.1:8080`) with the operations
+        /// console. Foreground only.
         #[arg(long)]
         http: Option<String>,
-        /// Require token authentication on socket connections (DESIGN §11.2).
-        #[arg(long)]
-        require_token: bool,
-        /// Run as a background daemon: write a PID file and shut down
-        /// gracefully on SIGTERM/SIGINT (DESIGN §4.3, §15). External
-        /// supervision (launchd) handles backgrounding; this flag does not fork.
-        #[arg(long)]
-        daemon: bool,
         /// Serve the desktop brain UI from this directory (GET requests).
         /// Dev override — defaults to the embedded bundle (see ADR-008).
         #[arg(long)]
@@ -153,12 +149,25 @@ pub enum Command {
         #[command(subcommand)]
         command: PredicateCmd,
     },
-    /// Extract a single episode (calls the LLM, validates, projects).
+    /// Drain uncached memory-plane episodes through the configured
+    /// extractor (the operator repair and batch path, spec §9.5).
     Extract {
-        /// Episode ID to extract.
-        episode_id: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        /// Extract the uncached backlog (replaces `extract <episode-id>`).
+        #[arg(long, required = true)]
+        pending: bool,
+        /// Stop after N episodes (default: drain the whole backlog).
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Reconcile the documents cache from the configured roots (spec §7.3).
+    Index {
+        /// The spec's canonical spelling; documents indexing is the default
+        /// behavior of this command with or without the flag.
+        #[arg(long)]
+        documents: bool,
+        /// Also embed every missing document chunk (dense coverage).
+        #[arg(long)]
+        embed: bool,
     },
     /// Re-extract all primary episodes with the configured extractor.
     Reextract {

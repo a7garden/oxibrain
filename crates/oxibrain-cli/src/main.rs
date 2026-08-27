@@ -15,7 +15,10 @@ fn default_dir() -> PathBuf {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // stdout is the protocol channel in `serve --stdio` mode; diagnostics
+    // must never touch it.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
@@ -23,10 +26,14 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Cli::parse();
+    let explicit_dir = args.dir.is_some();
     let dir = args.dir.clone().unwrap_or_else(default_dir);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
 
     match args.command {
-        Command::Init { space } => cmd::init::run(&dir, &space).await,
+        Command::Init { space } => {
+            cmd::init::run(&dir, &space, explicit_dir, home.as_deref()).await
+        }
         Command::Ingest { path, space } => cmd::ingest::run(&dir, path, &space).await,
         Command::Stats => cmd::stats::run(&dir).await,
         Command::Spaces => cmd::spaces::run(&dir).await,
@@ -104,12 +111,15 @@ async fn main() -> anyhow::Result<()> {
             cli::TokenCmd::Revoke { id } => cmd::token::run_revoke(&dir, &id).await,
         },
         Command::Serve {
-            socket,
+            stdio,
             http,
-            require_token,
-            daemon,
             ui_dir,
-        } => cmd::serve::run(&dir, socket, http, require_token, daemon, ui_dir).await,
+        } => {
+            // stdio is the default transport; the flag exists so the
+            // canonical `serve --stdio` spelling is explicit.
+            let _ = stdio;
+            cmd::serve::run(&dir, http, ui_dir).await
+        }
         Command::Predicate { command } => match command {
             cli::PredicateCmd::List => cmd::predicate::run(),
             cli::PredicateCmd::Add { json, space } => {
@@ -129,9 +139,11 @@ async fn main() -> anyhow::Result<()> {
                     .await
             }
         },
-        Command::Extract { episode_id, space } => {
-            cmd::extract::run(&dir, &episode_id, &space).await
+        Command::Extract { pending, limit } => {
+            debug_assert!(pending, "clap enforces --pending (required = true)");
+            cmd::extract::run(&dir, limit).await
         }
+        Command::Index { documents, embed } => cmd::index::run(&dir, documents, embed).await,
         Command::Reextract { space } => cmd::reextract::run(&dir, &space).await,
         Command::Model { command } => cmd::model::run(&command).await,
         Command::Eval { suite } => cmd::eval::run(&suite).await,

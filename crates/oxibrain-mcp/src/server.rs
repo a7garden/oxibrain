@@ -16,7 +16,7 @@ use oxibrain::{
 };
 use oxibrain_client::protocol::{ClientHello, ClientOperation};
 use oxibrain_core::retrieval::{
-    Direction, PredicateFilter, Query, QueryMode, Strategy, TraversalSpec,
+    Direction, PredicateFilter, Query, QueryMode, SearchPlane, Strategy, TraversalSpec,
 };
 use oxibrain_ports::{ClockPort, SystemClock};
 use serde_json::{Value, json};
@@ -111,12 +111,6 @@ impl BrainServer {
         }
     }
 
-    /// Legacy pull-source watchers were removed with the vault plane (Task 6
-    /// of the daemonless two-plane plan). Kept as a no-op so existing serve
-    /// entrypoints keep compiling; Task 7 deletes the call sites.
-    pub async fn start_source_watchers(&self) {
-        let _ = self;
-    }
 
     /// Resolve a space name to its content-derived ID, creating it if absent.
     async fn ensure_space(&self, name: &str) -> Result<String, ToolErr> {
@@ -252,6 +246,28 @@ impl BrainServer {
         Ok(())
     }
 
+    /// Scope gate for cross-space native methods (`pending_stats`,
+    /// `extract_uncached`): capability + expiry check only. These methods do
+    /// not take a space, so there is no membership to enforce; a trusted
+    /// local channel (`scope == None`) skips the check.
+    async fn enforce_scope_capability(
+        &self,
+        cap: Capability,
+    ) -> Result<(), (i64, String)> {
+        let Some(scope) = &self.scope else {
+            return Ok(());
+        };
+        let now = SystemClock.now();
+        let expired = scope.expires_at.is_some_and(|exp| now >= exp);
+        if expired || !scope.caps.contains(&cap) {
+            return Err((
+                UNAUTHORIZED,
+                format!("token lacks '{}' (expired={expired})", cap.as_str()),
+            ));
+        }
+        Ok(())
+    }
+
     /// Handle one JSON-RPC message without a sampling session (for HTTP and
     /// direct unit tests). Equivalent to `handle_with(msg, None)`.
     pub async fn handle(&self, msg: Message) -> Option<Value> {
@@ -317,7 +333,27 @@ impl BrainServer {
                 },
                 None => None,
             },
-
+            "document_history" => match msg.id {
+                Some(id) => match self.rpc_document_history(msg.params.as_ref()).await {
+                    Ok(v) => Some(success(id, v)),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
+            "pending_stats" => match msg.id {
+                Some(id) => match self.rpc_pending_stats().await {
+                    Ok(v) => Some(success(id, v)),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
+            "extract_uncached" => match msg.id {
+                Some(id) => match self.rpc_extract_uncached(msg.params.as_ref()).await {
+                    Ok(v) => Some(success(id, v)),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
 
             other => msg
                 .id
@@ -499,9 +535,7 @@ impl BrainServer {
             as_of: i64_arg_opt(args, "as_of").map(oxibrain_ports::Timestamp),
             limit,
             min_confidence: f32_arg_or(args, "min_confidence", 0.0),
-            // Memory-plane only for now; the `planes` tool argument lands
-            // with the documents plane (two-plane Task 7).
-            planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
+            planes: parse_planes(args)?,
         };
         let result = self.brain.search(q).await.map_err(ToolErr::run)?;
         to_json(&result)
@@ -899,6 +933,88 @@ impl BrainServer {
         }))
     }
 
+    /// Native method `document_history` — commit history for one tracked
+    /// locator (two-plane §7, git roots only). Read-gated like
+    /// `resources/read`: spaces are hard boundaries and history is a read.
+    /// Returns an array of `{revision, committed_at_ms, content}` oldest
+    /// first; `content` is the committed text (lossy UTF-8 on the wire).
+    async fn rpc_document_history(
+        &self,
+        args: Option<&Value>,
+    ) -> Result<Value, (i64, String)> {
+        let params = args.ok_or((INVALID_PARAMS, "missing 'params'".into()))?;
+        let space = params
+            .get("space")
+            .and_then(Value::as_str)
+            .unwrap_or("personal");
+        let alias = params
+            .get("alias")
+            .and_then(Value::as_str)
+            .ok_or((INVALID_PARAMS, "missing required argument 'alias'".into()))?;
+        let locator = params
+            .get("locator")
+            .and_then(Value::as_str)
+            .ok_or((INVALID_PARAMS, "missing required argument 'locator'".into()))?;
+        let limit = params
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(20) as usize;
+
+        self.enforce_scope_resource(space).await?;
+        let revisions = self
+            .brain
+            .document_history(space, alias, locator, limit)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+        let entries: Vec<Value> = revisions
+            .iter()
+            .map(|r| {
+                json!({
+                    "revision": r.revision,
+                    "committed_at_ms": r.committed_at * 1000,
+                    "content": String::from_utf8_lossy(&r.content),
+                })
+            })
+            .collect();
+        Ok(json!({ "revisions": entries }))
+    }
+
+    /// Native method `pending_stats` — memory-plane extraction backlog
+    /// (count + oldest backlog seq) across all spaces.
+    async fn rpc_pending_stats(&self) -> Result<Value, (i64, String)> {
+        self.enforce_scope_capability(Capability::Read).await?;
+        let stats = self
+            .brain
+            .pending_extraction_stats()
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+        Ok(json!({
+            "count": stats.count,
+            "oldest_seq": stats.oldest_seq,
+        }))
+    }
+
+    /// Native method `extract_uncached` — drain up to `limit` memory-plane
+    /// episodes through the server's configured extractor (the operator
+    /// repair path behind `oxibrain extract --pending`). Write-gated: the
+    /// call projects assertions into the store.
+    async fn rpc_extract_uncached(
+        &self,
+        args: Option<&Value>,
+    ) -> Result<Value, (i64, String)> {
+        let limit = args
+            .and_then(|a| a.get("limit"))
+            .and_then(Value::as_u64)
+            .unwrap_or(usize::MAX as u64) as usize;
+        self.enforce_scope_capability(Capability::Write).await?;
+        let extracted = self
+            .brain
+            .extract_uncached(limit)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+        Ok(json!({ "extracted": extracted }))
+    }
+
     // ── Write tools: remember, retract, merge_entities ───────────────────
 
     async fn tool_remember(
@@ -1294,6 +1410,35 @@ fn parse_mode(s: &str) -> QueryMode {
     }
 }
 
+/// Parse the search tool's optional `planes` argument: an array of
+/// `"memory"` / `"documents"`. Absent ⇒ both planes (the default). An empty
+/// array is a valid degenerate request ("neither plane") and returns no hits.
+fn parse_planes(args: &Value) -> Result<std::collections::BTreeSet<SearchPlane>, ToolErr> {
+    use oxibrain_core::retrieval::SearchPlane;
+    let Some(list) = args.get("planes").and_then(|v| v.as_array()) else {
+        return Ok([SearchPlane::Memory, SearchPlane::Documents]
+            .into_iter()
+            .collect());
+    };
+    let mut planes = std::collections::BTreeSet::new();
+    for item in list {
+        let name = item.as_str().ok_or_else(|| {
+            ToolErr::Params("planes must be an array of 'memory' | 'documents'".into())
+        })?;
+        let plane = match name {
+            "memory" => SearchPlane::Memory,
+            "documents" => SearchPlane::Documents,
+            other => {
+                return Err(ToolErr::Params(format!(
+                    "planes: unknown plane '{other}' (expected 'memory' | 'documents')"
+                )));
+            }
+        };
+        planes.insert(plane);
+    }
+    Ok(planes)
+}
+
 fn to_json<T: serde::Serialize>(value: &T) -> Result<String, ToolErr> {
     serde_json::to_string_pretty(value).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
 }
@@ -1305,14 +1450,15 @@ fn tool_list() -> Value {
     json!({
         "tools": [
             tool("search",
-                "Search the brain and return entity hits: entity_id, entity_surface, entity_type, score, snippet. Statements/episodes/chunks/communities are not returned as targets. as_of (valid time) and min_confidence filter beliefs; a belief that is retracted or contradicted at as_of is excluded.",
+                "Search the brain across two planes and return the envelope {memory, documents, freshness}. Memory-plane hits are entity targets: entity_id, entity_surface, entity_type, score, snippet. Documents-plane hits carry verbatim text slices with their doc:// provenance (root, locator, revision, ordinal). as_of (valid time) and min_confidence filter beliefs; a belief that is retracted or contradicted at as_of is excluded.",
                 json!({
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "The search query text." },
                         "space": { "type": "string", "description": "Space name (default: personal)." },
                         "mode": { "type": "string", "enum": ["hybrid","lexical","lexical-vector","graph","community"], "description": "Retrieval mode (default: hybrid)." },
-                        "limit": { "type": "integer", "minimum": 1, "description": "Maximum results (default: 20)." },
+                        "planes": { "type": "array", "items": { "type": "string", "enum": ["memory","documents"] }, "description": "Planes to search (default: both)." },
+                        "limit": { "type": "integer", "minimum": 1, "description": "Maximum results per plane (default: 20)." },
                         "as_of": { "type": "integer", "description": "Valid-time instant (millis since epoch). Only beliefs true at this instant are returned (default: now)." },
                         "known_at": { "type": "integer", "description": "Transaction-time instant (millis since epoch). Only beliefs recorded by this instant are returned (default: now)." },
                         "min_confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Confidence floor (default: 0)." }
@@ -1495,7 +1641,13 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    session_loop(server, BufReader::new(reader), BufWriter::new(writer)).await
+    session_loop(
+        server,
+        BufReader::new(reader),
+        None,
+        BufWriter::new(writer),
+    )
+    .await
 }
 
 /// The bidirectional framing loop. Shared by `run_session` and `auth_session`.
@@ -1516,6 +1668,7 @@ where
 async fn session_loop<R, W>(
     server: Arc<BrainServer>,
     mut reader: BufReader<R>,
+    first_line: Option<String>,
     out: BufWriter<W>,
 ) -> anyhow::Result<()>
 where
@@ -1540,16 +1693,21 @@ where
         Ok::<_, anyhow::Error>(())
     });
 
-    let mut line = String::new();
+    // The gate (`run_session_gated`) may have already read the first line.
+    let mut line = first_line.unwrap_or_default();
+    let mut have_line = !line.is_empty();
     loop {
-        line.clear();
-        let n = reader
-            .read_line(&mut line)
-            .await
-            .map_err(|e| anyhow::anyhow!("read: {e}"))?;
-        if n == 0 {
-            break; // EOF — peer closed the stream.
+        if !have_line {
+            line.clear();
+            let n = reader
+                .read_line(&mut line)
+                .await
+                .map_err(|e| anyhow::anyhow!("read: {e}"))?;
+            if n == 0 {
+                break; // EOF — peer closed the stream.
+            }
         }
+        have_line = false;
         if line.trim().is_empty() {
             continue;
         }
@@ -1607,11 +1765,12 @@ where
 
 /// Run the MCP server on stdio (Claude Desktop and other MCP clients).
 ///
-/// All diagnostics go to stderr — stdout is the protocol channel.
+/// All diagnostics go to stderr — stdout is the protocol channel. The
+/// session is token-gated when (and only when) the first message on stdin is
+/// an `auth` request; any other first message proceeds as a trusted local
+/// session, which is what plain MCP clients send (`initialize`).
 pub async fn serve_stdio(brain: Brain) -> anyhow::Result<()> {
-    let server = Arc::new(BrainServer::from_brain(brain));
-    server.start_source_watchers().await;
-    run_session(server, tokio::io::stdin(), tokio::io::stdout()).await
+    run_session_gated(Arc::new(brain), tokio::io::stdin(), tokio::io::stdout()).await
 }
 
 /// Open a Brain at `dir` and serve it over stdio.
@@ -1620,91 +1779,21 @@ pub async fn serve_stdio_at(dir: &std::path::Path) -> anyhow::Result<()> {
     serve_stdio(brain).await
 }
 
-/// Run the MCP server on a Unix-domain socket (the daemon transport, §4.3).
+/// Run one token-gated MCP session over a read/write pair (the stdio shape).
 ///
-/// Connections are served concurrently; each runs its own JSON-RPC session over
-/// the shared `Brain`. The store actor serializes writes (P8 single writer), so
-/// many readers + one writer is safe. A stale socket file is cleared before bind.
-#[cfg(unix)]
-pub async fn serve_socket(brain: Brain, path: &std::path::Path) -> anyhow::Result<()> {
-    use tokio::net::UnixListener;
-    let _ = std::fs::remove_file(path); // clear a stale socket file.
-    let listener =
-        UnixListener::bind(path).map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))?;
-    let server = Arc::new(BrainServer::from_brain(brain));
-    server.start_source_watchers().await;
-    let shutdown = crate::daemon::shutdown_signal();
-    tokio::pin!(shutdown);
-    loop {
-        tokio::select! {
-            accept = listener.accept() => {
-                let (stream, _) = accept?;
-                let server = server.clone();
-                tokio::spawn(async move {
-                    let (read, write) = stream.into_split();
-                    if let Err(e) = run_session(server, read, write).await {
-                        tracing::warn!("session ended: {e}");
-                    }
-                });
-            }
-            _ = &mut shutdown => {
-                tracing::info!("shutdown signal received, stopping socket listener");
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Run the MCP server on a Unix-domain socket with token authentication.
+/// Reads the first line before dispatch:
 ///
-/// Each connection must send a JSON-RPC `auth` request as its first message:
-/// `{"jsonrpc":"2.0","id":1,"method":"auth","params":{"token":"<secret>"}}`.
-/// The server verifies the token against the store and resolves a `Scope`.
-/// On success, a scoped `BrainServer` serves the rest of the session. On
-/// failure (invalid/expired/revoked token), the connection is refused.
-///
-/// This is the authenticated daemon transport (DESIGN §11.2): the scope gate
-/// in `BrainServer::enforce_scope` now has a real scope to enforce.
-#[cfg(unix)]
-pub async fn serve_socket_auth(brain: Brain, path: &std::path::Path) -> anyhow::Result<()> {
-    use tokio::net::UnixListener;
-    let _ = std::fs::remove_file(path);
-    let listener =
-        UnixListener::bind(path).map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))?;
-    let brain = Arc::new(brain);
-    let watch_host = BrainServer::from_arc(brain.clone());
-    watch_host.start_source_watchers().await;
-    let shutdown = crate::daemon::shutdown_signal();
-    tokio::pin!(shutdown);
-    loop {
-        tokio::select! {
-            accept = listener.accept() => {
-                let (stream, _) = accept?;
-                let brain = brain.clone();
-                tokio::spawn(async move {
-                    let (read, write) = stream.into_split();
-                    if let Err(e) = auth_session(brain, read, write).await {
-                        tracing::warn!("auth session ended: {e}");
-                    }
-                });
-            }
-            _ = &mut shutdown => {
-                tracing::info!("shutdown signal received, stopping auth socket listener");
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Authenticate one connection, then run a scoped session.
-///
-/// Reads the first line as an `auth` request. On success, proceeds to the
-/// normal session loop with the resolved scope. On failure, responds with an
-/// `UNAUTHORIZED` error and closes.
-#[cfg(unix)]
-async fn auth_session<R, W>(brain: Arc<Brain>, reader: R, writer: W) -> anyhow::Result<()>
+/// - An `auth` request is verified against the store. On success the rest of
+///   the session runs with the resolved `Scope` gating every tool call and
+///   native method (DESIGN §11.2); on failure an `UNAUTHORIZED` error is
+///   written and the session ends.
+/// - Anything else runs as a trusted local session (the parent process owns
+///   the pipes, so the channel itself is the trust boundary).
+pub async fn run_session_gated<R, W>(
+    brain: Arc<Brain>,
+    reader: R,
+    writer: W,
+) -> anyhow::Result<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -1712,26 +1801,33 @@ where
     let mut reader = BufReader::new(reader);
     let mut out = BufWriter::new(writer);
 
-    let mut line = String::new();
+    let mut first = String::new();
     let n = reader
-        .read_line(&mut line)
+        .read_line(&mut first)
         .await
-        .map_err(|e| anyhow::anyhow!("auth read: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("gate read: {e}"))?;
     if n == 0 {
-        return Ok(()); // client disconnected before sending auth.
+        return Ok(()); // client disconnected before sending anything.
     }
 
-    let id_for_response = Message::parse(&line)
+    // An `auth` request as the first message switches the session into
+    // scoped mode; every other first message is dispatched normally.
+    let is_auth = serde_json::from_str::<Value>(&first).ok().is_some_and(|v| {
+        v.get("method")
+            .and_then(|m| m.as_str())
+            .is_some_and(|m| m == "auth")
+    });
+    if !is_auth {
+        let server = Arc::new(BrainServer::from_arc(brain));
+        return session_loop(server, reader, Some(first), out).await;
+    }
+
+    let id_for_response = Message::parse(&first)
         .ok()
         .and_then(|m| m.id)
         .unwrap_or(Value::Null);
-
-    // Extract the token from `auth` params.
-    let token = serde_json::from_str::<Value>(&line).ok().and_then(|v| {
-        v.get("method")
-            .and_then(|m| m.as_str())
-            .filter(|m| m == &"auth")
-            .and_then(|_| v.get("params")?.get("token")?.as_str().map(String::from))
+    let token = serde_json::from_str::<Value>(&first).ok().and_then(|v| {
+        v.get("params")?.get("token")?.as_str().map(String::from)
     });
 
     let server = match token {
@@ -1767,7 +1863,7 @@ where
                 &error(
                     id_for_response,
                     INVALID_PARAMS,
-                    "first message must be an auth request with a token",
+                    "auth request must carry a token",
                 ),
             )
             .await?;
@@ -1775,7 +1871,7 @@ where
         }
     };
 
-    session_loop(server, reader, out).await
+    session_loop(server, reader, None, out).await
 }
 
 /// Run the MCP server over loopback HTTP (DESIGN §11.6).
@@ -1798,18 +1894,17 @@ pub async fn serve_http(
         );
     }
     use tokio::net::TcpListener;
+    let server = Arc::new(BrainServer::from_brain(brain));
+    let ui_dir = ui_dir.map(std::sync::Arc::new);
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
-    let server = Arc::new(BrainServer::from_brain(brain));
-    server.start_source_watchers().await;
-    let ui_dir = ui_dir.map(std::sync::Arc::new);
     if ui_dir.is_some() {
         tracing::info!("oxibrain HTTP (UI + API) listening on http://{addr}");
     } else {
         tracing::info!("oxibrain HTTP (embedded console + API) listening on http://{addr}");
     }
-    let shutdown = crate::daemon::shutdown_signal();
+    let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
@@ -2069,6 +2164,33 @@ async fn write_line<W: AsyncWrite + Unpin>(
     out.write_all(b"\n").await?;
     out.flush().await?;
     Ok(())
+}
+
+/// Wait for a shutdown signal: SIGINT (Ctrl+C) or, on Unix, SIGTERM (what
+/// supervisors send on stop). Completes once; the caller then stops
+/// accepting new work. Used by the foreground HTTP transport.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut s) = signal(SignalKind::terminate()) {
+            s.recv().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }
 
 #[cfg(test)]
@@ -2456,22 +2578,25 @@ mod tests {
         let result = resp["result"]["content"][0]["text"]
             .as_str()
             .expect("result text payload");
-        // v1.x DTO contract: the search tool serves UI-ready search hits
-        // (entity_id + surface + type + score + snippet) directly. The
-        // ranker's envelope (items/dropped/total_candidates/spec) is
-        // hidden behind the MCP tool — callers that need envelope
-        // diagnostics use the Brain::query facade method directly.
-        let parsed: Vec<serde_json::Value> =
-            serde_json::from_str(result).expect("search response is a JSON array");
+        // v1.x DTO contract: the search tool serves the two-plane envelope
+        // {memory, documents, freshness}. Memory hits are UI-ready search
+        // results (entity_id + surface + type + score + snippet); the ranker's
+        // own envelope (items/dropped/total_candidates/spec) stays hidden
+        // behind the MCP tool — callers that need it use Brain::query.
+        let parsed: Value =
+            serde_json::from_str(result).expect("search response is the envelope object");
+        let hits = parsed["memory"].as_array().expect("memory array");
         assert!(
-            parsed.is_empty()
-                || parsed[0].get("entity_id").is_some()
-                    && parsed[0].get("entity_surface").is_some()
-                    && parsed[0].get("entity_type").is_some()
-                    && parsed[0].get("score").is_some()
-                    && parsed[0].get("snippet").is_some(),
-            "search hits must carry the SearchResult DTO keys, got: {parsed:?}"
+            hits.is_empty()
+                || hits[0].get("entity_id").is_some()
+                    && hits[0].get("entity_surface").is_some()
+                    && hits[0].get("entity_type").is_some()
+                    && hits[0].get("score").is_some()
+                    && hits[0].get("snippet").is_some(),
+            "search hits must carry the SearchResult DTO keys, got: {hits:?}"
         );
+        assert!(parsed["documents"].is_array(), "documents plane present");
+        assert!(parsed["freshness"].is_object(), "freshness present");
     }
 
     #[tokio::test]
@@ -2646,8 +2771,9 @@ mod tests {
             "search must succeed, got {resp:?}"
         );
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let hits: Vec<serde_json::Value> =
-            serde_json::from_str(text).expect("search response is a JSON array");
+        let envelope: Value =
+            serde_json::from_str(text).expect("search response is the envelope object");
+        let hits = envelope["memory"].as_array().expect("memory array");
         let alice_hit = hits
             .iter()
             .find(|h| h["entity_id"].as_str() == Some(alice.as_str()))
@@ -3075,51 +3201,40 @@ mod tests {
         assert!(result.unwrap().unwrap().is_ok());
     }
 
-    #[cfg(unix)]
     #[tokio::test]
-    async fn socket_transport_serves_a_real_connection() {
+    async fn gated_stdio_transport_serves_a_real_connection() {
         use std::time::Duration;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::UnixStream;
 
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
-        let sock = dir.path().join("mcp.sock");
-        let sock_for_task = sock.clone();
+        let (mut client, server_side) = tokio::io::duplex(4096);
+        let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ = serve_socket(brain, &sock_for_task).await;
+            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
         });
 
-        // Retry-connect until the listener is bound (up to ~1s).
-        let mut stream = None;
-        for _ in 0..100 {
-            if let Ok(s) = UnixStream::connect(&sock).await {
-                stream = Some(s);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let mut stream = stream.expect("could not connect to MCP socket");
-
-        stream
+        // A non-auth first message proceeds as a trusted local session.
+        client
             .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
             .await
             .unwrap();
-        stream.flush().await.unwrap();
+        client.flush().await.unwrap();
         let mut buf = vec![0u8; 1024];
-        let n = stream.read(&mut buf).await.unwrap();
+        let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+            .await
+            .expect("read within 5s")
+            .unwrap();
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert_eq!(resp["id"], 1);
         assert!(resp.get("result").is_some());
     }
 
-    #[cfg(unix)]
     #[tokio::test]
-    async fn socket_auth_valid_token_then_tool_call() {
+    async fn gated_stdio_auth_valid_token_then_tool_call() {
         use oxibrain::{Capability, Scope};
         use std::time::Duration;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::UnixStream;
 
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
@@ -3133,32 +3248,24 @@ mod tests {
         };
         let (_info, secret) = brain.issue_token(&scope, "test", None).await.unwrap();
 
-        let sock = dir.path().join("auth.sock");
-        let sock_task = dir.path().join("auth.sock");
+        let (mut stream, server_side) = tokio::io::duplex(8192);
+        let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ = serve_socket_auth(brain, &sock_task).await;
+            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
         });
 
-        // Wait for listener.
-        let mut stream = None;
-        for _ in 0..100 {
-            if let Ok(s) = UnixStream::connect(&sock).await {
-                stream = Some(s);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let mut stream = stream.expect("connect to auth socket");
-
-        // Send auth.
+        // Send auth as the first message.
         let auth = format!(
             "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"auth\",\"params\":{{\"token\":\"{secret}\"}}}}\n"
         );
         stream.write_all(auth.as_bytes()).await.unwrap();
         stream.flush().await.unwrap();
 
-        let mut buf = vec![0u8; 4096];
-        let n = stream.read(&mut buf).await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("auth response within 5s")
+            .unwrap();
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert_eq!(resp["result"]["authenticated"], true);
 
@@ -3168,35 +3275,26 @@ mod tests {
             .await
             .unwrap();
         stream.flush().await.unwrap();
-        let n = stream.read(&mut buf).await.unwrap();
+        let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("tool response within 5s")
+            .unwrap();
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert!(resp.get("result").is_some(), "read tool should succeed");
     }
 
-    #[cfg(unix)]
     #[tokio::test]
-    async fn socket_auth_invalid_token_refused() {
+    async fn gated_stdio_auth_invalid_token_refused() {
         use std::time::Duration;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::UnixStream;
 
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
-        let sock = dir.path().join("bad.sock");
-        let sock_task = dir.path().join("bad.sock");
+        let (mut stream, server_side) = tokio::io::duplex(4096);
+        let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ = serve_socket_auth(brain, &sock_task).await;
+            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
         });
-
-        let mut stream = None;
-        for _ in 0..100 {
-            if let Ok(s) = UnixStream::connect(&sock).await {
-                stream = Some(s);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let mut stream = stream.expect("connect to auth socket");
 
         // Send bad token.
         stream
@@ -3206,9 +3304,113 @@ mod tests {
         stream.flush().await.unwrap();
 
         let mut buf = vec![0u8; 4096];
-        let n = stream.read(&mut buf).await.unwrap();
+        let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("auth error within 5s")
+            .unwrap();
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert_eq!(resp["error"]["code"], UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn native_document_history_rejects_plain_root() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                "document_history",
+                Some(json!({ "space": "t", "alias": "vault", "locator": "a.md", "limit": 5 })),
+            ))
+            .await
+            .unwrap();
+        // No documents.toml alias configured ⇒ clear error, not a crash.
+        assert_eq!(resp["error"]["code"], INTERNAL_ERROR);
+        let message = resp["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("alias") || message.contains("git"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_pending_stats_starts_empty() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(1, "pending_stats", Some(json!({}))))
+            .await
+            .unwrap();
+        assert_eq!(resp["result"]["count"], 0);
+        assert!(resp["result"]["oldest_seq"].is_null());
+    }
+
+    #[tokio::test]
+    async fn search_tool_planes_parameter_selects_memory_only() {
+        let (dir, server) = fresh_server().await;
+        let vault = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("documents.toml"),
+            format!(
+                "[[root]]\nalias = \"vault\"\npath = \"{}\"\nspace = \"t\"\n",
+                vault.path().display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(vault.path().join("note.md"), "alpha content").unwrap();
+
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "search",
+                    "arguments": { "query": "alpha", "space": "t", "planes": ["memory"] }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let body: Value = serde_json::from_str(text).unwrap();
+        assert!(
+            body["documents"].as_array().unwrap().is_empty(),
+            "documents plane must not run: {body}"
+        );
+        assert!(body["memory"].is_array());
+
+        // Default (no planes) runs both: documents hits appear.
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "search",
+                    "arguments": { "query": "alpha", "space": "t" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let body: Value = serde_json::from_str(text).unwrap();
+        assert!(
+            !body["documents"].as_array().unwrap().is_empty(),
+            "documents plane should hit by default: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_tool_rejects_unknown_plane() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "search",
+                    "arguments": { "query": "x", "planes": ["nope"] }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], INVALID_PARAMS);
     }
 
     #[tokio::test]

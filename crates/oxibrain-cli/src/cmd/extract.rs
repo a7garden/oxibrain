@@ -1,8 +1,11 @@
-//! `oxibrain extract <episode-id>` — synchronous single-episode extraction.
+//! `oxibrain extract --pending` — drain the memory-plane backlog.
 //!
-//! Reads the episode, calls the LLM, validates claims against the registry,
-//! quarantines invalid output, and projects valid assertions. Realtime mode
-//! (no job queue). Requires a configured LLM provider (see `cmd::llm`).
+//! The queue-less extraction path (spec §9.5): the backlog is every primary,
+//! non-document, non-redacted episode with no extraction row for the current
+//! extractor. Each episode is extracted outside any DB transaction, validated
+//! against the registry, and projected; failures leave the episode cached as
+//! pending so a later run rediscovers it. Requires a configured LLM provider
+//! (see `cmd::llm`).
 
 use crate::cmd::llm;
 use oxibrain::{Brain, BrainConfig};
@@ -10,28 +13,32 @@ use oxibrain_ports::SystemClock;
 use std::path::Path;
 use std::sync::Arc;
 
-pub async fn run(dir: &Path, episode_id: &str, space: &str) -> anyhow::Result<()> {
+pub async fn run(dir: &Path, limit: Option<usize>) -> anyhow::Result<()> {
     let provider = llm::from_env().await?;
     let clock = Arc::new(SystemClock);
     let brain = match provider.tokenizer.clone() {
         Some(tok) => {
-            Brain::with_llm_and_tokenizer(BrainConfig::at(dir), clock, provider.port.clone(), tok)
-                .await?
+            Brain::with_llm_and_tokenizer(
+                BrainConfig::at(dir),
+                clock,
+                provider.port.clone(),
+                tok,
+            )
+            .await?
         }
         None => Brain::with_llm(BrainConfig::at(dir), clock, provider.port.clone()).await?,
     };
-    let space_id = brain.ensure_space(space).await?;
-    let config = llm::config(
-        provider.model_id.clone(),
-        provider.mechanism,
-        provider.model_digest.clone(),
-        provider.profile_id(),
-    );
-
-    let summary = brain.extract_one(&space_id, episode_id, &config).await?;
+    let before = brain.pending_extraction_stats().await?;
+    if before.count == 0 {
+        println!("pending extraction: none");
+        return Ok(());
+    }
+    let limit = limit.unwrap_or(usize::MAX);
+    let extracted = brain.extract_uncached(limit).await?;
+    let after = brain.pending_extraction_stats().await?;
     println!(
-        "episode {episode_id}: {} extracted, {} quarantined (repair attempts consumed)",
-        summary.extracted, summary.quarantined
+        "extracted {extracted} episode(s); {} still pending (oldest seq {:?})",
+        after.count, after.oldest_seq
     );
     Ok(())
 }

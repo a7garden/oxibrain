@@ -55,6 +55,7 @@ use oxibrain_store::documents::{
     ApplyPlan, ChunkUpsert as StoreChunkUpsert, CachedChunk, DocumentCache, DocumentUpsert,
     FtsTable, RootApply as StoreRootApply,
 };
+use oxibrain_store::ledger;
 
 use crate::Brain;
 
@@ -137,12 +138,19 @@ impl Brain {
         let dense_channel_ran;
         if q.planes.contains(&SearchPlane::Documents) {
             freshness = self.index_documents_in_place().await?;
-            documents = self.search_documents(&q).await?;
+            // The documents cache is scoped by the root's `space` NAME from
+            // documents.toml, while `Query.space` conventionally carries the
+            // content-derived id (MCP resolves via `ensure_space`). Translate
+            // id → name once; an unknown string is used verbatim so callers
+            // that already pass names keep working.
+            let mut doc_q = q.clone();
+            doc_q.space = self.resolve_space_name(&q.space).await?;
+            documents = self.search_documents(&doc_q).await?;
             dense_channel_ran = self.embedder.is_some()
                 && matches!(q.mode, CoreQueryMode::Hybrid | CoreQueryMode::Dense);
             if dense_channel_ran {
                 freshness.dense_coverage = self
-                    .dense_coverage(&q.space)
+                    .dense_coverage(&doc_q.space)
                     .await
                     .unwrap_or(None);
             }
@@ -159,6 +167,24 @@ impl Brain {
             documents,
             freshness,
         })
+    }
+
+    /// Resolve a space identifier to the NAME the documents plane stores.
+    /// `Query.space` may be a content-derived id (MCP path) or already a
+    /// name (direct facade callers); a string that matches no space id is
+    /// returned unchanged.
+    async fn resolve_space_name(&self, space: &str) -> Result<String, BrainError> {
+        let target = space.to_string();
+        let fallback = target.clone();
+        let found = self
+            .read(move |conn| {
+                Ok(ledger::list_spaces(conn)?
+                    .into_iter()
+                    .find(|s| s.id == target)
+                    .map(|s| s.name))
+            })
+            .await?;
+        Ok(found.unwrap_or(fallback))
     }
 
     /// Recall with a Documents layer: reconcile once, fetch the top document
@@ -178,11 +204,12 @@ impl Brain {
         if !self.config.read_only {
             let _ = self.index_documents_in_place().await?;
         }
+        let doc_space = self.resolve_space_name(space).await?;
         let doc_hits: Vec<DocumentHit> = {
             let q = CoreQuery {
                 text: query.to_string(),
                 mode: CoreQueryMode::Lexical,
-                space: space.to_string(),
+                space: doc_space,
                 as_of: None,
                 limit: 5,
                 min_confidence: 0.0,
@@ -358,6 +385,65 @@ impl Brain {
                 count: count.max(0) as u64,
                 oldest_seq: oldest_seq.map(|s| s.max(0) as u64),
             })
+        })
+        .await
+    }
+
+    /// Cached document inventory for the operator surfaces (`doctor`,
+    /// `stats`): `(configured roots, cached files)`. A missing `documents.db`
+    /// reports zero cached files rather than an error — a fresh brain that
+    /// has never reconciled is healthy, not broken.
+    pub async fn document_counts(&self) -> Result<(usize, usize), BrainError> {
+        let dir = self.config.dir.clone();
+        blocking(move || {
+            let roots = load_documents_config(&dir)?.roots.len();
+            let files = match DocumentCache::open_ro(&dir) {
+                Ok(cache) => {
+                    let mut total = 0usize;
+                    for meta in cache.list_roots()? {
+                        total += cache.root_manifest(&meta.alias)?.len();
+                    }
+                    total
+                }
+                Err(BrainError::NotFound(_)) => 0,
+                Err(e) => return Err(e),
+            };
+            Ok((roots, files))
+        })
+        .await
+    }
+
+    /// `doc://` refs still in the ledger whose alias is no longer declared in
+    /// `documents.toml` — the dangling-reference report for `doctor`. Such
+    /// episodes are provenance-only legacy rows (spec §11.3); the operator
+    /// decides whether to re-add the alias or redact them.
+    pub async fn dangling_document_refs(&self) -> Result<Vec<String>, BrainError> {
+        let dir = self.config.dir.clone();
+        let cfg = blocking(move || load_documents_config(&dir)).await?;
+        self.read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT source_ref FROM episodes
+                     WHERE source_kind IN ('document', 'document_revision')
+                       AND source_ref LIKE 'doc://%'
+                       AND redacted_at IS NULL",
+                )
+                .map_err(|e| BrainError::Storage(format!("dangling refs prepare: {e}")))?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| BrainError::Storage(format!("dangling refs query: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| BrainError::Storage(format!("dangling refs row: {e}")))?;
+            Ok(rows
+                .into_iter()
+                .filter(|uri| {
+                    let alias = uri
+                        .strip_prefix("doc://")
+                        .and_then(|rest| rest.split('/').next())
+                        .unwrap_or("");
+                    !alias.is_empty() && cfg.root(alias).is_none()
+                })
+                .collect())
         })
         .await
     }

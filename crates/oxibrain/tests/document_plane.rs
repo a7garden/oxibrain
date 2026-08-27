@@ -459,3 +459,57 @@ async fn search_response_keeps_planes_separate_when_both_requested() {
         "documents plane should still hit: {documents:?}"
     );
 }
+
+#[tokio::test]
+async fn document_counts_reports_configured_roots_and_cached_files() {
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    write_documents_config(brain_dir.path(), vault.path(), "personal");
+    write_file(vault.path(), "one.md", "one");
+    write_file(vault.path(), "two.md", "two");
+
+    let brain = make_brain(brain_dir.path()).await;
+    // Fresh brain: cache absent ⇒ zero files, but the configured root counts.
+    let (roots, files) = brain.document_counts().await.unwrap();
+    assert_eq!((roots, files), (1, 0));
+
+    brain
+        .index_documents(IndexOptions {
+            embed: false,
+            budget: None,
+        })
+        .await
+        .unwrap();
+    let (roots, files) = brain.document_counts().await.unwrap();
+    assert_eq!((roots, files), (1, 2));
+}
+
+#[tokio::test]
+async fn dangling_document_refs_lists_only_unknown_aliases() {
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    write_documents_config(brain_dir.path(), vault.path(), "personal");
+    let brain = make_brain(brain_dir.path()).await;
+    let space = brain.ensure_space("personal").await.unwrap();
+
+    for uri in ["doc://gone/note.md?rev=1", "doc://vault/note.md?rev=1"] {
+        brain
+            .ingest_event(
+                &space,
+                format!("body of {uri}"),
+                oxibrain_core::SourceRef::Document { uri: uri.into() },
+                oxibrain_core::TrustTier::Trusted,
+                None,
+                "test",
+            )
+            .await
+            .unwrap();
+    }
+
+    let dangling = brain.dangling_document_refs().await.unwrap();
+    assert_eq!(
+        dangling,
+        vec!["doc://gone/note.md?rev=1".to_string()],
+        "only the alias missing from documents.toml is dangling"
+    );
+}

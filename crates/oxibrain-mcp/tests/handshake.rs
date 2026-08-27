@@ -1,13 +1,13 @@
-//! Server-backed handshake tests for the Oxi Foundation discovery surface:
-//! a real `oxibrain-mcp` socket server driven by `oxibrain-client`.
+//! Server-backed handshake tests for the daemonless stdio transport: a real
+//! `oxibrain-mcp` session (driven in-process over a duplex pipe — the exact
+//! framing `serve --stdio` uses) exercised by `oxibrain-client`.
 //!
 //! These live in the mcp crate because `cargo publish` resolves
 //! dev-dependencies against the crates.io index — a dev-dependency from
 //! oxibrain-client on this crate would form a publish cycle (mcp depends on
 //! client in production). They cover:
 //!
-//! 1. `BrainClient::connect_endpoint` performs a handshake and returns the
-//!    negotiated `BrainCapabilities`.
+//! 1. The client handshake returns the negotiated `BrainCapabilities`.
 //! 2. An incompatible `protocol_version` is rejected with a typed
 //!    `HandshakeError` that names the supported range.
 //! 3. A `min_store_format_version` above the server's is rejected.
@@ -18,36 +18,40 @@
 //!    This is the documented Foundation §8 contract.
 //! 5. The server `ServerInfo` lists the supported protocol range.
 
-#![cfg(unix)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 
 use oxibrain::{Brain, BrainConfig, Capability, Scope};
-use oxibrain_client::BrainClient;
-use oxibrain_client::discovery::BrainEndpoint;
 use oxibrain_client::protocol::{
     ClientOperation, HandshakeError, PROTOCOL_VERSION_MAX, PROTOCOL_VERSION_MIN,
     default_client_hello, parse_handshake_error,
 };
+use oxibrain_client::BrainClient;
+use oxibrain_mcp::{BrainServer, run_session, run_session_gated};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-async fn spawn_server() -> (tempfile::TempDir, PathBuf) {
+/// Spawn an in-process session server over a duplex pipe and attach a
+/// `BrainClient` to the other end. This is the same newline-delimited
+/// JSON-RPC framing `serve --stdio` speaks with a spawned child.
+async fn spawn_server() -> (tempfile::TempDir, BrainClient) {
     let dir = tempfile::TempDir::new().unwrap();
     let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
-    let sock = dir.path().join("test.sock");
-    let sock_clone = sock.clone();
+    let server = Arc::new(BrainServer::from_brain(brain));
+    let (client_side, server_side) = tokio::io::duplex(8192);
+    let (sr, sw) = tokio::io::split(server_side);
     tokio::spawn(async move {
-        let _ = oxibrain_mcp::serve_socket(brain, &sock_clone).await;
+        let _ = run_session(server, sr, sw).await;
     });
-    for _ in 0..100 {
-        if tokio::net::UnixStream::connect(&sock).await.is_ok() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    (dir, sock)
+    let (cr, cw) = tokio::io::split(client_side);
+    let client = BrainClient::from_io(cr, cw);
+    (dir, client)
 }
 
-async fn spawn_auth_server(caps: &[Capability]) -> (tempfile::TempDir, PathBuf, String) {
+/// Spawn a token-gated session (the `serve --stdio` auth shape) and attach a
+/// client that authenticates first. Returns the tempdir, the authenticated
+/// client, and the issued secret.
+async fn spawn_auth_server(caps: &[Capability]) -> (tempfile::TempDir, BrainClient, String) {
     let dir = tempfile::TempDir::new().unwrap();
     let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
     let space_id = brain.ensure_space("personal").await.unwrap();
@@ -58,28 +62,43 @@ async fn spawn_auth_server(caps: &[Capability]) -> (tempfile::TempDir, PathBuf, 
     };
     let (_info, secret) = brain.issue_token(&scope, "test", None).await.unwrap();
 
-    let sock = dir.path().join("auth.sock");
-    let sock_clone = sock.clone();
+    let (client_side, server_side) = tokio::io::duplex(8192);
+    let (sr, sw) = tokio::io::split(server_side);
     tokio::spawn(async move {
-        let _ = oxibrain_mcp::serve_socket_auth(brain, &sock_clone).await;
+        let _ = run_session_gated(Arc::new(brain), sr, sw).await;
     });
-    for _ in 0..100 {
-        if tokio::net::UnixStream::connect(&sock).await.is_ok() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    (dir, sock, secret)
+    let (cr, cw) = tokio::io::split(client_side);
+    let mut client = BrainClient::from_io(cr, cw);
+    client.auth(&secret).await.expect("auth");
+    (dir, client, secret)
+}
+
+/// A raw duplex end for hand-crafted requests (incompatible versions etc.).
+async fn raw_session() -> (tempfile::TempDir, BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>, tokio::io::WriteHalf<tokio::io::DuplexStream>) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+    let (client_side, server_side) = tokio::io::duplex(8192);
+    let (sr, sw) = tokio::io::split(server_side);
+    tokio::spawn(async move {
+        let _ = run_session(
+            Arc::new(BrainServer::from_brain(brain)),
+            sr,
+            sw,
+        )
+        .await;
+    });
+    let (cr, cw) = tokio::io::split(client_side);
+    (dir, BufReader::new(cr), cw)
 }
 
 /// Send a raw JSON-RPC request and read one response. Used by tests that
 /// need to craft an incompatible `protocol_version` and observe the typed
 /// error.
-async fn raw_handshake(sock: &std::path::Path, protocol_version: u32) -> Value {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let stream = tokio::net::UnixStream::connect(sock).await.unwrap();
-    let (read, mut write) = stream.into_split();
-    let mut reader = BufReader::new(read);
+async fn raw_handshake(
+    reader: &mut BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    writer: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    protocol_version: u32,
+) -> Value {
     let req = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -93,18 +112,18 @@ async fn raw_handshake(sock: &std::path::Path, protocol_version: u32) -> Value {
     });
     let mut line = serde_json::to_string(&req).unwrap();
     line.push('\n');
-    write.write_all(line.as_bytes()).await.unwrap();
-    write.flush().await.unwrap();
+    writer.write_all(line.as_bytes()).await.unwrap();
+    writer.flush().await.unwrap();
     let mut resp = String::new();
     reader.read_line(&mut resp).await.unwrap();
     serde_json::from_str(&resp).unwrap()
 }
 
 #[tokio::test]
-async fn connect_endpoint_handshakes_and_returns_capabilities() {
-    let (_dir, sock) = spawn_server().await;
-    let endpoint = BrainEndpoint::from_path(sock.clone()).unwrap();
-    let (mut client, caps) = BrainClient::connect_endpoint(&endpoint)
+async fn client_handshake_returns_capabilities_over_stdio_session() {
+    let (_dir, mut client) = spawn_server().await;
+    let caps = client
+        .handshake(default_client_hello("stdio-client/0.1"))
         .await
         .expect("handshake");
 
@@ -122,10 +141,10 @@ async fn connect_endpoint_handshakes_and_returns_capabilities() {
 
 #[tokio::test]
 async fn handshake_with_incompatible_version_is_rejected() {
-    let (_dir, sock) = spawn_server().await;
+    let (_dir, mut reader, mut writer) = raw_session().await;
 
     // Use a version far outside the supported range.
-    let resp = raw_handshake(&sock, 99).await;
+    let resp = raw_handshake(&mut reader, &mut writer, 99).await;
     let err = resp.get("error").expect("error response");
     let typed = parse_handshake_error(err).expect("typed handshake error");
     match typed {
@@ -144,11 +163,7 @@ async fn handshake_with_incompatible_version_is_rejected() {
 
 #[tokio::test]
 async fn client_hello_with_too_high_min_store_format_is_rejected() {
-    let (_dir, sock) = spawn_server().await;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let stream = tokio::net::UnixStream::connect(&sock).await.unwrap();
-    let (read, mut write) = stream.into_split();
-    let mut reader = BufReader::new(read);
+    let (_dir, mut reader, mut writer) = raw_session().await;
     let req = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -161,8 +176,8 @@ async fn client_hello_with_too_high_min_store_format_is_rejected() {
     });
     let mut line = serde_json::to_string(&req).unwrap();
     line.push('\n');
-    write.write_all(line.as_bytes()).await.unwrap();
-    write.flush().await.unwrap();
+    writer.write_all(line.as_bytes()).await.unwrap();
+    writer.flush().await.unwrap();
     let mut resp = String::new();
     reader.read_line(&mut resp).await.unwrap();
     let v: Value = serde_json::from_str(&resp).unwrap();
@@ -188,11 +203,7 @@ async fn read_only_scope_does_not_escalate_through_handshake() {
     // on the handshake. The escalation test below confirms this is the
     // contract: a Read-only token can perform the handshake AND still be
     // denied Ingest later.
-    let (_dir, sock, secret) = spawn_auth_server(&[Capability::Read]).await;
-
-    let mut client = BrainClient::connect_with_token(&sock, &secret)
-        .await
-        .expect("connect with Read-only token");
+    let (_dir, mut client, _secret) = spawn_auth_server(&[Capability::Read]).await;
 
     let caps = client
         .handshake(default_client_hello("read-only-client/0.1"))
@@ -223,11 +234,10 @@ async fn read_only_scope_does_not_escalate_through_handshake() {
         "expected scope denial, got: {msg}"
     );
 }
-
 #[tokio::test]
 async fn handshake_server_info_lists_supported_range() {
-    let (_dir, sock) = spawn_server().await;
-    let resp = raw_handshake(&sock, PROTOCOL_VERSION_MAX).await;
+    let (_dir, mut reader, mut writer) = raw_session().await;
+    let resp = raw_handshake(&mut reader, &mut writer, PROTOCOL_VERSION_MAX).await;
     let result = resp.get("result").expect("result");
     assert_eq!(
         result["min_compatible"].as_u64().unwrap() as u32,
