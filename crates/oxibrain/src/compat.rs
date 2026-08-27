@@ -69,7 +69,6 @@ fn _check_methods(_brain: &Brain) {
     let _ = Brain::reextract;
     let _ = Brain::consolidate;
     let _ = Brain::summarize_communities;
-    let _ = Brain::job_status;
 
     // Security
     let _ = Brain::issue_token;

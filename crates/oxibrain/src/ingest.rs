@@ -49,30 +49,25 @@ impl Brain {
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
-    /// Ingest an episode and enqueue an extraction job. Returns the episode id.
+    /// Ingest an episode and index it for lexical search. Returns the episode
+    /// id. Queue-less since v11: extraction runs inline or via the uncached
+    /// backlog, so there is no job to enqueue.
     pub(crate) async fn ingest_impl(
         &self,
         space: &str,
         content: String,
         source: SourceRef,
         trust: TrustTier,
-        extractor_id: &str,
+        _extractor_id: &str,
     ) -> Result<String, BrainError> {
         let h = self.handle.clone();
         let now = self.clock.now();
         let space = space.to_string();
-        let extractor_id = extractor_id.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer()?.submit(Box::new(move |conn| {
-                let ep_id = oxibrain_store::extraction::ingest_and_enqueue(
-                    conn,
-                    &space,
-                    &content,
-                    source,
-                    trust,
-                    &extractor_id,
-                    now,
+                let ep_id = oxibrain_store::extraction::ingest_episode(
+                    conn, &space, &content, source, trust, now,
                 )?;
                 let _ = tx.send(ep_id);
                 Ok(())
@@ -94,23 +89,21 @@ impl Brain {
         source: SourceRef,
         trust: TrustTier,
         attachment: Option<oxibrain_store::ledger::IngestAttachment>,
-        extractor_id: &str,
+        _extractor_id: &str,
     ) -> Result<String, BrainError> {
         let h = self.handle.clone();
         let now = self.clock.now();
         let space = space.to_string();
-        let extractor_id = extractor_id.to_string();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer()?.submit(Box::new(move |conn| {
-                let ep_id = oxibrain_store::extraction::ingest_event_and_enqueue(
+                let ep_id = oxibrain_store::extraction::ingest_event(
                     conn,
                     &space,
                     &content,
                     source,
                     trust,
                     attachment.as_ref(),
-                    &extractor_id,
                     now,
                 )?;
                 let _ = tx.send(ep_id);

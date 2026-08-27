@@ -1,8 +1,11 @@
-//! Extraction: job queue lifecycle, response cache, and claim projection (DESIGN §7).
+//! Extraction: response cache and claim projection (DESIGN §7).
 //!
 //! All functions take `&Connection` and are synchronous — they run inside WriteOp
 //! transactions on the writer actor, or inside reader pool reads. LLM calls happen
 //! OFF these functions, in the Brain facade (§7.2: no LLM inside a transaction).
+//!
+//! Since schema v11 there is no durable job queue (two-plane design §11.1):
+//! the extraction backlog is the `uncached_memory_episodes` query.
 
 use crate::knowledge as kcrud;
 use crate::ledger;
@@ -19,232 +22,6 @@ use oxibrain_core::knowledge::{
 use oxibrain_core::{EpisodeKind, SourceRef};
 use oxibrain_ports::{BrainError, TIME_MAX, TIME_MIN, Timestamp};
 use rusqlite::Connection;
-
-// ─── Job queue types ─────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct IngestJob {
-    pub id: String,
-    pub episode_id: String,
-    pub extractor_id: String,
-    pub state: JobState,
-    pub session_hint: Option<String>,
-    pub attempts: u32,
-    pub last_error: Option<String>,
-    pub lease_until: Option<Timestamp>,
-    pub created_at: Timestamp,
-    pub updated_at: Timestamp,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JobState {
-    Ready,
-    Leased,
-    Done,
-    Failed,
-}
-
-impl JobState {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Ready => "ready",
-            Self::Leased => "leased",
-            Self::Done => "done",
-            Self::Failed => "failed",
-        }
-    }
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "ready" => Some(Self::Ready),
-            "leased" => Some(Self::Leased),
-            "done" => Some(Self::Done),
-            "failed" => Some(Self::Failed),
-            _ => None,
-        }
-    }
-}
-
-// ─── Job queue CRUD ──────────────────────────────────────────────────────────
-
-/// Enqueue an extraction job for an episode. Idempotent: same (episode, extractor)
-/// → same job id (INSERT OR IGNORE).
-pub fn enqueue_job(
-    conn: &Connection,
-    episode_id: &str,
-    extractor_id: &str,
-    now: Timestamp,
-) -> Result<String, BrainError> {
-    let job_id = job_id(episode_id, extractor_id);
-    conn.execute(
-        "INSERT OR IGNORE INTO ingest_jobs (id, episode_id, extractor_id, state, attempts, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'ready', 0, ?4, ?4)",
-        rusqlite::params![job_id, episode_id, extractor_id, now.millis()],
-    )
-    .map_err(sql_err)?;
-    Ok(job_id)
-}
-
-/// Claim up to `limit` ready jobs for an extractor. Sets state=leased.
-pub fn claim_jobs(
-    conn: &Connection,
-    extractor_id: &str,
-    lease_timeout_secs: u64,
-    limit: usize,
-    now: Timestamp,
-) -> Result<Vec<IngestJob>, BrainError> {
-    let lease_until = Timestamp::from_millis(now.millis() + (lease_timeout_secs as i64 * 1000));
-
-    // Atomically claim: UPDATE then SELECT.
-    conn.execute(
-        "UPDATE ingest_jobs SET state = 'leased', lease_until = ?1, updated_at = ?2
-         WHERE id IN (
-           SELECT id FROM ingest_jobs
-           WHERE state = 'ready' AND extractor_id = ?3
-           ORDER BY created_at ASC LIMIT ?4
-         )",
-        rusqlite::params![
-            lease_until.millis(),
-            now.millis(),
-            extractor_id,
-            limit as i64
-        ],
-    )
-    .map_err(sql_err)?;
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, episode_id, extractor_id, state, session_hint, attempts,
-                    last_error, lease_until, created_at, updated_at
-             FROM ingest_jobs
-             WHERE state = 'leased' AND extractor_id = ?1 AND lease_until = ?2",
-        )
-        .map_err(sql_err)?;
-
-    let jobs = stmt
-        .query_map(rusqlite::params![extractor_id, lease_until.millis()], |r| {
-            Ok(IngestJob {
-                id: r.get(0)?,
-                episode_id: r.get(1)?,
-                extractor_id: r.get(2)?,
-                state: JobState::parse(&r.get::<_, String>(3)?).unwrap_or(JobState::Failed),
-                session_hint: r.get(4)?,
-                attempts: r.get::<_, i64>(5)? as u32,
-                last_error: r.get(6)?,
-                lease_until: r.get::<_, Option<i64>>(7)?.map(Timestamp::from_millis),
-                created_at: Timestamp::from_millis(r.get(8)?),
-                updated_at: Timestamp::from_millis(r.get(9)?),
-            })
-        })
-        .map_err(sql_err)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(sql_err)?;
-
-    Ok(jobs)
-}
-
-/// Complete a job: state=done.
-pub fn complete_job(conn: &Connection, job_id: &str, now: Timestamp) -> Result<(), BrainError> {
-    conn.execute(
-        "UPDATE ingest_jobs SET state = 'done', updated_at = ?1 WHERE id = ?2",
-        rusqlite::params![now.millis(), job_id],
-    )
-    .map_err(sql_err)?;
-    Ok(())
-}
-
-/// Fail a job: increment attempts. If attempts >= max, state=failed; else state=ready.
-/// Returns the resulting state.
-pub fn fail_job(
-    conn: &Connection,
-    job_id: &str,
-    error: &str,
-    max_attempts: u32,
-    now: Timestamp,
-) -> Result<JobState, BrainError> {
-    // Read current attempts.
-    let attempts: i64 = conn
-        .query_row(
-            "SELECT attempts FROM ingest_jobs WHERE id = ?1",
-            rusqlite::params![job_id],
-            |r| r.get(0),
-        )
-        .map_err(sql_err)?;
-
-    let new_attempts = attempts + 1;
-    let new_state = if new_attempts as u32 >= max_attempts {
-        JobState::Failed
-    } else {
-        JobState::Ready
-    };
-
-    conn.execute(
-        "UPDATE ingest_jobs SET attempts = ?1, state = ?2, last_error = ?3, lease_until = NULL, updated_at = ?4
-         WHERE id = ?5",
-        rusqlite::params![new_attempts, new_state.as_str(), error, now.millis(), job_id],
-    )
-    .map_err(sql_err)?;
-
-    Ok(new_state)
-}
-
-/// Reclaim expired leases: state=leased AND lease_until < now → state=ready.
-pub fn reclaim_expired(conn: &Connection, now: Timestamp) -> Result<usize, BrainError> {
-    let count = conn
-        .execute(
-            "UPDATE ingest_jobs SET state = 'ready', lease_until = NULL, updated_at = ?1
-         WHERE state = 'leased' AND lease_until < ?2",
-            rusqlite::params![now.millis(), now.millis()],
-        )
-        .map_err(sql_err)?;
-    Ok(count)
-}
-
-/// List jobs, optionally filtered by state.
-pub fn list_jobs(conn: &Connection, state: Option<JobState>) -> Result<Vec<IngestJob>, BrainError> {
-    let mut sql = String::from(
-        "SELECT id, episode_id, extractor_id, state, session_hint, attempts,
-                last_error, lease_until, created_at, updated_at
-         FROM ingest_jobs",
-    );
-    if state.is_some() {
-        sql.push_str(" WHERE state = ?1");
-    }
-    sql.push_str(" ORDER BY created_at ASC");
-
-    let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
-    let map_fn = |r: &rusqlite::Row| {
-        Ok(IngestJob {
-            id: r.get(0)?,
-            episode_id: r.get(1)?,
-            extractor_id: r.get(2)?,
-            state: JobState::parse(&r.get::<_, String>(3)?).unwrap_or(JobState::Failed),
-            session_hint: r.get(4)?,
-            attempts: r.get::<_, i64>(5)? as u32,
-            last_error: r.get(6)?,
-            lease_until: r.get::<_, Option<i64>>(7)?.map(Timestamp::from_millis),
-            created_at: Timestamp::from_millis(r.get(8)?),
-            updated_at: Timestamp::from_millis(r.get(9)?),
-        })
-    };
-
-    let jobs = if let Some(s) = state {
-        stmt.query_map(rusqlite::params![s.as_str()], map_fn)
-    } else {
-        stmt.query_map([], map_fn)
-    }
-    .map_err(sql_err)?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(sql_err)?;
-
-    Ok(jobs)
-}
-
-fn job_id(episode_id: &str, extractor_id: &str) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(episode_id.as_bytes());
-    hasher.update(extractor_id.as_bytes());
-    hex::encode(hasher.finalize().as_bytes())
-}
 
 // ─── Response cache CRUD ─────────────────────────────────────────────────────
 
@@ -498,8 +275,10 @@ fn parse_claim_literal(lt: &str, value: &str) -> Result<TypedValue, BrainError> 
     }
 }
 
-/// Find primary episodes that don't have a cache entry for this extractor.
-pub fn uncached_episodes(
+/// Eligible memory-plane backlog (two-plane design §11.1): primary,
+/// non-document, not redacted, and no extraction row for this extractor,
+/// ordered by seq. This query replaces the retired `ingest_jobs` queue.
+pub fn uncached_memory_episodes(
     conn: &Connection,
     space: &str,
     extractor_id: &str,
@@ -508,10 +287,12 @@ pub fn uncached_episodes(
         .prepare(
             "SELECT e.id FROM episodes e
              WHERE e.space_id = ?1 AND e.kind = 'primary'
-             AND NOT EXISTS (
-               SELECT 1 FROM extractions x
-               WHERE x.episode_id = e.id AND x.extractor_id = ?2
-             )
+               AND e.source_kind NOT IN ('document', 'document_revision')
+               AND e.redacted_at IS NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM extractions x
+                 WHERE x.episode_id = e.id AND x.extractor_id = ?2
+               )
              ORDER BY e.seq ASC",
         )
         .map_err(sql_err)?;
@@ -550,15 +331,15 @@ pub fn project_from_cache(
     )
 }
 
-/// Ensure an episode exists and enqueue an extraction job for it.
-/// Convenience function for the Brain facade.
-pub fn ingest_and_enqueue(
+/// Ensure an episode exists and index it for lexical search.
+/// Convenience function for the Brain facade. Queue-less since v11:
+/// extraction is driven by `uncached_memory_episodes`, not a job row.
+pub fn ingest_episode(
     conn: &Connection,
     space: &str,
     content: &str,
     source: SourceRef,
     trust: oxibrain_core::TrustTier,
-    extractor_id: &str,
     now: Timestamp,
 ) -> Result<String, BrainError> {
     let ch = oxibrain_core::content_hash(content);
@@ -582,26 +363,19 @@ pub fn ingest_and_enqueue(
     let ep_id = episode.id.clone();
 
     crate::index_ops::index_episode_fts(conn, &episode.space, &ep_id, &episode.content)?;
-
-    enqueue_job(conn, &ep_id, extractor_id, now)?;
     Ok(ep_id)
 }
 
-// 8 args mirrors `ingest_and_enqueue` (7) plus the attachment; the call
-// sites are the two facade impls, and bundling here would add a type for
-// one extra parameter.
-#[allow(clippy::too_many_arguments)]
-/// Event-identity variant of `ingest_and_enqueue`. Uses `insert_event` with
-/// an optional attachment, then indexes and enqueues extraction.
+/// Event-identity variant of [`ingest_episode`]. Uses `insert_event` with an
+/// optional attachment, then indexes for lexical search.
 /// `trust` is the server-evaluated trust tier for this episode.
-pub fn ingest_event_and_enqueue(
+pub fn ingest_event(
     conn: &Connection,
     space: &str,
     content: &str,
     source: SourceRef,
     trust: oxibrain_core::TrustTier,
     attachment: Option<&ledger::IngestAttachment>,
-    extractor_id: &str,
     now: Timestamp,
 ) -> Result<String, BrainError> {
     let occurred_at = now;
@@ -622,7 +396,6 @@ pub fn ingest_event_and_enqueue(
     let ep_id = episode.id.clone();
 
     crate::index_ops::index_episode_fts(conn, &episode.space, &ep_id, &episode.content)?;
-    enqueue_job(conn, &ep_id, extractor_id, now)?;
     Ok(ep_id)
 }
 
@@ -641,8 +414,14 @@ mod tests {
         (dir, conn, space_id)
     }
 
-    /// Insert a test episode and return its id.
-    fn test_episode(conn: &Connection, space: &str, content: &str) -> String {
+    /// Insert a test episode with explicit source/kind and return its id.
+    fn episode_with(
+        conn: &Connection,
+        space: &str,
+        content: &str,
+        source: SourceRef,
+        kind: EpisodeKind,
+    ) -> String {
         let now = Timestamp::from_millis(2000);
         let mut ep = oxibrain_core::Episode {
             id: String::new(),
@@ -650,11 +429,9 @@ mod tests {
             seq: 0,
             content_hash: oxibrain_core::ContentHash([0u8; 32]),
             content: content.into(),
-            source: SourceRef::Note {
-                path: "test.md".into(),
-            },
+            source,
             trust: oxibrain_core::TrustTier::Trusted,
-            kind: EpisodeKind::Primary,
+            kind,
             occurred_at: now,
             ingested_at: now,
             redacted_at: None,
@@ -664,82 +441,120 @@ mod tests {
     }
 
     #[test]
-    fn job_lifecycle() {
+    fn uncached_memory_episodes_filters_documents_and_redacted() {
         let (_dir, conn, space) = test_store();
         let now = Timestamp::from_millis(2000);
-        let ep = test_episode(&conn, &space, "test content");
 
-        let job_id = enqueue_job(&conn, &ep, "ext1", now).unwrap();
-        assert!(!job_id.is_empty());
+        // Included: a plain primary note with no extraction row.
+        let note = episode_with(
+            &conn,
+            &space,
+            "plain note",
+            SourceRef::Note {
+                path: "a.md".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        // Excluded by source kind: document plane.
+        episode_with(
+            &conn,
+            &space,
+            "document content",
+            SourceRef::Document {
+                uri: "doc://x".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        // Excluded by source kind: document revision.
+        episode_with(
+            &conn,
+            &space,
+            "document revision content",
+            SourceRef::DocumentRevision {
+                uri: "doc://x".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        // Excluded: redacted.
+        let redacted = episode_with(
+            &conn,
+            &space,
+            "redacted note",
+            SourceRef::Note {
+                path: "b.md".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        conn.execute(
+            "UPDATE episodes SET redacted_at = 1 WHERE id = ?1",
+            rusqlite::params![redacted],
+        )
+        .unwrap();
+        // Excluded: not a primary episode.
+        episode_with(
+            &conn,
+            &space,
+            "derived summary",
+            SourceRef::Note {
+                path: "c.md".into(),
+            },
+            EpisodeKind::Derived,
+        );
+        // Excluded for this extractor: already cached by ext1.
+        let cached = episode_with(
+            &conn,
+            &space,
+            "cached note",
+            SourceRef::Note {
+                path: "d.md".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        cache_response(&conn, &cached, "ext1", r#"{"claims":[]}"#, now).unwrap();
+        // Included: cached only by a different extractor.
+        let other_ext = episode_with(
+            &conn,
+            &space,
+            "other extractor note",
+            SourceRef::Note {
+                path: "e.md".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        cache_response(&conn, &other_ext, "ext2", r#"{"claims":[]}"#, now).unwrap();
+        // Excluded: different space.
+        let space2 = ledger::create_space(&conn, "other_space", now).unwrap();
+        episode_with(
+            &conn,
+            &space2,
+            "other space note",
+            SourceRef::Note {
+                path: "f.md".into(),
+            },
+            EpisodeKind::Primary,
+        );
 
-        let jobs = claim_jobs(&conn, "ext1", 300, 10, now).unwrap();
-        assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].state, JobState::Leased);
-
-        complete_job(&conn, &job_id, now).unwrap();
-        let jobs = list_jobs(&conn, Some(JobState::Done)).unwrap();
-        assert_eq!(jobs.len(), 1);
-    }
-
-    #[test]
-    fn job_fail_and_retry() {
-        let (_dir, conn, space) = test_store();
-        let now = Timestamp::from_millis(2000);
-        let ep = test_episode(&conn, &space, "test content");
-
-        let job_id = enqueue_job(&conn, &ep, "ext1", now).unwrap();
-        claim_jobs(&conn, "ext1", 300, 10, now).unwrap();
-
-        let state = fail_job(&conn, &job_id, "timeout", 3, now).unwrap();
-        assert_eq!(state, JobState::Ready);
-
-        let jobs = claim_jobs(&conn, "ext1", 300, 10, now).unwrap();
-        assert_eq!(jobs.len(), 1);
-
-        let state = fail_job(&conn, &job_id, "timeout", 3, now).unwrap();
-        assert_eq!(state, JobState::Ready);
-
-        claim_jobs(&conn, "ext1", 300, 10, now).unwrap();
-        let state = fail_job(&conn, &job_id, "timeout", 3, now).unwrap();
-        assert_eq!(state, JobState::Failed);
-    }
-
-    #[test]
-    fn reclaim_expired_leases() {
-        let (_dir, conn, space) = test_store();
-        let now = Timestamp::from_millis(2000);
-        let ep = test_episode(&conn, &space, "test content");
-
-        enqueue_job(&conn, &ep, "ext1", now).unwrap();
-        claim_jobs(&conn, "ext1", 10, 10, now).unwrap();
-
-        let later = Timestamp::from_millis(20000);
-        let reclaimed = reclaim_expired(&conn, later).unwrap();
-        assert_eq!(reclaimed, 1);
-
-        let jobs = claim_jobs(&conn, "ext1", 300, 10, later).unwrap();
-        assert_eq!(jobs.len(), 1);
-    }
-
-    #[test]
-    fn enqueue_is_idempotent() {
-        let (_dir, conn, space) = test_store();
-        let now = Timestamp::from_millis(2000);
-        let ep = test_episode(&conn, &space, "test content");
-
-        let id1 = enqueue_job(&conn, &ep, "ext1", now).unwrap();
-        let id2 = enqueue_job(&conn, &ep, "ext1", now).unwrap();
-        assert_eq!(id1, id2);
-
-        let jobs = list_jobs(&conn, None).unwrap();
-        assert_eq!(jobs.len(), 1);
+        let ids = uncached_memory_episodes(&conn, &space, "ext1").unwrap();
+        assert_eq!(
+            ids,
+            vec![note.clone(), other_ext],
+            "only uncached memory-plane primary episodes, ordered by seq"
+        );
     }
 
     #[test]
     fn cache_roundtrip() {
         let (_dir, conn, space) = test_store();
+        let ep = episode_with(
+            &conn,
+            &space,
+            "test content",
+            SourceRef::Note {
+                path: "g.md".into(),
+            },
+            EpisodeKind::Primary,
+        );
         let now = Timestamp::from_millis(2000);
-        let ep = test_episode(&conn, &space, "test content");
 
         cache_response(&conn, &ep, "ext1", r#"{"claims":[]}"#, now).unwrap();
 

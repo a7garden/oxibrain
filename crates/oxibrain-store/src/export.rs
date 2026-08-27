@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use rusqlite::types::{Value as SqlValue, ValueRef};
 
 /// Tables to export, in dependency order (parents before children).
+/// `ingest_jobs` was retired in schema v11 and is no longer exported.
 const EXPORT_TABLES: &[&str] = &[
     "spaces",
     "episodes",
@@ -22,7 +23,6 @@ const EXPORT_TABLES: &[&str] = &[
     "statements",
     "assertions",
     "mentions",
-    "ingest_jobs",
     "extraction_failures",
     "audit_log",
     "redactions",
@@ -93,11 +93,23 @@ fn get_column_names(conn: &Connection, table: &str) -> Result<Vec<String>, Brain
     Ok(result)
 }
 
+/// Import result summary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImportSummary {
+    /// Rows inserted.
+    pub imported: usize,
+    /// Pre-v11 `ingest_jobs` rows skipped (the table was dropped in v11).
+    pub skipped_ingest_jobs: usize,
+}
+
 /// Import JSONL into the store. Assumes the store is fresh (tables empty).
-pub fn import_jsonl(conn: &Connection, jsonl: &str) -> Result<(), BrainError> {
+/// Lines for `ingest_jobs` (a pre-v11 export) are skipped with a warning;
+/// any other unknown table is an error.
+pub fn import_jsonl(conn: &Connection, jsonl: &str) -> Result<ImportSummary, BrainError> {
     conn.execute("PRAGMA foreign_keys=OFF", [])
         .map_err(sql_err)?;
 
+    let mut summary = ImportSummary::default();
     for line in jsonl.lines() {
         if line.trim().is_empty() {
             continue;
@@ -108,15 +120,21 @@ pub fn import_jsonl(conn: &Connection, jsonl: &str) -> Result<(), BrainError> {
             .get("table")
             .and_then(|v| v.as_str())
             .ok_or_else(|| BrainError::Storage("missing 'table' field".into()))?;
+        if table == "ingest_jobs" {
+            tracing::warn!(table, "skipping import of retired table ingest_jobs");
+            summary.skipped_ingest_jobs += 1;
+            continue;
+        }
         let row = entry
             .get("row")
             .ok_or_else(|| BrainError::Storage("missing 'row' field".into()))?;
         insert_row(conn, table, row)?;
+        summary.imported += 1;
     }
 
     conn.execute("PRAGMA foreign_keys=ON", [])
         .map_err(sql_err)?;
-    Ok(())
+    Ok(summary)
 }
 
 fn insert_row(conn: &Connection, table: &str, row: &serde_json::Value) -> Result<(), BrainError> {
@@ -276,5 +294,38 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0))
             .unwrap();
         assert_eq!(beliefs_before, beliefs_after);
+    }
+
+    #[test]
+    fn import_pre_v11_jsonl_skips_ingest_jobs() {
+        let conn = Connection::open_in_memory().expect("open");
+        migration::run(&conn).expect("migrate");
+        let jsonl = concat!(
+            r#"{"table":"spaces","row":{"id":"sp1","name":"s","created_at":1}}"#,
+            "\n",
+            r#"{"table":"ingest_jobs","row":{"id":"j1","episode_id":"ep1","extractor_id":"e","state":"ready","attempts":0,"created_at":1,"updated_at":1}}"#,
+            "\n",
+        );
+        let summary = import_jsonl(&conn, jsonl).expect("import must succeed");
+        assert_eq!(summary.imported, 1);
+        assert_eq!(summary.skipped_ingest_jobs, 1);
+        let spaces: i64 = conn
+            .query_row("SELECT COUNT(*) FROM spaces WHERE id = 'sp1'", [], |r| {
+                r.get(0)
+            })
+            .expect("count spaces");
+        assert_eq!(spaces, 1, "non-skipped rows must still land");
+    }
+
+    #[test]
+    fn import_unknown_table_errors() {
+        let conn = Connection::open_in_memory().expect("open");
+        migration::run(&conn).expect("migrate");
+        let jsonl = r#"{"table":"nope","row":{"id":"x"}}"#;
+        let err = import_jsonl(&conn, jsonl).unwrap_err();
+        assert!(
+            err.to_string().contains("nope"),
+            "error should name the unknown table: {err}"
+        );
     }
 }

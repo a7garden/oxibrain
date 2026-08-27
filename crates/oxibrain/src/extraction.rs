@@ -220,8 +220,10 @@ impl Brain {
             eprintln!("warn: recording response failure: {e}");
         }
     }
-    /// Process pending extraction jobs in batch. Claims up to
-    /// `budget.max_episodes_per_batch` ready jobs and extracts each.
+
+    /// Extract uncached memory-plane episodes in batch (queue-less since
+    /// schema v11): takes up to `budget.max_episodes_per_batch` episodes
+    /// from the `uncached_memory_episodes` backlog and extracts each.
     pub(crate) async fn extract_pending_impl(
         &self,
         space: &str,
@@ -229,87 +231,38 @@ impl Brain {
         budget: &oxibrain_core::extraction::ExtractionBudget,
     ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
         let _llm = self.require_llm()?;
-        let now = self.clock.now();
         let extractor_id = config.id();
-
-        // 1. Claim jobs.
-        let h = self.handle.clone();
-        let lease_timeout = budget.lease_timeout_secs;
         let batch_limit = budget.max_episodes_per_batch;
-        let jobs = tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            h.writer()?.submit(Box::new(move |conn| {
-                let _ = oxibrain_store::extraction::reclaim_expired(conn, now);
-                let jobs = oxibrain_store::extraction::claim_jobs(
+        let query_space = space.to_string();
+
+        // 1. Read the queue-less backlog [reader].
+        let h = self.handle.clone();
+        let episode_ids: Vec<String> = tokio::task::spawn_blocking(move || {
+            h.readers.read(|conn| {
+                oxibrain_store::extraction::uncached_memory_episodes(
                     conn,
+                    &query_space,
                     &extractor_id,
-                    lease_timeout,
-                    batch_limit,
-                    now,
-                )?;
-                let _ = tx.send(jobs);
-                Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("claim_jobs channel dropped".into()))
+                )
+            })
         })
         .await
         .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+        let episode_ids: Vec<String> = episode_ids.into_iter().take(batch_limit).collect();
 
-        // 2. Process each job via extract_one.
+        // 2. Extract each episode; `cache_response` inside `extract_one`
+        //    removes it from the backlog.
         let mut total = oxibrain_core::extraction::ExtractSummary::default();
-        for job in jobs {
-            match self.extract_one(space, &job.episode_id, config).await {
+        for ep_id in episode_ids {
+            match self.extract_one(space, &ep_id, config).await {
                 Ok(summary) => {
                     total.extracted += summary.extracted;
                     total.quarantined += summary.quarantined;
                     total.episodes_done += 1;
-                    // Complete the job.
-                    let h = self.handle.clone();
-                    let job_id = job.id.clone();
-                    let now = self.clock.now();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        if let Some(w) = &h.writer {
-                            let _ = w.submit(Box::new(move |conn| {
-                                let _ = tx.send(oxibrain_store::extraction::complete_job(
-                                    conn, &job_id, now,
-                                ));
-                                Ok(())
-                            }));
-                            let _ = w.flush();
-                        }
-                        rx.recv()
-                    })
-                    .await;
                 }
                 Err(e) => {
                     total.episodes_failed += 1;
-                    total.failures.push((job.episode_id.clone(), e.to_string()));
-                    // Fail the job.
-                    let h = self.handle.clone();
-                    let job_id = job.id.clone();
-                    let now = self.clock.now();
-                    let max_attempts = budget.max_repair_attempts + 1;
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        if let Some(w) = &h.writer {
-                            let _ = w.submit(Box::new(move |conn| {
-                                let _ = tx.send(oxibrain_store::extraction::fail_job(
-                                    conn,
-                                    &job_id,
-                                    &e.to_string(),
-                                    max_attempts,
-                                    now,
-                                ));
-                                Ok(())
-                            }));
-                            let _ = w.flush();
-                        }
-                        rx.recv()
-                    })
-                    .await;
+                    total.failures.push((ep_id, e.to_string()));
                 }
             }
         }
@@ -329,10 +282,13 @@ impl Brain {
         let query_space = space.clone();
         let extractor_id = config.id();
 
-        // Find primary episodes that don't have a cache entry for this extractor.
         let episode_ids = tokio::task::spawn_blocking(move || {
             h.readers.read(|conn| {
-                oxibrain_store::extraction::uncached_episodes(conn, &query_space, &extractor_id)
+                oxibrain_store::extraction::uncached_memory_episodes(
+                    conn,
+                    &query_space,
+                    &extractor_id,
+                )
             })
         })
         .await

@@ -1078,13 +1078,17 @@ impl Brain {
     }
 
     /// Import JSONL into the store. Assumes the store is fresh (tables empty).
-    pub async fn import_jsonl(&self, jsonl: String) -> Result<(), BrainError> {
+    /// Pre-v11 `ingest_jobs` lines are skipped and counted in the summary.
+    pub async fn import_jsonl(
+        &self,
+        jsonl: String,
+    ) -> Result<oxibrain_store::export::ImportSummary, BrainError> {
         let h = self.handle.clone();
         tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             h.writer()?.submit(Box::new(move |conn| {
-                oxibrain_store::export::import_jsonl(conn, &jsonl)?;
-                let _ = tx.send(());
+                let summary = oxibrain_store::export::import_jsonl(conn, &jsonl)?;
+                let _ = tx.send(summary);
                 Ok(())
             }))?;
             h.writer()?.flush()?;
@@ -1124,8 +1128,8 @@ impl Brain {
             .await
     }
 
-    /// Process pending extraction jobs in batch. Claims up to
-    /// `budget.max_episodes_per_batch` ready jobs and extracts each.
+    /// Extract uncached memory-plane episodes in batch (queue-less since
+    /// schema v11): up to `budget.max_episodes_per_batch` per call.
     pub async fn extract_pending(
         &self,
         space: &str,
@@ -1143,24 +1147,6 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
         self.reextract_impl(space, config).await
-    }
-
-    /// Query job queue status (counts by state).
-    pub async fn job_status(&self) -> Result<Vec<(String, usize)>, BrainError> {
-        let h = self.handle.clone();
-        tokio::task::spawn_blocking(move || {
-            h.readers.read(|conn| {
-                let jobs = oxibrain_store::extraction::list_jobs(conn, None)?;
-                let mut counts: std::collections::BTreeMap<String, usize> =
-                    std::collections::BTreeMap::new();
-                for job in jobs {
-                    *counts.entry(job.state.as_str().to_string()).or_default() += 1;
-                }
-                Ok(counts.into_iter().collect())
-            })
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Clusters episodes by shared entities → LLM summarize → Derived episode.
