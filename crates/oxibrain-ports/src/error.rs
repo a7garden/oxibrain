@@ -32,6 +32,8 @@ pub enum BrainError {
     Unauthorized(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("busy: {0}")]
+    Busy(String),
 }
 
 impl BrainError {
@@ -41,6 +43,7 @@ impl BrainError {
             self,
             Self::Storage(_)
                 | Self::Locked { .. }
+                | Self::Busy(_)
                 | Self::Provider {
                     retryable: true,
                     ..

@@ -7,6 +7,7 @@ pub mod brief;
 pub mod communities;
 pub mod consolidation;
 pub mod context;
+pub mod documents;
 pub mod explain;
 pub mod export;
 pub mod extraction;
