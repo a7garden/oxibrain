@@ -134,7 +134,7 @@ These are binding. An integration that breaks one is wrong even if it works.
 
 ### C1 — The brain is additive, never load-bearing
 
-Every consuming app retains its primary function with the daemon stopped. oximemo
+Every consuming app retains its primary function with oxibrain absent. oximemo
 captures to files; oxiline runs the day; oxios agents execute without memory.
 Integrations degrade to a disabled panel, never to a blocked action or a spinner.
 **Test it: each app's CI runs its main flow with no brain reachable.**
