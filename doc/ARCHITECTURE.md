@@ -1,6 +1,23 @@
 # oxibrain — Architecture
-> **Version:** v2.10 · **Date:** 2026-08-20 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
-> **v2.10 — Space enumeration and first-party RPC.** Spaces are enumerable
+> **Version:** v2.11 · **Date:** 2026-08-27 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.11 — Two planes, no daemon (spec 2026-08-27).** Documents move to a
+> separate `documents.db` cache rebuilt from configured files and gix history.
+> `Brain` becomes a handle-free runtime facade: read methods open their store
+> per call, write methods acquire the lock with bounded exponential backoff
+> ([25, 50, 100, 200, 400, 800] ms then `Locked`) and drop the handle. The
+> daemon, watcher, socket discovery, sync, and durable job queue are deleted;
+> callers use the CLI, a caller-owned `serve --stdio` child, or foreground
+> `serve --http`. `search` and `recall` accept `planes` (`Memory` /
+> `Documents` / both, default both) and return `SearchResponse { memory,
+> documents, freshness }`. Extraction is queue-less: remember/capture append
+> inline, `extract --pending` loops `uncached_memory_episodes`, legacy
+> document/document_revision episodes are excluded from memory search/context
+> but preserved in the ledger. Memory schema v11 drops `ingest_jobs`.
+> Coordination: ADR-010 is superseded; ADR-011 amended (§4.5 gix read-only);
+> ADR-007 socket/discovery clauses superseded by explicit stdio process
+> launch; Consumption Contract 1.4 records the breaking changes. Workspace
+> `0.6.0 → 0.7.0`; `oxibrain-client 0.7.0 → 0.8.0`.
+> v2.10 — Space enumeration and first-party RPC. Spaces are enumerable
 > (`Brain::list_spaces`, `oxibrain spaces`, `spaces://` resource, native
 > `spaces/list` RPC) — scoped sessions see only their membership, and
 > `resources/read` is now scope-gated like tools (the gap was found and fixed
@@ -23,16 +40,24 @@
 > Split is formalized as the inverse of Merge — it sets `EntityMerge.undone_at`
 > rather than deleting the row — and D34 records the decision. CLI verbs in §16.4
 > gain entity `alias`/`retract`, `declare`, `predicate add`, and `source policy`.
-> v2.7 — Pull-connector occurrence identity. §4.2 documents the `oxibrain sync`
-> pull connector: source identity (`name = canonical vault path`, `kind = document_revision`,
-> `mode = pull`), the occurrence chain `occurrence_id = H(source_id, locator, predecessor,
-> content_hash)`, and the rule that legacy episodes (pre-event-path) are classified but never
-> re-ingested. D33 records the decision. Existing §5.6 derivation is unchanged.
-> v2.9 — Daemon-hosted vault watch (ADR-010). §4.2/§16.4: the daemon adopts
-> every registered pull source into a debounced watcher at startup; `oxibrain
-> sync` attaches to a running daemon via the `sync/run` native RPC instead of
-> failing on the P8 lock. `oxibrain::vault::{sync_vault, pull_sources}` is the
-> single implementation shared by CLI, RPC, and watcher.
+> v2.7 — Pull-connector occurrence identity (later superseded by v2.11). §4.2.1
+> documented the `oxibrain sync` pull connector: source identity (`name =
+> canonical vault path`, `kind = document_revision`, `mode = pull`), the
+> occurrence chain `occurrence_id = H(source_id, locator, predecessor,
+> content_hash)`, and the rule that legacy episodes (pre-event-path) are
+> classified but never re-ingested. D33 records the decision. The v2.11
+> cutover retires `oxibrain sync`; documents become a separate `documents.db`
+> cache rebuilt from configured roots and gix history, with no ingest-time
+> conversion into memory episodes. `Legacy document/document_revision`
+> episodes in the ledger are excluded from memory search/context/extraction
+> but preserved until redacted. Existing §5.6 derivation is unchanged.
+> v2.9 — Daemon-hosted vault watch (ADR-010, since superseded by v2.11).
+> §4.2/§16.4 once said: the daemon adopts every registered pull source into a
+> debounced watcher at startup; `oxibrain sync` attached to a running daemon
+> via the `sync/run` native RPC instead of failing on the P8 lock. The cutover
+> in v2.11 retires the watcher, the socket-attached sync, and the durable job
+> queue entirely; `oxibrain::vault` is gone. Kept here as the historical
+> changelog of what v2.10 shipped before v2.11 undid it.
 > **Status:** Canonical. The single source of truth for oxibrain's architecture.
 > **Authority:** Superseded only by a newer dated revision of this file. Consumer projects
 > (including `oxios`) adapt to this document, not the other way around.
@@ -92,19 +117,24 @@ the tokenizer is what makes a token budget exact in every writing system instead
 factor of five in half of them (§7.5).
 
 ---
+### 1.3 What ships
 
-## 1. Product definition
+One engine, three delivery shapes. v2.11 cuts the resident daemon: long-lived
+processes are allowed only when owned by an active caller.
 
-### 1.1 What it does
+| Artifact | Form | Audience |
+|---|---|---|
+| `oxibrain` crate | Rust library — the handle-free `Brain` facade (§3.1) | apps embedding a brain in-process |
+| `oxibrain` binary | **one** executable: CLI plus caller-owned `serve --stdio` (for MCP and library sessions) and foreground `serve --http` (for the operations UI). No daemon, no socket listener, no `--watch`. | standalone users, MCP clients, a team node |
+| embedded console | a **repair/operations** UI bundled inside the binary (`include_dir!`, §16.6) — no `cargo install` extra step, no Node, no `--ui-dir` | users who want to review merges, contradictions, failures, sources, and run reproject |
 
-- **Ingests** episodes — conversations, notes, documents, messages, agent traces.
-- **Extracts** entities, relationships, and observations with a model, under a generated
-  schema, every claim traceable to its source.
-- **Tracks time** — what was true when, and when the system came to believe it.
-- **Answers** via hybrid retrieval: lexical, semantic, multi-hop traversal, and thematic
-  community search.
-- **Lets agents navigate** rather than only query (§14).
-- **Serves** humans (CLI, embedded console, MCP) and agents (MCP, Rust API).
+The product must be complete with no GUI and no ambient service:
+`cargo install oxibrain-cli && oxibrain init && oxibrain ingest ~/notes && oxibrain ask "…"`.
+A GUI or a daemon required for the product to make sense would mean the CLI and
+stdio surfaces failed.
+
+Under C2, model weights pull lazily on the first extraction command (§8.4); `init`
+afterwards.
 
 ### 1.2 Who it is for, in order
 
@@ -116,24 +146,6 @@ factor of five in half of them (§7.5).
 
 (3) is why spaces, scoped capabilities, trust tiers, redaction, and audit are designed in
 rather than bolted on: cheap now, structurally expensive later.
-
-### 1.3 What ships
-
-One engine, three delivery shapes.
-
-| Artifact | Form | Audience |
-|---|---|---|
-| `oxibrain` crate | Rust library — the `Brain` facade | apps embedding a brain in-process |
-| `oxibrain` binary | **one** executable: CLI, MCP server, and daemon as subcommands | standalone users, MCP clients, a team node |
-| embedded console | a **repair/operations** UI bundled inside the binary (`include_dir!`, §16.6) — no `cargo install` extra step, no Node, no `--ui-dir` | users who want to review merges, contradictions, failures, sources, and run reproject |
-
-The product must be complete with no GUI:
-`cargo install oxibrain-cli && oxibrain init && oxibrain ingest ~/notes && oxibrain ask "…"`.
-A GUI required for the product to make sense would mean the CLI and MCP surfaces failed.
-
-Under C2, model weights pull lazily on the first extraction command (§8.4); `init`
-stays instant and offline. The binary stays small; the product works offline
-afterwards.
 
 ### 1.4 Boundary: oxibrain is not an editor
 
@@ -208,7 +220,14 @@ Episodes are **immutable and append-only**. Everything else — entities, statem
 embeddings, indexes, salience — is **derived** and reconstructible by replaying the ledger.
 `oxibrain reproject` is a supported, tested operation.
 
-The projection has **two halves with different contracts** (§5.1):
+P1 is scoped to the **memory plane** (`brain.db`): ledger-derived memory projections remain
+replayable, while **document ranking is reconstructed from configured files and git history**
+at query time. `documents.db` is a disposable cache (§5.1); dropping and rebuilding it loses
+no memory — only the materialized projection of the user's files. The v2.11 cutover keeps the
+ledger the single source of truth for what oxibrain *believes* and confines documents to a
+rebuildable read-side cache.
+
+The memory projection has **two halves with different contracts** (§5.1):
 
 - **Truth** — entities, keys, merges, statements, assertions, mentions, beliefs, predicates.
   Rebuilt **byte-identically**. Anything that can change *what is believed* lives here.
@@ -225,11 +244,6 @@ Two corollaries with teeth:
 - **Truth is a deterministic function of the ledger.** Not "equivalent", not "isomorphic" —
   byte-identical, guaranteed by deterministic identity (§5.6) and canonical processing order.
   §17.3 tests it.
-
-*Why the split:* §11.2 already holds that truth and salience are different things. Applying the
-same line to the determinism contract is what lets a real embedding model exist inside a design
-that promises reproducibility. An exception bolted onto P1 would accumulate; an extension of an
-existing distinction does not.
 
 ### P2 — Assertions, not facts
 
@@ -277,14 +291,23 @@ reachable in-process, and vice versa.
 ### P7 — Ports at the boundary
 
 Inference, embedding, tokenization, reranking, and clock are **traits owned by oxibrain**.
-Providers are adapters behind feature flags. Under C2 the *defaults* are local, but they are
 still adapters — the engine choice stays reversible.
 
-### P8 — One writer per store
+### P8 — One writer per store, scoped to one operation
 
-Exactly one writing process, enforced by an advisory lock. Multi-application access goes
-through the daemon (§4.3). Concurrent writers with divergent in-memory indexes are designed
-out, not documented around.
+Each store (`brain.db` and `documents.db` independently) admits **exactly one writing
+process at a time**, enforced by an advisory lock. What changed in v2.11 is the **lifetime
+of the write handle**: it belongs to **one operation, not one process**. The public `Brain`
+is a handle-free runtime facade (§3.1); a read method opens its store per call and drops
+the handle; a write method acquires the lock, opens a fresh writer, performs the short
+database work, and drops the handle. Concurrent writers with divergent in-memory indexes
+are designed out, not documented around.
+
+Multi-application access no longer needs a daemon to arbitrate: any number of caller-owned
+`serve --stdio` children (or foreground `serve --http` sessions, or in-process `Brain`
+facades) can coexist because **no application monopolizes the lock**. A lock collision
+retries with bounded exponential backoff ([25, 50, 100, 200, 400, 800] ms) and surfaces
+`BrainError::Locked` with the holder path.
 
 ### P9 — Decision and data are separate
 
@@ -327,20 +350,25 @@ was decided; it arrived as the default when nobody decided.
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │ SURFACES (adapters — no business logic)                               │
-│  oxibrain-cli  ·  oxibrain-mcp (stdio · socket · HTTP)                │
-│  Rust API (oxibrain crate)     ·  embedded console (§16.6)            │
+│  oxibrain-cli  ·  oxibrain-mcp (stdio · foreground HTTP)              │
+│  Rust API (oxibrain crate — handle-free `Brain`)                      │
 │ oxibrain-views — rendered pages. Never stored, never touches SQLite   │
 │  brief · navigate · profile                                           │
 ├───────────────────────────────────────────────────────────────────────┤
 │ oxibrain-core — the engine. Pure. Decides.                            │
 │  fold · resolve · rank · pack · pipeline::step · registry · identity  │
+│  document planners: diff_roots · plan_reconcile · chunk_id            │
 ├───────────────────────────────────────────────────────────────────────┤
 │ oxibrain-index — pure algorithms                                      │
 │  ngram · blocking · rrf · mmr · knn · adjacency · community · quantize│
 ├───────────────────────────────────────────────────────────────────────┤
 │ oxibrain-store — the only thing that touches SQLite. Fetches, writes. │
-│  ledger │ cache │ projection │ ops                                    │
-│  migrations · single-writer actor · reader pool · backup              │
+│  brain.db (ledger │ cache │ projection │ ops)                          │
+│  documents.db (disposable document cache — own schema, own lock)       │
+│  migrations · operation-scoped handle · reader pool · backup          │
+├───────────────────────────────────────────────────────────────────────┤
+│ oxibrain-connectors — filesystem + gix (read-only). No SQLite.         │
+│  documents.toml · plain scan · gix HEAD/history/ignores               │
 ├───────────────────────────────────────────────────────────────────────┤
 │ PORTS (traits owned by oxibrain, implementations pluggable)           │
 │  LlmPort · EmbeddingPort · TokenizerPort · RerankPort · ClockPort     │
@@ -349,17 +377,19 @@ was decided; it arrived as the default when nobody decided.
 ```
 
 The layering rule that makes this real rather than decorative is P9, and it is CI-enforced
-(§18).
+(§18). v2.11 splits the persisted surface into two databases: `brain.db` (the memory ledger
+and its projections, schema v11) and `documents.db` (a disposable cache rebuilt from
+configured files and gix history). Each store has its own advisory lock and WAL; they never
+share a connection.
 
 ### 4.2 Data flow
 
 ```mermaid
 flowchart TB
-  subgraph Write
-    S[source: note / chat / doc / trace / declaration] --> C[connector]
+  subgraph Memory plane ("brain.db")
+    S[source: note / chat / trace / declaration] --> C[connector]
     C --> E[(episode — immutable, event-identified)]
-    E --> Q[(ingest job queue — durable)]
-    Q --> CH[chunk + deterministic context prefix]
+    E --> CH[chunk + deterministic context prefix]
     CH --> X[extract: LlmPort, registry-derived grammar]
     X --> RC[(extraction cache — keyed by content+extractor)]
     RC --> V{validate against predicate registry}
@@ -370,11 +400,18 @@ flowchart TB
     A --> B[belief projection: temporal fold]
     B --> IDX[ranking half: vectors, FTS, adjacency, communities]
   end
+  subgraph Document plane ("documents.db")
+    ROOT[documents.toml: alias, path, space, include/exclude] --> SC[plain-root scan]
+    GIT[gix read-only: HEAD snapshot, history, ignores] --> SC
+    SC --> PL[core::documents::plan_reconcile — pure]
+    PL --> DC[(documents.db — doc_chunks, doc_fts_word, doc_fts_ngram, doc_vectors)]
+  end
   subgraph Read
-    Qy[query] --> F[channels → fusion → rerank → rank]
+    Qy[query with planes] --> F[channels → fusion → rerank → rank — per plane]
     B --> F
     IDX --> F
-    F --> Ans[ranked results + provenance + explain + drops]
+    DC --> F
+    F --> Ans[SearchResponse: memory hits + document hits + freshness]
     B --> BR[brief / navigate / profile]
   end
 ```
@@ -382,76 +419,83 @@ flowchart TB
 **Every arrow after `episode` is replayable.** Drop the projection and `reproject` rebuilds it
 with no model call, because extraction outputs are cached against the ledger.
 
-#### 4.2.1 Pull connector — `oxibrain sync` and occurrence chains
+#### 4.2.1 Documents — `documents.toml`, `documents.db`, and gix read history
 
-The **pull connector** (`oxibrain sync <dir>`, the markdown vault adapter in
-`oxibrain-connectors`) is the first concrete consumer of event identity for new-path
-episodes. Connectors that push into the brain (chat, declarations, agent traces) carry their
-own identity at the source; the pull connector must derive it from filesystem state alone,
-because the user owns the files and oxibrain does not (§1.4).
+v2.11 retires the pull-connector (`oxibrain sync`) and the `sources` table's
+document-role rows. Documents no longer become memory episodes: the v2.7 occurrence
+chain (`occurrence_id = H(source_id, locator, predecessor, content_hash)`) is preserved
+as a derivation rule for the legacy episodes already in the ledger, but no new document
+episodes are produced. The connector surfaces below are about the new document plane.
 
-A pull-connector ingest is built from four inputs:
+**Document root configuration.** Document roots come only from `documents.toml` in the
+brain data directory (`<dir>/documents.toml`):
 
-```
-source_id       = ensure_source(space, name = canonical(dir), kind = "document_revision", mode = "pull")
-locator         = relative path inside the vault (forward-slash separators)
-predecessor     = latest event-path occurrence_id for that locator in this source, if any
-content_hash    = blake3(file_bytes)
-
-occurrence_id   = blake3(source_id, locator, predecessor, content_hash)
-```
-
-The `predecessor` field is the **occurrence-chain link**: it is the `latest_occurrence_id`
-stored for the locator after the previous successful sync. A fresh locator has `predecessor =
-None`; subsequent edits chain off the previous occurrence. Because the derivation hashes
-`predecessor`, every temporal reversion produces a distinct occurrence. The classic failure
-mode of pure content-hash dedup — A → B → A reduces to one event and silently drops the
-reversion — cannot happen here:
-
-| Sync | locator | content | predecessor | occurrence_id |
-|---|---|---|---|---|
-| 1 | `note.md` | `"A"` | `None` | `occ₁` |
-| 2 | `note.md` | `"B"` | `occ₁` | `occ₂` |
-| 3 | `note.md` | `"A"` | `occ₂` | `occ₃` (≠ `occ₁` despite equal bytes) |
-
-Three writes yield three distinct events; the second `"A"` is `Modified`, not `Unchanged`,
-because classification consults event-path state for content equivalence (§5.6). `mtime`,
-wall-clock, and process-local counters never define identity (§5.6) — they appear only in
-`occurred_at` / `ingested_at` as audit fields.
-
-**Classification precedence** (`oxibrain-core::sync::classify_event`, pure — P9):
-
-```
-event_states > legacy (KnownNotes) > New
+```toml
+[[root]]
+alias = "vault"
+path  = "~/.oxi/vault"            # canonicalized at load; never returned to agents
+space = "personal"                  # mandatory; missing => doctor error, root disabled
+include = ["**/*.md", "**/*.txt", "**/*.html"]   # default: text-bearing extensions
+exclude = ["**/.git/**", "**/.DS_Store", "**/*.tmp", "**/*.lock"]
+max_file_bytes = 10485760
 ```
 
-Event-path state is consulted first; if the locator has a `latest_content_hash` equal to the
-file's hash, the file is `Unchanged`. If it differs, the file is `Modified`. Only if no
-event-path state exists does the legacy knowledge of pre-existing note hashes apply — and
-pure `New` is reached when nothing is known. Legacy episodes (the v9-era rows with
-`source_id IS NULL`) participate in `Unchanged` classification *only*; they are never
-re-ingested. The first occurrence on the event path for a previously legacy-only locator
-thus produces exactly one `Modified` ingest, after which the locator lives on the event path.
+Rules:
 
-**Idempotency and crash safety.** Replaying the same `(source_id, locator, predecessor,
-content_hash)` tuple is a no-op: the partial unique index `idx_ep_occurrence` (§5.7) makes
-duplicate insertion a database-level conflict, not a code-level check. A scan that crashes
-mid-ingest can therefore be replayed without producing duplicates or skipping uncommitted
-files — only `Unchanged` and successfully-committed `Modified` rows exist after replay.
+- `alias` is mandatory and globally unique (the document cache enforces this on `apply`).
+- `path` is canonicalized at load but never returned to an agent.
+- `space` is mandatory; a missing space disables that root with a doctor error.
+- `locator` is the normalized root-relative path with `/` separators.
+- symlinks are not followed; traversal outside the canonical root is rejected.
+- unreadable, oversized, unsupported, and binary files are skipped and reported by
+  `doctor`; they never fail a query.
+- git roots additionally honor repository ignore rules through gix (§5).
+- `oxibrain init` seeds `documents.toml` only when: the resolved data directory is the
+  canonical default `~/.oxi/brain`, the user did not pass `--dir`, and `~/.oxi/vault`
+  exists. Explicit or temporary `--dir` never reads, writes, or references the default
+  vault. Upgrade-time `open` never seeds roots. Legacy `sources` rows are never
+  imported. Custom roots require an explicit config edit.
 
-**Source registration.** `ensure_source` is keyed by `(space_id, name)` (UNIQUE in §5.7)
-and is stable across re-syncs: the canonical absolute path of `dir` is the source's `name`,
-so two runs of `oxibrain sync` against the same vault address the same source, derive the
-same `source_id`, and continue the chain. Distinct vaults naturally map to distinct sources
-even when their root filenames collide. `kind = "document_revision"` and `mode = "pull"`
-are fixed by the connector — the source registry distinguishes this connector from any
-future push-mode, web-connector, or agent-trace sources that share the same space.
+**Document identity.** For a `(root_alias, locator)` pair the document identity is
 
-> **Boundary.** This subsection specifies the *pull* connector's identity derivation only.
-> Push connectors (chat, declarations, agent traces) carry their own source identity at the
-> call site; D27's model-ownership rule covers local inference. Sync across devices (§15.6)
-> is post-v1 — when it lands, occurrence chains survive the round trip because every
-> occurrence is reproducible from `(source_id, locator, predecessor, content_hash)` alone.
+```
+document_id = blake3(root_alias, locator)
+revision    = git:<format>:<blob-oid>        # when a clean tracked file matches HEAD
+              blake3:<hex>                    # dirty worktree / untracked / plain roots
+chunk_id    = blake3(document_id, revision, ordinal)
+```
+
+`doc://<alias>/<pct-locator>?rev=<revision>` is the document URI; `DocumentRef` is a
+typed literal in the predicate registry so memory declarations can reference documents
+without a special case. `revision` is always bytes-shaped (no upstream coupling).
+
+**gix read side (`GitDocumentReader`).** `oxibrain-connectors` opens repositories
+read-only via `gix` (`gix::open`, fail-soft to plain-root indexing when not a repo).
+HEAD is walked once per query to build `tracked: BTreeMap<locator, GitBlob>`; per-path
+`is_ignored` consults `repo.excludes` with a `glob`-crate fallback. The reader provides:
+
+- `snapshot()` — HEAD tree, object format, `tracked` map.
+- `current_revision(snapshot, locator, worktree_bytes)` — `git:<format>:<oid>` when the
+  worktree bytes match the HEAD blob, else `blake3:<hex>`.
+- `history(alias, locator, limit)` — oldest first, filtered to commits where the path
+  exists in the tree (mirrors `oxi-vault-git::log_for_file`). Powers `document_history`.
+- `rename_hint(old_locator)` — latest commit where `old_locator` disappeared and a
+  new path with the identical blob oid appeared; `None` on ambiguity. Doctor surfaces
+  dangle.
+
+oxibrain never initializes, adopts, commits, restores, stages, or modifies a
+repository. Writes stay with oximemo/oxios via `oxi-vault-git` (ADR-011, §5.4.5).
+The default build depends directly on `gix`, not on any `oxi-*` crate, preserving the
+standalone guarantee.
+
+**Legacy episode preservation.** Pull-connector episodes ingested before v2.11
+(pre-event-path legacy rows with `source_id IS NULL`, plus event-path rows with
+`kind = 'document' | 'document_revision'`) remain in the ledger unchanged. They are
+**excluded from memory search, context assembly, and extraction** by the filter
+`source_kind NOT IN ('document', 'document_revision')` — they cannot become new
+memory facts. `redact` still works on them, the doc:// links still resolve through
+`document_history`, and doctor reports them as a legacy section. Migration preserves
+reachability.
 
 #### 4.2.2 Curation operations
 
@@ -510,29 +554,33 @@ same truth half whether replayed in one pass or incrementally built.
 
 ### 4.3 Deployment modes
 
+v2.11 removes the resident daemon topology. The memory data plane is whatever process
+currently holds the advisory lock — a CLI invocation, a `serve --stdio` child owned by
+an MCP or library session, or a foreground `serve --http` operations UI. There is no
+ambient discovery and no `~/.oxi/brain/oxibrain.sock` listener.
+
 | Mode | Who runs it | Storage access | Use |
 |---|---|---|---|
-| **Embedded** | one host process links `oxibrain` | exclusive advisory lock | a single app, a CLI run, tests |
-| **Daemon** (`oxibrain serve --daemon`) | background service owns the store | sole writer; clients speak MCP over socket / stdio / HTTP | several apps share one brain |
+| **Embedded** | one host process links `oxibrain` | operation-scoped handle (P8); exclusive advisory lock only for the duration of one write | a single app, a CLI run, tests |
+| **Caller-owned stdio** (`oxibrain serve --stdio --dir <dir>`) | an MCP or library session spawns the child; the child opens stores per request and dies when stdin closes | same — operation-scoped handle, no daemon hold | MCP clients, oxios/oximemo/oxiline integration, Claude Desktop |
+| **Foreground HTTP** (`oxibrain serve --http <addr> --dir <dir>`) | explicit user-started UI process, loopback-only by default | operation-scoped handle | the embedded repair/operations console (§16.6) |
 | **Read-only library** | any process | read-only connection, no index mutation | analytics, export |
 
-The daemon is the **sole durable-memory data plane** for the oxi ecosystem: every consuming
-app (oxicode, oxios, oxiline, oximemo, and external MCP clients) reaches durable state
-exclusively through it. With the daemon stopped, callers **degrade** — they do not instantiate
-an app-local durable fallback, because a second store would re-create the silo this design
-removes. Discovery of the daemon is by the Foundation contract (§15, `doc/spec/oxi-foundation-v1.md`):
-clients find the listening socket via the default `~/.oxi/brain/oxibrain.sock` path or the
-`$OXIBRAIN_SOCKET` override and never read SQLite directly. The Oxi Foundation v1 contract is
-additive: a client that cannot parse the file still speaks JSON-RPC and still respects scopes.
+The memory data plane is **shared infrastructure without an ambient owner**. Several
+applications share one brain without a daemon because **no application monopolizes the
+lock** (P8): each write takes the lock, does its short work, and releases it. C1
+(ECOSYSTEM.md) holds at the data-plane level: every consuming app retains its primary
+function with the brain offline; integrations degrade to a disabled panel, never to a
+blocked action.
 
-Embedded mode fails fast with a clear error if a daemon holds the lock, and prints the command
-to attach instead. Two processes with independent in-memory indexes writing one SQLite file is
-a corruption path; the answer is a topology, not a mutex.
+Embedded mode fails fast with `BrainError::Locked` when another process holds the
+write lock, with the holder path and bounded retry guidance. Two processes with
+divergent in-memory indexes writing one SQLite file is still a corruption path — the
+v2.11 answer is operation-scoped handles (P8), not a topology that never existed.
 
 ---
 
 ## 5. Data model
-
 ### 5.1 Zones, and the two halves of the projection
 
 The distinction that matters is **what it costs to lose each one**.
@@ -543,7 +591,8 @@ The distinction that matters is **what it costs to lose each one**.
 | **Cache** | `extractions` (raw responses), `summaries` (generated text), **model weights** | rebuildable **with money and time** (weights: with bandwidth) | default yes, `--no-cache` to skip |
 | **Projection — Truth** | `entities`, `entity_keys`, `entity_merges`, `statements`, `assertions`, `mentions`, `beliefs`, `predicates` | free to rebuild | default no |
 | **Projection — Ranking** | vectors, FTS, `chunks`, adjacency, `communities`, salience | free to rebuild | default no |
-| **Ops** | `ingest_jobs`, `extraction_failures`, `audit_log`, `meta` | audit is irreplaceable; the rest is disposable | audit always |
+| **Document cache** | `documents.db` — `doc_roots`, `doc_manifest`, `documents`, `doc_chunks`, `doc_fts_word`, `doc_fts_ngram`, `doc_vectors` (separate database, separate lock) | **disposable** — rebuilt from configured files and gix history by `index --documents` or any document query | default no |
+| **Ops** | `extraction_failures`, `audit_log`, `meta` | audit is irreplaceable; the rest is disposable | audit always |
 
 **The Truth/Ranking line is a contract, not a label.**
 
@@ -940,15 +989,26 @@ CREATE VIRTUAL TABLE fts_ngram USING fts5(body, space_id UNINDEXED,
 -- Dense vectors via sqlite-vec; quantized (D25).
 -- communities, adjacency cache, salience: see §11.
 
--- ── Ops ───────────────────────────────────────────────────────────────
-CREATE TABLE ingest_jobs (
-  id TEXT PRIMARY KEY, episode_id TEXT NOT NULL REFERENCES episodes(id),
-  extractor_id TEXT NOT NULL, state TEXT NOT NULL,
-  session_hint TEXT,
-  attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
-  lease_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+-- ── Ops (schema v11) ───────────────────────────────────────────────────
+-- The extraction backlog is now `uncached_memory_episodes(...)` (§9.1); the
+-- durable `ingest_jobs` queue was dropped in v11. The extraction cache and the
+-- audit log remain:
+CREATE TABLE extraction_failures (
+  episode_id   TEXT NOT NULL REFERENCES episodes(id),
+  extractor_id TEXT NOT NULL,
+  raw_response TEXT NOT NULL,
+  error        TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  PRIMARY KEY (episode_id, extractor_id)
 );
-```
+CREATE TABLE audit_log (
+  id          TEXT PRIMARY KEY,
+  actor       TEXT NOT NULL,
+  scope       TEXT NOT NULL,
+  operation   TEXT NOT NULL,
+  target      TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL
+);
 
 Chunk text is **not** stored — it is `substr(episodes.content, span_start, …)`. One copy of the
 bytes, and redaction already tombstones the source.
@@ -1349,16 +1409,29 @@ change that:
 
 ### 9.1 Stages
 
+v2.11 removes the durable extraction job queue. The backlog is now a derived query —
+`uncached_memory_episodes(space, extractor_id)` in `oxibrain-store` — that returns the
+set of memory-plane episodes with no extraction row for this extractor, in `seq` order.
+`extract_uncached(limit)` walks it under the write lock; `pending_extraction_stats()`
+reports `{count, oldest_seq}` without walking the whole ledger. `remember` / explicit
+capture / `ingest` append the episode inline and return `Captured { episode_id }` or
+`CapturedPending { episode_id, pending_count }` when the model call fails; the caller
+retries via `extract_uncached`.
+
 ```
-connector → episode (idempotent by event identity) → job enqueued → lease
+connector → episode (idempotent by event identity)
   → chunk (+ deterministic context prefix)
   → extract (LlmPort, registry-derived grammar) → cache raw response
   → parse → validate against registry → capture mentions → resolve identity
-  → write assertions → fold beliefs → update ranking half → job done
+  → write assertions → fold beliefs → update ranking half
 ```
 
-Each stage is separately restartable with its state in `ingest_jobs`. A crash resumes from the
-last committed stage.
+Model calls happen between writes, never inside a write transaction (§9.2). The
+`Compute(Effect)` step is outside any `StoreHandle`; the `Commit(WriteBatch)` step is
+one short transaction that opens and closes its handle (P8, §3.1). A crash mid-extraction
+leaves the episode appended but un-extracted: the next `extract_uncached` pass picks it
+up from the derived backlog. No retry queue is needed because the backlog is the set
+difference.
 
 The stage sequence is a **pure state machine** in core (P9):
 
@@ -1367,7 +1440,7 @@ pub enum Stage { Chunk, Extract, Validate, Resolve, Assert, Fold, Index, Done }
 
 pub enum Step {
     Compute(Effect),        // model / embedding call — outside any transaction (§9.2)
-    Commit(WriteBatch),     // one short transaction
+    Commit(WriteBatch),     // one short transaction; opens + drops its handle
     Advance(Stage),
     Fail(ExtractionFailure),
 }
@@ -1858,7 +1931,7 @@ ledger: it clusters ledger episodes by topic or temporal proximity, emits a new
 extraction summary, and writes that derived episode into the ledger as an ordinary immutable
 row. Application note curation — a user editing a memo, oximemo's user reordering a card, an
 Oxios agent rewriting its scratchpad — is editing the host's own files and never crosses the
-daemon boundary. The brain does not maintain a parallel curation surface and never mutates
+memory plane boundary. The brain does not maintain a parallel curation surface and never mutates
 an `EpisodeKind::Derived` episode in place. Re-deriving a cluster (because the underlying
 model changed, or because new source episodes arrived) writes a **new** derived episode; the
 previous one stays, and `Belief` / `support` / `Uncertainty` continue to be computed from the
@@ -1949,8 +2022,8 @@ pub struct Scope {
 ```
 
 Tokens: `oxibrain token issue --space work --caps read,query --expires 30d`. MCP clients present
-one. An unauthenticated daemon is acceptable only over a Unix socket with filesystem
-permissions, behind an explicit flag with a startup warning.
+one. The `serve --http` console and stdio children are loopback-only by default; non-loopback
+binds require TLS and refuse to start without it (§15.6).
 
 `Sample` is a distinct capability (§8.3). `TrustedIngest` is the narrowly scoped authority to
 override server trust evaluation and explicitly mark an ingest as trusted (§15.3).
@@ -2019,15 +2092,15 @@ removed. "Forget this person entirely" is a supported, tested operation.
   mutable slices needing real merge semantics: user merges, resolutions, config. Derived state
   is never synced; each device reprojects.
 
-### 15.7 Foundation profile boundary — secrets, scopes, and discovery
+### 15.7 Foundation profile boundary — secrets, scopes, and session transport
 
 The Foundation v1 contract (`doc/spec/oxi-foundation-v1.md`, ADR-007) governs how a host
-process resolves a profile's Keychain-locator reference into a usable credential, and how
-that resolution stays out of the daemon. The rules below are enforced at the **facade/CLI
-boundary** of `oxibrain` (and of every consumer of `oxibrain-client`). `oxibrain-core`,
-`oxibrain-store`, and `oxibrain-index` never see a Keychain reference, a profile JSON path,
-or a provider secret. They take an `LlmPort` (or `EmbeddingPort`) that is already wired;
-they do not know which profile produced it.
+process resolves a profile's Keychain-locator reference into a usable credential. The
+rules below are enforced at the **facade/CLI boundary** of `oxibrain` (and of every
+consumer of `oxibrain-client`). `oxibrain-core`, `oxibrain-store`, and `oxibrain-index`
+never see a Keychain reference, a profile JSON path, or a provider secret. They take an
+`LlmPort` (or `EmbeddingPort`) that is already wired; they do not know which profile
+produced it.
 
 - **Profiles carry a locator, not a secret.** `profiles.json` is non-secret by construction:
   a profile's `credential` field is `{service, account}` — the OS-Keychain service and
@@ -2043,16 +2116,22 @@ they do not know which profile produced it.
   variables → local model. A profile whose role list does not contain the requested role
   is **not selected**, and a missing or unavailable Keychain secret is reported as such
   rather than silently falling through to a different remote provider.
-- **Discovery is additive and auth-first-message is preserved.** `oxibrain-client` exposes
-  `default_socket_path()` returning `~/.oxi/brain/oxibrain.sock` (or `$OXIBRAIN_SOCKET`)
-  and `connect_default()` / `connect_endpoint(...)` helpers for hosts. Hosts speak a
-  `ClientHello` on connect and receive a `ServerInfo` with the daemon's
-  `schema_version`, `server_version`, and supported features — used for capability
-  negotiation, not for a sixteenth MCP tool. The MCP tool surface stays at fifteen. The
-  auth-first-message rule (token-before-payload) and the existing `Scope`/`Capability`
-  semantics in §15.1–§15.2 are unchanged: discovery metadata never replaces a token and
-  never broadens scope. Full enumeration of the additive client surface is in
-  `doc/CONSUMPTION_CONTRACT.md`.
+- **Session transport is explicit, never auto-discovered.** v2.11 deletes the
+  `default_socket_path` / `connect_default` / `connect_endpoint` surface and the
+  `~/.oxi/brain/oxibrain.sock` listener. The canonical transport is a caller-owned
+  child: `oxibrain-client` builds a `LocalProcessEndpoint { executable, dir }` and
+  spawns `executable serve --stdio --dir <dir>`; the child retains protocol state and
+  optional loaded models but opens databases per request, and dies when stdin closes
+  (or when the `BrainClient` is dropped). There is no ambient endpoint: a test, a CI
+  runner, and a host process all pass an explicit `--dir`, never discover a default.
+  External MCP hosts use the same stdio command.
+- **Auth-first-message and scope semantics are preserved.** The MCP tool surface stays
+  at fifteen. The `handshake` native JSON-RPC method still rides stdio as the
+  capability-negotiation channel (used by `oxibrain-mcp` for its v1.0 `ClientHello` /
+  `ServerInfo` exchange with the daemon-free `serve` child) and the existing `Scope` /
+  `Capability` model from §15.1–§15.2 is unchanged. Capability metadata never replaces
+  a token and never broadens scope. Full enumeration of the additive client surface is
+  in `doc/CONSUMPTION_CONTRACT.md`.
 
 ---
 
@@ -2061,57 +2140,70 @@ they do not know which profile produced it.
 ### 16.1 Rust API
 
 ```rust
-let brain = Brain::open(BrainConfig::at("~/.oxi/brain")).await?;   // embedded
-let brain = Brain::connect("unix:///run/oxibrain.sock").await?;    // daemon
-
-let ep  = brain.ingest(Episode::note("meeting.md", text)).await?;
-let ctx = brain.assemble_context("what did we decide about auth?", 3_000).await?;
-let ans = brain.retrieve(Retrieval::hybrid("auth decision").as_of(date)).await?;
-let sub = brain.traverse(TraversalSpec::from(entity).depth(2).as_of(date)).await?;
-let pg  = brain.brief(Target::Entity(id)).await?;
+let brain = Brain::open(BrainConfig::at("~/.oxi/brain")).await?;   // embedded, handle-free
+let ep   = brain.ingest(Episode::note("meeting.md", text)).await?;
+let ctx  = brain.assemble_context("what did we decide about auth?", 3_000).await?;
+let resp = brain.search(Query::hybrid("auth decision").planes(both!())).await?;   // SearchResponse { memory, documents, freshness }
+let sub  = brain.traverse(TraversalSpec::from(entity).depth(2).as_of(date)).await?;
+let pg   = brain.brief(Target::Entity(id)).await?;
 brain.declare(Statement::new(alice, "works_on", projectx)).valid_from(date).await?;
+let fresh = brain.index_documents(IndexOptions { embed: true, budget: None }).await?;
+let hist  = brain.document_history("personal", "vault", "notes/auth.md", 32).await?;
 ```
 
-Two typed surfaces (ADR-009): `Brain` is the embedded surface — full API including port injection; `oxibrain-client::BrainClient` is the remote surface for daemon topology (ECOSYSTEM C6). Unification is post-v1, triggered by a consumer needing runtime topology switching; LLM-injecting methods cannot cross a process boundary by construction.
+One typed surface: the **embedded `Brain` facade** is the canonical API — `Clone`,
+cheap (config + ports only, no store actor, no writer thread, no reader pool; §3.1,
+P8). Operations open their store for the duration of one method and drop the handle.
+`oxibrain-client::BrainClient` is the **remote surface** for stdio/HTTP sessions —
+the same methods, transported as JSON-RPC. Unification is post-v1, triggered by a
+consumer needing topology switching; LLM-injecting methods cannot cross a process
+boundary by construction.
 
 ### 16.2 MCP surface
 
 | Tool | Caps | Notes |
 |---|---|---|
-| `search` | Read | channels/fusion/rerank presets; `as_of`, `known_at`, `min_confidence` |
-| `recall` | Read | context assembly — the per-turn call for agents |
-| `brief` | Read | rendered entity/topic page with followable links |
-| `navigate` | Read | follow a link from a page |
-| `get_entity` | Read | entity + current beliefs + aliases + neighbours |
-| `traverse` | Read | bounded subgraph; belief-filtered; `as_of` supported |
-| `timeline` | Read | belief intervals over a range |
-| `why` | Read | provenance, confidence breakdown, and drops |
+| `search | Read | channels/fusion/rerank presets; `as_of`, `known_at`, `min_confidence`; v2.11 gains optional `planes` (`Memory` / `Documents` / both, default both) and returns `{memory, documents, freshness}` |
+| `recall | Read | context assembly — the per-turn call for agents; gains a `Documents` layer between query neighborhood and recent episodes |
+| `brief | Read | rendered entity/topic page with followable links |
+| `navigate | Read | follow a link from a page |
+| `get_entity | Read | entity + current beliefs + aliases + neighbours |
+| `traverse | Read | bounded subgraph; belief-filtered; `as_of` supported |
+| `timeline | Read | belief intervals over a range |
+| `why | Read | provenance, confidence breakdown, and drops |
 | `contradictions` / `review_merges` | Read | inboxes |
-| `stats` | Read | counts |
-| `ingest` | Ingest | long-running task |
-| `remember` | Write | one-shot ingest + sync extraction |
-| `declare` / `retract` | Write | deterministic writes, no model |
-| `merge_entities` | Write | resolution maintenance |
-| `redact` | Redact | destructive; separate capability on purpose |
+| `stats | Read | counts (v2.11 gains pending extraction count/oldest seq + per-root document counts) |
+| `ingest | Ingest | long-running task |
+| `remember | Write | one-shot ingest + inline extraction; returns `Captured` or `CapturedPending` |
+| `declare` / `retract | Write | deterministic writes, no model |
+| `merge_entities | Write | resolution maintenance |
+| `redact | Redact | destructive; separate capability on purpose |
 
 **Fifteen. That is the cap.** Adding a sixteenth requires removing one.
 
-Resources: `spaces://` (list), `space://`, `entity://{id}`, `episode://{id}`, `graph://{entity}?depth=n`.
+Resources: `spaces://` (list), `space://`, `entity://{id}`, `episode://{id}`, `graph://{entity}?depth=n`, `doc://<alias>/<locator>?rev=<rev>` (v2.11).
 
 **Schema evolution is additive, as §19.4 requires.** The v1.0 `search` and `traverse` schemas
 never exposed `as_of` or `min_confidence` (F29), so adding them is purely additive — no client
-breaks, and the new expressiveness is opt-in. `mode` remains a string enum whose values are now
-preset names. The one **corrective** change: `recall`'s advertised description promised layers
-that were never populated (F30); the description must match what is returned.
+breaks, and the new expressiveness is opt-in. v2.11's `search.planes` parameter is additive
+(default both; an old client sees only the unchanged `memory` half). `mode` remains a string
+enum whose values are now preset names. The one **corrective** change: `recall`'s advertised
+description promised layers that were never populated (F30); the description must match what
+is returned.
 
-Native JSON-RPC methods — `handshake`, `reproject`, `spaces/list` — are the first-party surface; they
-are not MCP tools and do not count against the cap.
-
+Native JSON-RPC methods — `handshake`, `reproject`, `spaces/list`,
+`document_history` (v2.11) — are the first-party surface; they are not MCP tools and do
+not count against the cap. `document_history` is read-gated like `resources/read`. The
+v2.10 `sync/run` method is removed (no daemon, no watcher); `episodes/for_locator` is
+removed (semantic occurrence history is replaced by gix-backed document history).
 ### 16.3 Concurrency, budgets, observability
 
-- **One writer actor** per store — an owned thread holding the write connection, fed by an mpsc
-  channel. Readers use a pool of read-only WAL connections and never block on the writer. Long
-  work (extraction, embedding, reprojection) runs off the actor and submits finished batches.
+- **One writer per store, scoped to one operation** (P8, §3.1). Each store has its
+  own advisory lock (`brain.lock`, `documents.lock`); a read method opens a WAL
+  reader per call and drops it; a write method acquires the lock, opens a writer,
+  commits a short batch, and drops the handle. Bounded retry `[25, 50, 100, 200,
+  400, 800]` ms, then `BrainError::Locked` with the holder path. Models may live in
+  the process; databases may not.
 - **Performance budgets** at 10⁵ episodes / 10⁵ entities / 10⁶ assertions on a laptop:
 
 | Operation | p95 budget | Last measurement (200 ent / 500 stmt fixture, Apple M4) |
@@ -2122,37 +2214,32 @@ are not MCP tools and do not count against the cap.
 | traversal, depth 3, ≤256 nodes | < 100 ms | **0.29 ms** ✅ |
 | `assemble_context` (3K tokens) | < 150 ms | **0.19 ms** ✅ |
 | reproject from cache (whole store) | < 5 min | **42.7 ms** ✅ |
-| cold start (index load) | < 2 s | not yet benchmarked |
+| cold start (Brain::open) | < 2 s | not yet benchmarked — operation-scoped handles change the curve |
 | `brief` (entity, depth 1) | < 100 ms | new in M9 |
 | local extraction (one episode) | reported, not budgeted | **~13 s** (Qwen2.5-1.5B-Instruct Q4_K_M, Apple M4 Metal, 512 out tokens, 2026-08-13 spike) |
-
-  Measured 2026-08-11/12 on a functional smoke fixture, not at target scale. Each budget may be
-  revised **once**, with the measurement and reason recorded here; after that it is a regression
-  gate. Local extraction latency is *reported* rather than budgeted, because it is dominated by
-  the user's hardware and the chosen model.
 
 - **Instrument what was discarded, not only what was returned.** Recall logs what it dropped and
   why — below confidence floor, outside the valid-time window, trust-excluded, truncated by
   budget — and `oxibrain why --dropped` prints it. This is guaranteed by `rank`'s conservation
   post-condition (§11.3), not by discipline.
-- Metrics: queue depth, extraction latency/failure/cost, assertions/sec, query latency by
-  channel, index staleness, contradiction count, community churn, **local tokens/sec**, **model
-  digest**.
-- `oxibrain doctor`: schema version, orphan check, index/belief consistency, queue health, lock
-  status, disk usage, **model digest verification** — with `--fix` for the safe subset.
 
 ### 16.4 CLI
 
 ```
-oxibrain init | doctor | stats
-oxibrain spaces                         # list spaces with counts (read-only)
-oxibrain ingest <path|-> [--source kind] [--space s] [--watch]  # trust is server-evaluated
-oxibrain sync <dir> [--space s]                     # vault sync: idempotent, occurred_at = mtime
+oxibrain init [--space] [--dir D]              # seeds documents.toml only when dir == default and ~/.oxi/vault exists (§4.2.1)
+oxibrain spaces                                # list spaces with counts (read-only)
+oxibrain doctor [--dir D]                      # freshness, skipped roots/files, dangling doc:// refs, legacy pull sources, pending stats, model digest
+oxibrain stats [--dir D]                       # counts (memory + per-root documents + pending extraction)
+oxibrain ingest <path|-> [--source kind] [--space s]   # trust is server-evaluated
+oxibrain remember "<text>" [--space s]         # one-shot ingest + inline extraction; returns Captured or CapturedPending
+oxibrain index [--documents] [--embed] [--dir D]        # §4.2.1 — reconciles + (optionally) embeds
+oxibrain extract --pending [--limit N] [--dir D]        # queue-less; walks uncached_memory_episodes
 oxibrain ask "<question>" [--as-of DATE] [--global] [--explain]
-oxibrain page <entity>                        # rendered brief
+oxibrain page <entity>
 oxibrain entity show|merge|split|alias|retract          # §4.2.2 — merge/split are inverse (D34); alias +retract are Declarations
-oxibrain declare <subject> <predicate> <object>         # §4.2.2 — manual assertion write as a Declaration episode
+oxibrain declare <subject> <predicate> <object>
 oxibrain source policy <source-name> --trust <tier>     # §4.2.2 — server-evaluated trust via Declaration
+oxibrain document-history <alias> <locator> [--space s] [--limit N]   # §4.2.1 — gix read history
 oxibrain timeline <entity> [--from --to]
 oxibrain why <statement-id> | why --dropped "<query>"
 oxibrain contradictions | review
@@ -2160,31 +2247,27 @@ oxibrain model list|pull|verify|use           # C2
 oxibrain reextract [--extractor X] [--since] | reproject | regenerate-summaries
 oxibrain redact <target> [--dry-run] --reason "..."
 oxibrain export [--format jsonl|md] | import
-oxibrain serve [--stdio|--socket|--http] [--daemon] | token issue|list|revoke
+oxibrain serve --stdio [--dir D]                # caller-owned child; dies with stdin
+oxibrain serve --http <addr> [--dir D]          # foreground loopback console; no `--daemon`, no `--socket`
+oxibrain token issue|list|revoke
 oxibrain predicate add|list | eval [--suite fast|full|bench|parity]
+# removed: sync, sync/run, watcher flags, --daemon, --socket, default-socket discovery
 ```
 
-`sync` scans a directory for `.md` files via `oxibrain-connectors`. The vault is registered
-as a pull source (`name = canonical(dir)`, `kind = "document_revision"`, `mode = "pull"`)
-and each file is classified against the latest event-path occurrence for its locator
-(`oxibrain-core::sync::classify_event`, pure — P9). New and modified files are ingested
-with `occurred_at` = file mtime and `occurrence_id = H(source_id, locator, predecessor,
-content_hash)` (§4.2.1); re-syncing an unchanged tree is a no-op and an A → B → A edit
-pattern produces three distinct events because `predecessor` differs each time. A modified
-path appends a new episode; the previous episode and its assertions remain (P1) — stale
-claims surface via `contradictions` and are removed with `retract`. Sync never retracts on
-its own. Legacy episodes (pre-event-path) participate in `Unchanged` classification only
-and are never re-ingested.
+`index [--documents] [--embed]` is the document-plane maintenance verb. It loads
+`documents.toml`, opens `documents.db` for a short locked apply, runs
+`core::documents::diff_roots` against the cached manifest, scans each root
+(`oxibrain-connectors::scan_root` for plain roots, `GitDocumentReader::open` for
+git roots — `Ok(None)` when not a repo), and applies the resulting `ApplyPlan` in
+one transaction. `--embed` walks `pending_vector_chunks(...)` and calls the
+configured `EmbeddingPort`. `index --documents` is also what `search` / `recall`
+invoke when a configured root has not yet been materialized, so the cache converges
+with the filesystem by the time the first document hit lands.
 
-When the store is held by a running daemon, `sync` attaches over the default
-socket and runs the same pass via the `sync/run` native RPC (registers the
-source, one pass, immediate watcher adoption). The daemon hosts the vault
-watchers (ADR-010): at startup it adopts every registered pull source into a
-debounced watcher — 2 s quiet period; the C4 minimum-diff half is
-content-hash classification, which makes unchanged re-scans no-ops. Scoped
-sessions need `trusted_ingest` + target-space membership to call `sync/run`.
-
-The CLI is a first-class product surface, not a debug tool.
+`serve --stdio --dir <dir>` is the canonical session transport: a child of an MCP or
+library session that exits when stdin closes. The same binary serves `--http` for
+the operations UI, loopback-only by default. There is **no daemon**, **no
+`--socket`**, and **no discovery** — every caller passes an explicit `--dir`.
 
 `serve --http <addr>` also serves the **embedded console** (§16.6) by default. The `--ui-dir`
 flag is retained only as a dev override that points at a built bundle on disk (see §16.6);
@@ -2198,11 +2281,11 @@ production callers omit it and use the embedded assets.
   safe) and `--no-cache` (smaller; restore needs re-extraction and a model re-fetch).
 - `BrainError` variants each document whether they are retryable and whose fault they are:
   `Config, Storage, Migration{found,expected}, Locked{holder}, Scope{required}, NotFound,
+  `Config, Storage, Migration{found,expected}, Locked{holder}, Busy (documents.db
+  cache lock, distinct from `Locked{holder}`), Scope{required}, NotFound,
   Invalid(ValidationReport), Extraction, Provider{retryable}, Budget, Conflict, Corruption,
   Model{missing_or_corrupt}`. Ports return typed errors; `anyhow` never crosses a public
   boundary.
-
-### 16.6 Embedded repair/operations console
 
 The `oxibrain` binary serves a small, opinionated **console** for inspecting and operating
 a brain instance. The bundle lives in `crates/oxibrain-mcp/assets/dist/` (vite's `outDir`,
@@ -2358,15 +2441,15 @@ oxibrain/
 │   ├── oxibrain-embed-http/   # hosted encoders                            [feature]
 │   ├── oxibrain-connectors/   # markdown vault, directory, chat, stdin
 │   ├── oxibrain-mcp/          # MCP server adapter + sampling LlmPort
-│   ├── oxibrain-client/       # thin client for consuming apps
-│   └── oxibrain-cli/          # THE binary: `oxibrain` (cli + serve + daemon)
+│   ├── oxibrain-client/       # thin client for consuming apps (spawn_local)
+│   └── oxibrain-cli/          # THE binary: `oxibrain` (cli + serve --stdio + serve --http)
 ├── eval/                      # golden corpus, parity corpus, benchmark runners
 └── apps/                      # brain-ui source — its `dist/` is embedded into the binary (§16.6)
 ```
 
-**Installation root.** Every consuming app reads from a single tree, which the daemon
-creates on `init` and owns thereafter. Clients never read SQLite directly; they speak MCP
-over the daemon's listening socket.
+**Installation root.** Every consuming app reads from a single tree, which `oxibrain init`
+creates and any caller can open via `--dir <dir>` thereafter. Clients never read SQLite
+directly; they reach the brain through a caller-owned stdio child (or in-process `Brain`).
 
 ```
 ~/.oxi/
@@ -2374,8 +2457,12 @@ over the daemon's listening socket.
 ├── foundation/v1/              # Foundation v1 contract (ADR-007) — non-secret
 │   ├── profiles.json           # provider profiles (Keychain locator only — never a secret)
 │   └── packages.lock           # resolved Foundation packages (name/version/digest/source/trust)
-└── brain/                      # oxibrain store — daemon is the sole writer
-    └── oxibrain.sock           # default listening socket (`$OXIBRAIN_SOCKET` override)
+└── brain/                      # oxibrain data directory (`<dir>``, default ~/.oxi/brain)
+    ├── brain.db                # memory ledger + projections (schema v11)
+    ├── brain.lock              # advisory lock on brain.db
+    ├── documents.db            # disposable document cache (schema v1)
+    ├── documents.lock          # advisory lock on documents.db
+    └── documents.toml          # configured document roots (§4.2.1)
 ```
 
 **Dependency rules, enforced in CI:**
@@ -2406,15 +2493,12 @@ deliberately.
 oximemo        oxiline        oxios        Claude Desktop
 (capture)      (time)         (agents)     (external)
    └──────────────┴─────────────┴──────────────┘
-                  MCP / unix socket
-                          ▼
-              oxibrain serve --daemon
-              (sole owner of the store, sole writer)
-```
+       stdio child / in-process Brain facade (no daemon)
 
-**Contract: the brain is additive, never load-bearing.** With the daemon down, every consuming
-app retains its primary function. Each app keeps owning its own source of truth. **oxibrain
-understands; it does not own.**
+**Contract: the brain is additive, never load-bearing.** With the brain offline (no
+caller-owned child is currently running), every consuming app retains its primary
+function. Each app keeps owning its own source of truth. **oxibrain understands; it
+does not own.**
 
 Where this is weakest, stated honestly: `oxios`. After migration it has no memory code of its
 own, so a brain outage leaves its agents with *no* memory rather than degraded memory. See
@@ -2422,17 +2506,21 @@ own, so a brain outage leaves its agents with *no* memory rather than degraded m
 
 ### 19.2 Consumption contract
 
-- Semver on the `oxibrain` facade. The public surface is `oxibrain::*`.
-- MCP tool schemas versioned; **additive changes only within a major** (§16.2). The
-  fifteen-tool MCP surface is unchanged by the Foundation contract; discovery happens over
-  the transport handshake, not a sixteenth tool.
-- Stability tiers per API: `stable`, `unstable` (feature-gated), `internal`.
-- A compatibility test suite consumers run against their pinned version.
+Detail in `doc/CONSUMPTION_CONTRACT.md`. v2.11 retires the Foundation handshake helpers
+(`default_socket_path`, `connect_default`, `connect_endpoint`) and replaces them with
+`LocalProcessEndpoint { executable, dir }` plus caller-owned `spawn_local` /
+`spawn_local_with_token`. The MCP tool surface is unchanged; the `handshake` native
+JSON-RPC method still rides stdio for capability negotiation between the daemon-free
+`serve` child and its caller.
 
-Detail in `doc/CONSUMPTION_CONTRACT.md`. The Foundation client surface
-(`default_socket_path`, `connect_default`, `connect_endpoint`, `ClientHello`,
-`ServerInfo`) is enumerated there as additive planned client features; it is not yet
-shipped in `oxibrain-client@0.2.0` and is pinned to land in 0.3.x.
+- Semver on the `oxibrain` facade. The public surface is `oxibrain::*`.
+- MCP tool schemas versioned; **additive changes only within a major** (§16.2).
+  The fifteen-tool MCP surface is unchanged; the v2.11 `search.planes` and
+  `StatsCounts` additions are additive-only. The `document_history` native JSON-RPC
+  method joins `handshake`, `reproject`, and `spaces/list` and does not count.
+- Stability tiers per API: `stable`, `unstable` (feature-gated), `internal`.
+- A compatibility test suite consumers run against their pinned version
+  (`crates/oxibrain/src/compat.rs`).
 
 ### 19.3 The Foundation plane
 
@@ -2441,18 +2529,15 @@ from the agent execution plane. It is not a runtime crate, a daemon broker, or a
 gateway (ADR-007). Its sole job is to give every consumer the same answer to two
 questions:
 
-- Which provider profile is bound to a given role, and where is its secret kept?
-  Answered by `~/.oxi/foundation/v1/profiles.json` plus the OS Keychain.
-- Which immutable Foundation packages are in play, and what abstract capabilities do
-  they require? Answered by `~/.oxi/foundation/v1/packages.lock`.
-
 The brain owns `~/.oxi/brain/`, full stop. Hosts that integrate via `oxibrain-client`
-discover the daemon by `default_socket_path()` (`~/.oxi/brain/oxibrain.sock`, or the path
-in `$OXIBRAIN_SOCKET`) and speak the additive `ClientHello` / `ServerInfo` handshake
-described in §15.7 and `doc/CONSUMPTION_CONTRACT.md`. They never open the store file, never
-parse the SQLite WAL, and never read a profile JSON to extract a secret — the secret stays
-in the OS Keychain, behind the host's `SecretResolver` (`§15.7`,
-`doc/spec/oxi-foundation-v1.md`).
+spawn a caller-owned stdio child (`LocalProcessEndpoint { executable, dir }`,
+`BrainClient::spawn_local`) that speaks JSON-RPC over the child's stdin/stdout.
+There is no socket discovery: every caller passes an explicit `--dir`, and the
+`handshake` native JSON-RPC method rides the same transport for capability
+negotiation (§15.7, `doc/CONSUMPTION_CONTRACT.md`). Hosts never open the store
+file, never parse the SQLite WAL, and never read a profile JSON to extract a
+secret — the secret stays in the OS Keychain, behind the host's `SecretResolver`
+(§15.7, `doc/spec/oxi-foundation-v1.md`).
 
 ## 20. Milestones
 
@@ -2463,13 +2548,8 @@ M0–M6 have shipped. `doc/ROADMAP.md` carries M7 onward with exit criteria and 
 | **M0** | Foundation: store, migrations, writer actor, canonical serialization, content-derived ids, ports with fakes, CI | ✅ |
 | **M1** | Knowledge core, fully deterministic, no model: registry, entities, statements, assertions, the fold, contradictions, resolution, reprojection | ✅ |
 | **M2** | Retrieval and lifecycle: indexes, hybrid query, traversal, decay, compaction, communities, context assembly, benchmarks | ✅ |
-| **M3** | Extraction and evaluation: job queue, LLM port + HTTP adapter, generated schema, validator, quarantine, re-extraction, eval harness | ✅ |
-| **M4** | Surfaces and security: spaces, scopes, tokens, audit, trust tiers, redaction, MCP server, daemon, transports, CLI, export/import | ✅ |
-| **M5** | oxios migration: `Brain`-backed memory, importer, consumption contract | ✅ |
-| **M6** | Embedded repair/operations console (§16.6): overview, entity, contradictions, merges, failures, sources, operations — supersedes the desktop UI of earlier drafts | ✅ |
-| **M7** | **Own the model** — C2 + C3 + the P1 split | → ROADMAP |
-| **M8** | **The decide layer** — P9 for retrieval and context | → ROADMAP |
-| **M9** | **Agent-native** — views, navigation, blocking | → ROADMAP |
+| **M3** | Extraction and evaluation: LLM port + HTTP adapter, generated schema, validator, quarantine, re-extraction, eval harness; v2.11 swaps the durable job queue for the derived `uncached_memory_episodes` backlog (§9.1) | ✅ |
+| **M4** | Surfaces and security: spaces, scopes, tokens, audit, trust tiers, redaction, MCP server, foreground `serve --http` + caller-owned `serve --stdio`, CLI, export/import | ✅ |
 | **M10** | **Honest memory** — P10, MMR, reranking, feedback | → ROADMAP |
 
 M7–M10 each get an implementation spec in `doc/spec/` before code, following the pattern M1–M3
@@ -2566,10 +2646,13 @@ a fold bug and a model bug simultaneously is how these projects die.
 
 **D10 — Forgetting never deletes; consolidation writes derived episodes.**
 
-**D11 — Daemon as the default multi-app topology.** Two processes with independent in-memory
-indexes over one SQLite file is a corruption path no API-level care fixes.
+**D11 — One writer per store, scoped to one operation.** v2.11 reversed D11's earlier
+text ("daemon as the default multi-app topology"): two processes with independent
+in-memory indexes over one SQLite file is still a corruption path, but the answer is
+**operation-scoped handles** (P8), not a resident daemon. Multiple applications share
+a brain without a daemon because **no application monopolizes the lock**.
 
-**D12 — SQLite, and no embedded graph database.** KùzuDB, the strongest embedded property-graph
+**D12 — SQLite, and no embedded graph database.**
 candidate, is archived; Cozo and SurrealDB forfeit FTS5, `sqlite-vec`, the online backup API and
 WAL semantics this design leans on. And P1 makes the choice reversible: the graph layer is
 projection, so adjacency can move engines without touching the ledger. **Every reviewed system

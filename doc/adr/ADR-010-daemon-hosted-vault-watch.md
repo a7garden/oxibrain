@@ -1,7 +1,10 @@
-# ADR-010: Vault watch is daemon-hosted (brain-owned connector)
-
-**Date:** 2026-08-20 · **Status:** Accepted, implemented, verified
+# ADR-010: Vault watch is daemon-hosted (brain-owned connector) — **Superseded**
+**Date:** 2026-08-20 · **Status:** Superseded 2026-08-27 by the v2.11 two-plane, no-daemon
+cutover (`docs/superpowers/specs/2026-08-27-two-plane-documents-and-memory-design.md`).
+**Historical record only.** This ADR documents the design that shipped in v2.9 and was
+retired by v2.11. The text below is preserved verbatim from the accepted version.
 **Related:** ECOSYSTEM.md C3/C4, ARCHITECTURE.md §4.2 (v2.7 pull-connector
+
 occurrence identity), §4.3/P8 (single writer), ADR-005 (lazy pull, unrelated
 but same "where does it live" shape), `docs/superpowers/specs/2026-08-20-space-enumeration-design.md` §3 (amended by this ADR)
 
@@ -84,4 +87,21 @@ Three pieces of evidence, in order of force:
   `trusted_ingest` → `UNAUTHORIZED`; live-FS watcher test (write → settle →
   episode count grows); client socket round-trip of `sync_run`.
 - Gates: `cargo fmt --all -- --check`, `cargo clippy --all-targets
-  --all-features -- -D warnings`, `cargo test --workspace` — all green.
+
+## Supersession note (2026-08-27)
+
+Retired by `docs/superpowers/specs/2026-08-27-two-plane-documents-and-memory-design.md`
+(the v2.11 cutover, ARCHITECTURE.md §1.3 / §4.2.1 / §4.3 / §15.7). The deletion list:
+
+- `oxibrain serve --daemon` and the `~/.oxi/brain/oxibrain.sock` listener are gone;
+  callers use `oxibrain serve --stdio --dir <dir>` (caller-owned child) or foreground
+  `oxibrain serve --http <addr> --dir <dir>`.
+- `oxibrain::vault::{sync_vault, pull_sources, SyncReport, PullSource}` is deleted.
+- `BrainServer::start_source_watchers`, the `notify`-based watcher in
+  `oxibrain-connectors::watch`, and the debounced-vault watcher are deleted.
+- `sync/run` native RPC, `BrainClient::sync_run`, and `SyncOutcome` are deleted.
+- The `sources` table's document-role rows are preserved in the ledger for provenance
+  but never consulted by `index_documents`; `documents.toml` is the only configuration
+  surface for documents.
+- `Brain: Clone` now means a handle-free runtime facade (§3.1, P8), not a shared
+  Arc'd store actor.

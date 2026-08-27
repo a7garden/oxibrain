@@ -1,26 +1,44 @@
-# Consumption Contract 1.3
+# Consumption Contract 1.4
 
 > `ARCHITECTURE.md` §19.2. This document pins the public surface consumers depend on and
 > the stability guarantees each tier carries. It is the contract between
-> oxibrain and its ecosystem consumers (oxios-kernel, oxiline, oximemo, Claude
-> Desktop, third-party MCP clients).
+> oxibrain and its ecosystem consumers (oxios-kernel, oxiline, oximemo, Claude,
+> third-party MCP clients).
+>
+> **Version note (2026-08-27, v2.11 cutover):** the coordinated breaking-version bumps
+> ship together — oxibrain workspace crates `0.6.0 → 0.7.0` and
+> `oxibrain-client 0.7.0 → 0.8.0`. The changes are listed below; every removal is
+> paired with a replacement at the same release, and the MCP tool surface stays at
+> fifteen.
 >
 > **1.1 (2026-08-17)** — adds the planned additive client surface for the Oxi Foundation v1
 > contract: `BrainEndpoint`, `default_socket_path`, `connect_default`,
-> `connect_endpoint`, `ClientHello`, and `ServerInfo`. None of these are shipped in
-> `oxibrain-client@0.2.0`; they are pinned to land in `oxibrain-client@0.3.x`. Existing
-> auth-first-message and `Scope`/`Capability` semantics are preserved unchanged.
+> `connect_endpoint`, `ClientHello`, and `ServerInfo`. **All of these were superseded
+> by 1.4 (2026-08-27)** and never shipped: the v2.11 daemonless cutover removed the
+> listening socket before any of them landed.
 > **1.2 (2026-08-20)** — daemon-hosted vault watch (ADR-010): native RPC
 > `sync/run`, client `BrainClient::sync_run` + `SyncOutcome`, the
 > `oxibrain::vault` module (`sync_vault`, `pull_sources`, `SyncReport`,
 > `PullSource`), and `Brain: Clone` (cheap handle — Arc'd store actor and
-> caches). All additive; `spaces/list` noted below shipped in 0.5.0.
+> caches). **All of 1.2 was superseded by 1.4** and removed in v2.11: no daemon,
+> no watcher, no `sync/run` RPC, no `BrainClient::sync_run`, no `SyncOutcome`,
+> no `oxibrain::vault`. `Brain: Clone` survives — it now means a handle-free
+> runtime facade (§3.1, P8), not a shared store actor.
 > **1.3 (2026-08-23)** — per-note revision history: `Brain::episodes_for_locator`
 > (stable Query), `oxibrain::vault::episodes_for_vault_file` (dir-based read-only
 > resolution), native RPC `episodes/for_locator`, and client
-> `BrainClient::episodes_for_locator` + `EpisodeSummary` (client 0.7.0). Read-only;
-> never creates source rows. All additive.
-
+> `BrainClient::episodes_for_locator` + `EpisodeSummary` (client 0.7.0). **All
+> of 1.3 was superseded by 1.4** and removed in v2.11: documents no longer
+> become memory episodes, so there is no occurrence chain to query. The
+> replacement is gix-backed `Brain::document_history` (ADR-011 amendment).
+>
+> **1.4 (2026-08-27) — daemonless two-plane cutover.** The resident daemon is
+> gone. `Brain` becomes a handle-free runtime facade. Documents move to a
+> separate `documents.db` cache rebuilt from configured files and gix history.
+> Native RPC `document_history` joins `handshake`, `reproject`, `spaces/list`,
+> `document_history` (read-gated like `resources/read`); native RPCs `sync/run`
+> and `episodes/for_locator` removed; `default_socket_path` /
+> `connect_default` / `connect_endpoint` / `BrainEndpoint` removed.
 ## Versioning
 
 - **Semver** on the `oxibrain` crate facade.

@@ -2,8 +2,16 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-17
-- **Supersedes:** none
-- **Superseded by:** (none yet)
+- **Superseded by (socket/discovery clauses only):** **v2.11** (2026-08-27,
+  two-plane no-daemon cutover). The schema/profile/packages half of this ADR is
+  unchanged. The additive client surface (`default_socket_path`, `connect_default`,
+  `connect_endpoint`, `BrainEndpoint`, `ClientHello`, `ServerInfo`) — and the
+  corresponding default `~/.oxi/brain/oxibrain.sock` listener behind `serve
+  --daemon` — is **retired** in v2.11. The replacement is
+  `LocalProcessEndpoint { executable, dir }` plus caller-owned `spawn_local` /
+  `spawn_local_with_token` (Consumption Contract 1.4, ARCHITECTURE.md §15.7).
+  The schema/role/requirement rules below still apply; the transport and
+  discovery clauses do not.
 
 ## Context
 
@@ -66,13 +74,14 @@ frozen in `doc/spec/oxi-foundation-v1.md`. It consists of:
   `digest` in `packages.lock`, unknown abstract requirement.
 - A cross-host fixture corpus at `tests/fixtures/oxi-foundation/v1/` that every
   host parses with the same expected outcome.
-- An additive `oxibrain-client` surface (`default_socket_path`, `connect_default`,
-  `connect_endpoint`, `BrainEndpoint`, `ClientHello`, `ServerInfo`) for daemon
-  discovery and capability negotiation. The daemon's canonical default listening
-  socket is `~/.oxi/brain/oxibrain.sock`, overridable via the `$OXIBRAIN_SOCKET`
-  environment variable (`serve --daemon` binds the default when `--socket` is
-  absent). The MCP tool surface stays at fifteen; the handshake rides the existing
-  transport, not a sixteenth tool.
+- A native JSON-RPC `handshake` method (`oxibrain-mcp`) for capability
+  negotiation, riding the existing transport — **not a sixteenth MCP tool**.
+  Discovery in v2.11 is **explicit, not ambient**: callers pass an
+  `--dir` to `serve --stdio` or `serve --http` and the child inherits
+  protocol state for its lifetime. There is no default socket listener
+  (`~/.oxi/brain/oxibrain.sock` is gone; the `--socket` / `--daemon`
+  flags are gone). See ADR-010 supersession note and ARCHITECTURE.md
+  §15.7 for the full replacement.
 
 Three explicit non-decisions follow from this:
 
@@ -143,19 +152,23 @@ remains the C2 default that works without keys or network access.
   routing; the host does. This is the rule that keeps "every host must use the same
   model" from being a contract-level possibility.
 - **The MCP tool surface stays at fifteen.** Discovery and capability negotiation
-  ride the additive transport handshake in `oxibrain-client` 0.3.x. Adding a
-  sixteenth MCP tool to expose Foundation metadata would be a contract violation.
+  ride the native `handshake` JSON-RPC method (`oxibrain-mcp`); adding a
+  sixteenth MCP tool to expose Foundation metadata would be a contract
+  violation. The v2.11 daemon-cutover changes the **transport** (no socket,
+  caller-owned stdio child) but not the **handshake semantics**.
 - **Auth-first-message and `Scope`/`Capability` semantics are preserved.** The
   existing token-before-payload rule and the scope model in `ARCHITECTURE.md`
-  §15.1–§15.2 are unchanged by the Foundation contract. `ClientHello` and
-  `ServerInfo` carry metadata only.
-- **Environment variables remain an explicit override.** `ANTHROPIC_*` / `OPENAI_*`
-  continue to work; they are the development/automation path, not the Foundation
-  path. The Foundation contract does not retire them.
-- **`oxibrain-client@0.2.0` keeps working unchanged.** The additive surface
-  (`default_socket_path`, `connect_default`, `connect_endpoint`, `BrainEndpoint`,
-  `ClientHello`, `ServerInfo`) lands in `oxibrain-client@0.3.x`. Hosts pinned to
-  0.2.0 do not need to migrate.
+  §15.1–§15.2 are unchanged by the Foundation contract. `handshake` carries
+  capability metadata only — never a token, never a widened scope, never a
+  replacement for a `Scope` check. A host that prefers to bypass the handshake
+  (for example, a CI runner that already knows the caller-owned child is at a
+  known path) may continue to call the existing `spawn_local` constructor; the
+  handshake is opt-in by the host.
+- **`oxibrain-client@0.7.x` (≤0.7.x) is retired by the daemon cutover.**
+  `default_socket_path`, `connect_default`, and `connect_endpoint` are gone in
+  v2.11. `oxibrain-client@0.8.0` ships `LocalProcessEndpoint { executable, dir }`
+  and caller-owned `spawn_local` / `spawn_local_with_token` (Consumption
+  Contract 1.4). Hosts pinned to `0.7.x` need the 0.8.0 dependency.
 - **Fixtures must be kept in sync across hosts.** oxicode already mirrors the corpus
   at the same path; the oxibrain repo carries the canonical tree. When a fixture is
   added or amended in oxibrain, the change must be mirrored in oxicode. The reverse
@@ -163,10 +176,9 @@ remains the C2 default that works without keys or network access.
 
 ## References
 
-- `doc/ARCHITECTURE.md` §4.3, §8.6, §15.7, §19.3 — boundary, daemon-as-data-plane,
-  profile resolution, and the Foundation plane.
-- `doc/ECOSYSTEM.md` v1.0 — three-plane topology, contracts C1–C8.
-- `doc/CONSUMPTION_CONTRACT.md` §1.1 — additive `oxibrain-client` surface.
+- `doc/ARCHITECTURE.md` §4.3, §8.6, §15.7, §19.3 — boundary, daemon-cutover
+  (v2.11), profile resolution, and the Foundation plane.
+- `doc/CONSUMPTION_CONTRACT.md` §1.4 — `LocalProcessEndpoint` and v2.11 surface.
 - `doc/spec/oxi-foundation-v1.md` — the frozen contract.
 - `tests/fixtures/oxi-foundation/v1/` — cross-host fixture corpus.
 - ADR-002 — `oxios` fallback decision (the brain is additive, never load-bearing).
