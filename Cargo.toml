@@ -62,6 +62,12 @@ notify = "7"
 glob = "0.3"
 toml = "0.8"
 gix = "0.83"
+# Transitive via prodash → gix-features → gix. prodash requires `^1.0.3`;
+# human_format 1.2.x uses `if let … && …` let-chains, which are unstable on
+# our MSRV rustc 1.85 (E0658) and break registry re-resolution of published
+# oxibrain crates (the consumer smoke). Pin 1.1.0 so both the lock and the
+# published manifests force the MSRV-compatible version.
+human_format = "=1.1.0"
 
 [profile.release]
 lto = "thin"
