@@ -53,7 +53,7 @@
 
 | Tier | Marker | Guarantee | Examples |
 |---|---|---|---|
-| **Stable** | `pub` in `oxibrain::*` | Semver-protected. Signature changes are breaking. | `Brain`, `BrainConfig`, `Brain::open`, `Brain::ingest`, `Brain::query`, `Brain::assemble_context`, `Brain::declare`, `Brain::beliefs`, `Brain::redact`, `Brain::export_jsonl`, `Brain::import_jsonl`, `Episode`, `SourceRef`, `TrustTier`, `EpisodeKind`, `BrainError`, `Timestamp`, `Scope`, `Capability`, `TokenInfo`, `Declaration`, `EntityRef`, `DeclObject` |
+| **Stable** | `pub` in `oxibrain::*` | Semver-protected. Signature changes are breaking. | `Brain`, `BrainConfig`, `Brain::open`, `Brain::ingest`, `Brain::search`, `Brain::index_documents`, `Brain::document_history`, `Brain::remember`, `Brain::assemble_context`, `Brain::declare`, `Brain::beliefs`, `Brain::redact`, `Brain::export_jsonl`, `Brain::import_jsonl`, `Episode`, `SourceRef`, `TrustTier`, `EpisodeKind`, `BrainError`, `Timestamp`, `Scope`, `Capability`, `TokenInfo`, `Declaration`, `EntityRef`, `DeclObject` |
 | **Unstable** | feature-gated | May change between minor versions. Opt-in via Cargo feature. | `oxibrain-llm-http` (LLM adapter), `oxibrain-mcp` (MCP server internals) |
 | **Internal** | `pub` in non-facade crates | No guarantee. `pub` for workspace reasons only. | Everything in `oxibrain-store`, `oxibrain-core`, `oxibrain-index`, `oxibrain-connectors` |
 
@@ -77,9 +77,12 @@ The `oxibrain` crate re-exports everything consumers need. The public API is:
 - `Brain::get_episode(id) -> Result<Option<Episode>>`
 - `Brain::episode_count() -> Result<i64>`
 
-### Query
+### Search
 
-- `Brain::query(q) -> Result<RankingResult>`
+- `Brain::search(query) -> Result<SearchResponse>` — `{ memory, documents,
+  freshness }` over both planes; `query.planes(...)` selects `Memory`,
+  `Documents`, or both (default both). Two-plane search is opt-in; a single-plane
+  caller sees the same `memory` shape as prior versions.
 - `Brain::assemble_context(space, query, budget) -> Result<ContextResult>`
 - `Brain::beliefs(space, entity_id) -> Result<Vec<Belief>>`
 - `Brain::beliefs_as_of(space, entity_id, valid_at) -> Result<Vec<Belief>>`
@@ -91,12 +94,16 @@ The `oxibrain` crate re-exports everything consumers need. The public API is:
 - `Brain::resolve_entity_id(space, ty, surface) -> Result<Option<String>>`
 - `Brain::list_entities(space, limit) -> Result<Vec<Entity>>`
 - `Brain::list_merges(space) -> Result<Vec<EntityMerge>>`
-- `Brain::episodes_for_locator(space, source_id, locator) -> Result<Vec<Episode>>`
-  — the occurrence chain (§4.2.1) of one vault file, oldest first, full
-  content per revision. Dir-based convenience:
-  `oxibrain::vault::episodes_for_vault_file(&Brain, root, space, locator)`
-  resolves the source by canonical path (read-only — an unregistered dir
-  yields an empty chain).
+
+### Document plane
+
+- `Brain::index_documents(IndexOptions) -> Result<DocumentFreshness>` — diff
+  `documents.toml` against the `documents.db` manifest, scan each root, apply
+  the `ApplyPlan`; `--embed` walks pending vector chunks.
+- `Brain::document_history(space, alias, locator, limit) -> Result<Vec<DocumentRevision>>`
+  — read-only gix-backed history (`{ revision, committed_at_ms, content }`).
+  Replacement for the retired `Brain::episodes_for_locator` occurrence-chain
+  read path; revisions are anchored in consumer-owned git, not in the ledger.
 
 ### Mutation
 
@@ -116,11 +123,17 @@ The `oxibrain` crate re-exports everything consumers need. The public API is:
 
 - `Brain::extract_one(space, episode_id, config) -> Result<ExtractSummary>`
 - `Brain::extract_one_with(space, episode_id, config, llm) -> Result<ExtractSummary>`
-- `Brain::extract_pending(space, config, budget) -> Result<ExtractSummary>`
+- `Brain::extract_uncached(limit) -> Result<usize>` — bounded inline pass over
+  the un-extracted backlog under the write lock; queue-less — extraction is
+  inline on the append path.
+- `Brain::pending_extraction_stats() -> Result<ExtractionStats>` —
+  `{ count, oldest_seq }` without walking the whole ledger.
+- `Brain::remember(space, content, source) -> Result<CaptureOutcome>` —
+  `Captured { episode_id }` or `CapturedPending { episode_id, pending_count }`
+  when the model call fails; the next `extract_uncached` pass picks the episode up.
 - `Brain::reextract(space, config) -> Result<ExtractSummary>`
 - `Brain::consolidate(space, config) -> Result<Vec<String>>`
 - `Brain::summarize_communities(space, config) -> Result<usize>`
-- `Brain::job_status() -> Result<Vec<(String, usize)>>`
 
 ### Security
 
@@ -151,37 +164,32 @@ surface. If any method is removed or its signature changes incompatibly, the
 compatibility test fails to compile. Consumers can pin the same test against
 their version to detect breaking changes.
 
-## Planned additive client surface (Oxi Foundation v1, oxibrain-client 0.3.x)
+## Client transport surface (1.4, shipped)
 
-The Foundation v1 contract (`doc/spec/oxi-foundation-v1.md`, ADR-007) introduces
-discovery and capability handshake as **additive** `oxibrain-client` features. None of
-these change the existing auth-first-message rule, the `Scope`/`Capability` model, or
-the fifteen-tool MCP surface; they make discovery and version negotiation possible
-without bolting on a sixteenth tool. They are **planned**, not yet shipped in
-`oxibrain-client@0.2.0`. Hosts pinned to 0.2.0 keep working unchanged.
+`oxibrain-client@0.8.0` (paired with the `oxibrain` facade at `0.7.0`) replaces
+socket discovery with a **caller-owned stdio child**. There is no daemon, no
+listening socket, and no default-path lookup: every session starts by spawning
+`oxibrain serve --stdio --dir <dir>` as a child of the caller and speaking
+JSON-RPC over its stdin/stdout. The child dies with stdin; the caller owns the
+lifecycle. `serve --http <addr>` is the foreground loopback variant for the
+operations console (`ARCHITECTURE.md` §16.6).
 
-### Discovery helpers
+### Spawn helpers
 
-- `pub fn default_socket_path() -> PathBuf` — returns `~/.oxi/brain/oxibrain.sock`,
-  honoring `$OXIBRAIN_SOCKET` when set. Pure function, no I/O.
-- `pub fn connect_default() -> impl Future<Output = Result<BrainClient>>` — convenience
-  over `connect_endpoint(BrainEndpoint::default())`.
-- `pub fn connect_endpoint(endpoint: BrainEndpoint) -> impl Future<Output = Result<BrainClient>>`
-  — opens the connection, performs the `ClientHello`/`ServerInfo` handshake, and only
-  then returns a ready-to-use client. If the daemon's `schema_version` is unknown to the
-  client, the function returns a typed error; the client has **not** silently downgraded.
+- `pub fn spawn_local(endpoint: LocalProcessEndpoint) -> Result<BrainClient>` —
+  builds the `Command`, spawns the child, performs the `handshake` JSON-RPC, and
+  returns a ready-to-use client. If the child exits before handshake, returns a
+  typed error; the client has **not** silently downgraded.
+- `pub fn spawn_local_with_token(endpoint: LocalProcessEndpoint, token: TokenInfo) -> Result<BrainClient>`
+  — spawns the child with a token presented as the first message after
+  handshake, preserving the auth-first-message rule on the wire.
 
 ### Endpoint and handshake types
 
 ```rust
-pub struct BrainEndpoint {
-    pub socket: PathBuf,
-    pub token: Option<Arc<str>>,   // resolved by the host; never persisted here
-    pub hello: ClientHello,
-}
-
-impl Default for BrainEndpoint {
-    fn default() -> Self { /* default_socket_path() + default ClientHello */ }
+pub struct LocalProcessEndpoint {
+    pub executable: PathBuf,    // path to the `oxibrain` binary
+    pub dir: PathBuf,           // the brain data directory (`--dir`)
 }
 
 pub struct ClientHello {
@@ -201,44 +209,69 @@ pub struct ServerInfo {
 ### Stability
 
 These additions follow the same **additive-only** rule as the rest of this contract.
-Within `oxibrain-client@0.3.x` the additions are non-breaking; anything that would break
-an existing 0.2.0 caller goes into a future major. `default_socket_path` is a pure
-function with no failure modes and may be relied upon by hosts pinned to 0.3.x for the
-rest of the v1 lifecycle.
+Within `oxibrain-client@0.8.x` the additions are non-breaking; anything that would break
+an existing 0.7.x caller goes into a future major. `LocalProcessEndpoint` is a plain
+data struct (`executable`, `dir`) with no I/O and may be relied upon by hosts pinned
+to 0.8.x for the rest of the v1 lifecycle. The previous
+`default_socket_path` / `connect_default` / `connect_endpoint` / `BrainEndpoint`
+additive surface (1.1) never shipped — see the **Version note** at the top of this
+document.
 
 ### Auth-first-message and scope semantics, preserved
 
-The existing rule — a token (or anonymous-on-Unix-socket flag) is presented before any
-payload — is unchanged. The `Scope`/`Capability` model from `ARCHITECTURE.md` §15.1–§15.2
-remains the only authority on what a connection may do. `ClientHello` and `ServerInfo`
-are **metadata only**: they never carry a token, never widen a scope, and never replace
-a `Scope` check. A host that prefers to bypass the handshake (for example, a CI runner
-that already knows the daemon is at the default path) may continue to call the existing
-constructor; the additive surface is opt-in by the host.
+On a scoped session the rule is unchanged: a token is presented as the first
+message after handshake, before any payload. The `Scope`/`Capability` model from
+`ARCHITECTURE.md` §15.1–§15.2 remains the only authority on what a connection may
+do. `ClientHello` and `ServerInfo` are **metadata only**: they never carry a token,
+never widen a scope, and never replace a `Scope` check. A host that prefers to
+bypass the in-process handshake (for example, a test that already wired the child)
+may call the existing constructor with a pre-opened transport; the handshake is
+opt-in by the host.
 
-## Vault sync surface (1.2, shipped)
+## Document-plane surface (1.4, shipped)
 
-`oxibrain sync` and the daemon share one implementation,
-`oxibrain::vault::sync_vault(&Brain, dir, space)`. The native RPC `sync/run`
-(`{dir, space}` → `SyncReport` JSON) is the daemon-attached path: it
-registers the directory as a pull source, runs one pass, and adopts a
-debounced watcher. Scoped sessions require `trusted_ingest` + membership in
-the target space. On the client:
+The two planes — memory (`brain.db`) and documents (`documents.db`) — share one
+`Brain` facade and one MCP/JSON-RPC surface. There is no separate document daemon;
+documents are a disposable cache rebuilt from `documents.toml`-configured files and
+gix read history (§4.2.1 of `ARCHITECTURE.md`, ADR-011). Document roots come only
+from `<dir>/documents.toml` (`[[root]]` rows carry `alias`, `path`, `space`,
+`include`/`exclude`, `max_file_bytes`); the brain never opens or writes repos
+directly — gix access lives in `oxi-vault-git`, owned by oximemo and oxios.
 
-- `BrainClient::sync_run(dir, space) -> Result<SyncOutcome>` —
-  `{ new, modified, unchanged }` path lists, client-owned DTO.
+Document-plane methods on the facade:
 
-Registration lives in the store (`sources`, §4.2), so watched vaults survive
-daemon restarts; the daemon adopts them at startup
-(`BrainServer::start_source_watchers`).
+- `Brain::index_documents(IndexOptions { embed: bool, budget: Option<Budget> }) -> Result<DocumentFreshness>`
+  — load `documents.toml`, diff against `documents.db`'s manifest, scan each root
+  (plain or git-backed), apply the `ApplyPlan` in one transaction; `--embed` walks
+  pending vector chunks through the configured `EmbeddingPort`.
+- `Brain::document_history(space, alias, locator, limit) -> Result<Vec<DocumentRevision>>`
+  — read-only gix-backed history (rev id, committed-at ms, content). Powers
+  `oxibrain document-history`, the MCP `doc://<alias>/<locator>?rev=<rev>` resource,
+  and the native JSON-RPC `document_history` method.
+- `Brain::search(query) -> Result<SearchResponse>` — `{ memory, documents, freshness }`
+  over both planes; `query.planes(planes!())` selects which planes participate
+  (`Memory`, `Documents`, or both; default both). Document hits carry freshness
+  metadata; memory hits are unchanged from prior versions.
+- `Brain::pending_extraction_stats() -> Result<{ count: u64, oldest_seq: Option<u64> }>`
+  — read-only queue length and oldest un-extracted sequence.
+- `Brain::extract_uncached(limit: usize) -> Result<usize>` — bounded inline pass
+  over the un-extracted backlog; queue-less — `remember` / explicit `ingest` /
+  `capture` append the episode inline and return immediately.
 
-## Vault history surface (1.3, shipped)
+Document-plane methods on `oxibrain-client::BrainClient`:
 
-The native RPC `episodes/for_locator` (`{dir, locator, space}` → array of
-`Episode` JSON, oldest first) is the read side of the occurrence chain.
-Scope: a read query — scoped sessions need the `read` capability and
-membership in the target space (same gate as `resources/read`). On the
-client:
+- `BrainClient::search(query) -> Result<SearchResponse>` — same shape as the facade.
+- `BrainClient::document_history(space, alias, locator, limit) -> Result<Vec<DocumentRevision>>`
+  — native JSON-RPC `document_history`; read-gated like `resources/read`.
+- `BrainClient::pending_extraction_stats() -> Result<ExtractionStats>`
+- `BrainClient::extract_uncached(limit) -> Result<usize>`
+- `BrainClient::handshake(hello: ClientHello) -> Result<ServerInfo>` — first call on
+  any session; capability negotiation, never a token replacement.
+- `BrainClient::ping() -> Result<ServerInfo>` — liveness + schema-version probe.
 
-- `BrainClient::episodes_for_locator(dir, locator, space) -> Result<Vec<EpisodeSummary>>`
-  — `{id, seq, content, occurred_at_ms, ingested_at_ms}`, client-owned DTO.
+`SearchResponse { memory, documents, freshness }` and `DocumentRevision { revision,
+committed_at_ms, content }` are client-owned DTOs that mirror the native JSON-RPC
+wires (`ARCHITECTURE.md` §16.2, §19.2). Legacy `document` / `document_revision`
+memory episodes are preserved on disk but excluded from memory search, context
+assembly, and extraction — doctor reports them as a legacy section and migration
+preserves them across schema upgrades.

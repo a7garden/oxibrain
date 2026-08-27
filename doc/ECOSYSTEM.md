@@ -1,15 +1,17 @@
 # The oxi Ecosystem — Three-Plane Topology
 
-> **Version:** v1.2 · **Date:** 2026-08-23 · aligned to `ARCHITECTURE.md` v2.10
+> **Version:** v1.3 · **Date:** 2026-08-27 · aligned to `ARCHITECTURE.md` v2.11
 > **Status:** Canonical for *how the oxi apps compose* and the order in which that happens.
 > Per-app internals remain canonical in each app's own docs.
 > **Companion:** `doc/ARCHITECTURE.md` (oxibrain itself). For the per-app public surface
 > that oxi apps depend on, see `doc/CONSUMPTION_CONTRACT.md` — this file does not restate
 > unstable API details.
-> **Supersedes:** v1.1 (2026-08-21) — C1–C8 unchanged. v1.2 records that vault git
-> history is a shared consumer-owned crate (`oxi-vault-git`, ADR-011) and that the
-> brain exposes the occurrence chain read-only (`episodes_for_locator`,
-> Consumption Contract 1.3). §C5's tree comment updated accordingly.
+> **Supersedes:** v1.2 (2026-08-23) — v1.3 carries the v2.11 daemonless two-plane
+> cutover end-to-end: no daemon, no listening socket, no `serve --daemon`; the data
+> plane is reached via `Brain::open` (embedded) or a caller-owned `serve --stdio`
+> child; documents live in a disposable `documents.db` cache rebuilt from
+> `documents.toml`-configured files and gix read history. C1–C3 and C6–C7 unchanged;
+> C4, C5's tree, and C8 are rewritten. §3.5/§3.6 host notes updated accordingly.
 
 ---
 
@@ -20,7 +22,7 @@ Three planes, one cross-plane contract, no plane owns another.
 | Plane | Owner | Verb | Durable state? |
 |---|---|---|---|
 | **Foundation contract** (`~/.oxi/foundation/v1/`) | the user; read by every host | *describe providers and packages* | non-secret by construction |
-| **oxibrain durable data plane** (`~/.oxi/brain/`) | the `oxibrain` daemon — sole writer | *remember and understand* | yes — the only durable-memory store in the ecosystem |
+| **oxibrain durable data plane** (`~/.oxi/brain/`) | the `oxibrain` binary — embedded (`Brain::open`) or a caller-owned `serve --stdio` / foreground `serve --http` child | *remember and understand* | yes — the only durable-memory store in the ecosystem |
 | **oxios orchestration / experience plane** | `oxios` (runtime) and consumers (`oxicode`, `oxiline`, `oximemo`, third-party MCP clients) | *run agents, capture, manage time* | host-owned; the brain is *advisory* here |
 
 The single organizing rule is unchanged from v0.2 and is now stated at the plane level:
@@ -28,8 +30,7 @@ The single organizing rule is unchanged from v0.2 and is now stated at the plane
 > **Each plane keeps its own source of truth. Adjacent planes are queried, never overwritten.**
 
 That is what keeps the brain shared infrastructure without making it a single point of
-failure: if the daemon is down, oximemo still captures, oxiline still runs the day, and
-oxios agents still execute — with worse memory, not with no function.
+failure: with no brain child running, oximemo still captures, oxiline still runs the day, and
 
 ---
 
@@ -45,10 +46,11 @@ oxios agents still execute — with worse memory, not with no function.
               │  reads locator (Keychain service/account)   │  capability request
               │                                             │  (workspace.*, brain.query, ...)
               │                                             │
-┌─────────────┴─────────────────────────────────────────────┴────────────────┐
+┌─────────────┴──────────────────────────────────────────────────────────────┐
 │  oxibrain durable data plane                                                │
-│  ~/.oxi/brain/oxibrain.sock          oxibrain serve --daemon               │
-│  ── sole durable-memory store; sole writer; ledger + projection ──        │
+│  ~/.oxi/brain/{brain.db, documents.db, documents.toml}                      │
+│  Brain::open / serve --stdio (caller-owned) / serve --http (loopback)      │
+│  ── sole durable-memory store; operation-scoped writer; ledger + cache ──  │
 └─────────────┬─────────────────────────────────────────────────────────────┘
               ▲                ▲                ▲                  ▲
               │ MCP/RPC        │ MCP/RPC        │ MCP/RPC          │ MCP/RPC
@@ -85,18 +87,29 @@ the rationale for "schema contract, not runtime crate" is in `doc/adr/ADR-007`.
 
 ### 1.2 oxibrain durable data plane
 
-The `oxibrain` daemon, default listening socket `~/.oxi/brain/oxibrain.sock`
-(`$OXIBRAIN_SOCKET` override; `serve --daemon` binds the default when `--socket` is
-absent). It is the **only** durable-memory store in the ecosystem. Its public surface
-— the Rust facade, the MCP tool surface, the CLI — is canonical in
-`doc/ARCHITECTURE.md` and `doc/CONSUMPTION_CONTRACT.md`; this document does not restate
-them.
+One binary, three entry points, **no daemon and no listening socket**. The plane is
+reached either **embedded** — a host process calls `Brain::open(BrainConfig::at(...))`
+and holds a handle-free facade (cheap `Clone` of config + ports; no store actor,
+no writer thread) — or **as a caller-owned child**: `oxibrain-client` builds a
+`LocalProcessEndpoint { executable, dir }` and spawns `oxibrain serve --stdio --dir
+<dir>`; the child speaks JSON-RPC over its stdin/stdout and dies when stdin closes.
+`oxibrain serve --http <addr>` is the foreground loopback variant for the
+operations console (`ARCHITECTURE.md` §16.6). The on-disk shape is two databases:
+`brain.db` (memory ledger + projection + ops, schema v11) and `documents.db`
+(disposable document cache, schema v1), plus `documents.toml` (configured document
+roots — `[[root]]` rows with `alias`, `path`, `space`, `include`/`exclude`,
+`max_file_bytes`). The CLI is canonical in `doc/ARCHITECTURE.md` §16.4; the public
+Rust facade and the MCP tool surface are canonical in `doc/ARCHITECTURE.md` §16.1–§16.2
+and `doc/CONSUMPTION_CONTRACT.md` — this document does not restate them.
 
-Hosts reach the plane via `oxibrain-client`, which on top of the existing JSON-RPC
-surface exposes additive planned helpers (`default_socket_path`, `connect_default`,
-`connect_endpoint`, `ClientHello`, `ServerInfo`) — pinned to land in
-`oxibrain-client@0.3.x`, not yet shipped in `0.2.0`. The MCP tool surface stays at
-fifteen; capability negotiation rides the transport handshake, not a sixteenth tool.
+Hosts reach the plane via `oxibrain-client@0.8.x`, which pairs every connection with
+`spawn_local` (or `spawn_local_with_token` on scoped sessions). Discovery is gone:
+there is no default-path lookup, no `$OXIBRAIN_SOCKET`, and no ambient endpoint.
+Capability negotiation rides the `handshake` JSON-RPC method that the client calls
+immediately after spawning the child — metadata only, never a replacement for a
+token or a `Scope` check. The MCP tool surface stays at fifteen tools; native
+JSON-RPC methods (`handshake`, `reproject`, `spaces/list`, `document_history`)
+extend the surface without counting against the cap.
 
 ### 1.3 oxios orchestration / experience plane
 
@@ -107,9 +120,11 @@ the Foundation contract before it asks `oxibrain-client` for anything else. A co
 that cannot parse a profile still works — the local-GGUF default (`oxibrain-llm-local`)
 needs no Foundation input.
 
-The plane owns its own source of truth. The brain is **advisory** here: the connector
-that watches a vault turns file changes into episodes; an `assemble_context` call returns
-material for a prompt; what the consumer does with the material is the consumer's call.
+The plane owns its own source of truth. The brain is **advisory** here: a host's
+`search` call returns `{ memory, documents, freshness }` — document hits are a
+disposable cache the brain rebuilds from the host's files; memory hits are the
+ledger. An `assemble_context` call returns material for a prompt; what the
+consumer does with the material is the consumer's call.
 
 ---
 
@@ -138,13 +153,19 @@ oxibrain never writes into a user's vault. It reads through a connector. Annotat
 wants to surface (contradictions, suggested links, entity mentions) are returned through
 the API and rendered by the owning app — they are not written into the user's files.
 
-### C4 — An edit is a new episode, not an update
+### C4 — Document revisions live in consumer-owned git, not in the ledger
 
-When a note changes, the connector writes a **new episode** (new content hash) rather
-than mutating the old one. The ledger therefore records how a note evolved, which is
-what makes "when did I change my mind about this?" answerable. Debounce and a
-minimum-diff threshold keep this from becoming version spam; consolidation compacts old
-revisions (`ARCHITECTURE.md` §13).
+A note's edit history is the user's git history. Mutations to a vault file are
+committed by the owning app (oximemo / oxios) — the brain never writes a repo
+(ADR-011, `oxi-vault-git` is consumer-owned). What the brain keeps in
+`documents.db` is a **disposable cache**: a manifest of currently-known files,
+FTS + vector indices, and the per-file `rev → committed_at → content` snapshots
+needed for `Brain::document_history` and the `doc://<alias>/<locator>?rev=<rev>`
+resource. `documents.db` is rebuildable from `documents.toml`-configured files and
+gix HEAD history by `oxibrain index --documents`; dropping and rebuilding it loses
+no user data. Memory is the only ledger — documents never become memory episodes
+anymore — so "when did I change my mind about this?" is answered by reading
+revision history, not by replaying an occurrence chain.
 
 ### C5 — One installation root, one owner per subtree
 
@@ -154,8 +175,15 @@ revisions (`ARCHITECTURE.md` §13).
 ├── foundation/v1/               # Foundation contract — non-secret, every host reads
 │   ├── profiles.json
 │   └── packages.lock
-├── brain/                       # oxibrain store — daemon is the sole writer
-│   └── oxibrain.sock            # default listening socket
+├── brain/                       # oxibrain data — operation-scoped writer (embedded Brain
+│   │                            #  facade, caller-owned serve --stdio, or foreground
+│   │                            #  serve --http); one writer per store per operation
+│   ├── brain.db                 # memory ledger + projection + ops (schema v11)
+│   ├── brain.lock               # advisory lock on brain.db
+│   ├── documents.db             # disposable document cache (schema v1)
+│   ├── documents.lock           # advisory lock on documents.db
+│   └── documents.toml           # configured document roots — [[root]] rows
+│                                #  (alias, path, space, include/exclude, max_file_bytes)
 └── vault/                       # SHARED USER FILE SPACE (oxios + oximemo write;
     │                            #  oxi-frontmatter contract governs; see disciplines below)
     ├── oximemo.toml             # vault config (owned by oximemo)
@@ -164,10 +192,12 @@ revisions (`ARCHITECTURE.md` §13).
     └── _assets/, .trash/, .git/ # app machinery (oximemo) + shared git history (oxi-vault-git, oximemo + oxios)
 ```
 
-One root, one config file, one daemon. **Owned subtrees keep exactly one writer:**
-the daemon writes `brain/` and nothing else; hosts never write `foundation/v1/`. The
-`vault/` subtree is a **shared user file space** — multiple apps may write into it,
-and three disciplines make that safe:
+One root, one config file, two databases — `brain.db` and `documents.db` each
+admit exactly one writing process at a time (`brain.lock`, `documents.lock`).
+**Owned subtrees keep exactly one writer class:** the `oxibrain` binary writes
+`brain/` and nothing else (via short operation-scoped handles); hosts never write
+`foundation/v1/`. The `vault/` subtree is a **shared user file space** — multiple
+apps may write into it, and three disciplines make that safe:
 
 1. **Every write goes through the `oxi-frontmatter` contract.** Atomic
    tmp+fsync+rename, a single frontmatter block, unknown-key- and app-table-preserving
@@ -190,9 +220,12 @@ custom root set per-app via `--vault` or `OXIMEMO_VAULT`. Per-app overrides can
 therefore **diverge silently today** — a split pair fragments the vault: a second
 space registration leaves one space with a single full pass and no watcher.
 Operators running custom roots must keep both apps on one tree; a loud cross-app
-mismatch warning is future work. Apps discover the brain by convention
-(`~/.oxi/brain/oxibrain.sock` or `$OXIBRAIN_SOCKET`), not configuration, so a
-fresh install of any app finds the existing brain with no setup.
+mismatch warning is future work. Apps reach the brain by spawning a `serve --stdio`
+child against an explicit `--dir` (`oxibrain-client::spawn_local(LocalProcessEndpoint
+{ executable, dir })`) — there is no ambient discovery, no default path, and no
+`$OXIBRAIN_SOCKET`. A fresh install still finds the existing brain with no setup:
+the agreed default directory is `~/.oxi/brain`, and every host and consumer app is
+expected to pass it explicitly.
 
 ### C6 — Integration is a client dependency, never a fork
 
@@ -208,15 +241,19 @@ that includes `api_key`, `bearer`, `access_token`, or `refresh_token`-shaped fie
 rejected at parse time. Environment variables remain an explicit development /
 automation override, never the Foundation path.
 
-### C8 — Discovery is additive and auth-first-message is preserved
+### C8 — Transport is caller-owned stdio; auth-first-message is preserved
 
-`oxibrain-client` exposes `default_socket_path()` (returning `~/.oxi/brain/oxibrain.sock`
-or `$OXIBRAIN_SOCKET`), `connect_default()`, and `connect_endpoint(...)`. Hosts speak a
-`ClientHello` and receive a `ServerInfo` carrying the daemon's `schema_version`,
-`server_version`, and supported features — used for capability negotiation. The
-existing token-before-payload auth rule and `Scope`/`Capability` semantics from
-`ARCHITECTURE.md` §15.1–§15.2 are unchanged. Discovery metadata never replaces a token
-and never broadens scope.
+Every connection to the data plane is a **caller-owned child process** —
+`oxibrain serve --stdio --dir <dir>` — built by `oxibrain-client` from a
+`LocalProcessEndpoint { executable, dir }`. There is no listening socket, no
+`default_socket_path`, no `connect_default`, no `connect_endpoint`, and no
+`BrainEndpoint`: every caller passes an explicit `dir`, every connection is one
+child process, and the child dies with its stdin. Immediately after the spawn the
+client sends a `ClientHello` and receives a `ServerInfo` carrying the child's
+`schema_version`, `server_version`, and supported features — used for capability
+negotiation. The existing token-before-payload auth rule and `Scope`/`Capability`
+semantics from `ARCHITECTURE.md` §15.1–§15.2 are unchanged. Handshake metadata
+never replaces a token and never broadens scope.
 
 ---
 
@@ -234,9 +271,9 @@ Two guardrails stay:
    `Option`×2 → overlay → save. The ≤16 ms budget is CI-measured, not a past
    achievement.
 2. **The "no AI" promise survives.** oximemo still contains no model, no prompt, no
-   embedding. Intelligence arrives from outside — over a socket from the brain, or
-   via the user-activated delegated agent CLI (see the copilot amendment below) —
-   always in a panel the user can close.
+   embedding. Intelligence arrives from outside — over a `serve --stdio` child
+   spawned by `oxibrain-client`, or via the user-activated delegated agent CLI
+   (see the copilot amendment below) — always in a panel the user can close.
 
 **Copilot delegation (2026-08-23 amendment, RFC-050-style):** oximemo may additionally
 act as a **selective dispatcher for an external terminal-agent CLI the user has
@@ -250,9 +287,10 @@ follow the frontmatter contract and the agent's policy; oximemo labels observed
 changes without claiming causality. Agent discovery never runs on the app-startup or
 capture paths, and the whole surface hides when no agent is activated (C1).
 
-**Brain integration:** vault connector (watch → episode). Panels: related notes,
-contradictions, entities mentioned, "you wrote about this before". All read-only, all
-closable, all degrade to absent when the daemon is down (C1).
+**Brain integration:** document cache (read-only gix history of the vault; a
+`serve --stdio` child calls `Brain::document_history`). Panels: related notes,
+contradictions, entities mentioned, "you wrote about this before". All read-only,
+all closable, all degrade to absent when no brain child is running (C1).
 
 ### 3.2 oxiline — manage time (experience plane)
 
@@ -274,7 +312,8 @@ web UI. After the M5 migration it has no memory code of its own; agents call
 reads `assemble_context` on every turn. Latency matters here in a way it does not
 elsewhere — hence the §13.2 target of < 150 ms for a 3K-token context assembly. **This
 is the integration where the brain outage risk is sharpest** (`ADR-002`); with no
-in-process memory of its own, oxios agents lose memory entirely when the daemon is down.
+in-process memory of its own, oxios agents lose memory entirely when no `serve
+--stdio` child is up.
 
 ### 3.4 oxibrain — remember and understand (data plane)
 
@@ -299,8 +338,10 @@ locator through a `SecretResolver` at its CLI/facade boundary, and wires the res
 into an `LlmPort` adapter (`oxicode-ai`). Two follow-ups live outside this repo and are
 not on the oxibrain critical path:
 
-- **Socket default.** The current `oxicode` default does not match
-  `~/.oxi/brain/oxibrain.sock`. Tracked in oxicode.
+- **Spawn defaults.** The current `oxicode` default (`executable`, `dir`) does
+  not yet match the agreed `~/.oxi/brain` directory, so its `spawn_local`
+  callers pass an explicit `LocalProcessEndpoint` until the default lands.
+  Tracked in oxicode.
 - **Memory backend.** The current `oxicode` MCP `memory.*` family does not map 1:1 to
   oxibrain's native `ingest` / `search` / `remember` / `retract` tools (which use the
   `space` argument). Tracked in oxicode.
@@ -311,8 +352,9 @@ oxicode never opens `oxibrain`'s store file directly; it goes through `oxibrain-
 
 `oxios` also ships a Foundation host; its parser dialect does not yet match the v1
 frozen shapes — alignment is a tracked follow-up in oxios, not in oxibrain. Bootstrap
-today is probe-only — it discovers the daemon by the default socket path but does
-not yet negotiate `ClientHello`/`ServerInfo`. Tracked in oxios, not in oxibrain.
+today is probe-only — its `spawn_local` hardcodes a `dir` it discovers by walking
+`$OXI_BRAIN_DIR` → `~/.oxi/brain`, and does not yet negotiate `ClientHello` /
+`ServerInfo`. Tracked in oxios, not in oxibrain.
 
 ### 3.7 The rest
 
