@@ -4,9 +4,74 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
-## [Unreleased]
-### Added
+## [0.8.0] — 2026-08-27
 
+The daemon is gone. The vault becomes a rebuildable document cache; the
+memory half is the only durable state. oxibrain-core is no longer reachable
+over a long-lived socket — every process is caller-owned (stdio child or
+foreground HTTP). The MCP tool cap holds at 15; one native RPC is added.
+
+### Architecture (ARCHITECTURE.md v2.11)
+
+- **Two planes, two stores** — `brain.db` carries the immutable episode
+  ledger and the projection; `documents.db` is a disposable cache that can
+  be rebuilt from the configured `documents.toml` roots at any time.
+  `Brain::search()` returns `SearchResponse { memory, documents, freshness }`
+  — the two lists never blend scores. `SearchPlane::{Memory, Documents}` and
+  `Query.planes` make the split explicit. Legacy `document` /
+  `document_revision` ledger rows are excluded from default memory search
+  and `recall`; `legacy_document_history` is the only surface for them.
+- **Handle-free facade, op-scoped lock** — `Brain` no longer carries a
+  long-lived `StoreHandle`. Every read method opens the store in
+  `SQLITE_OPEN_READONLY` for that op; every write takes a short
+  per-process lock via a `lockfile` advisory (bounded retry
+  `[25, 50, 100, 200, 400, 800] ms`). Multi-writer safety is the
+  cooperation of the facade + the lock, not a daemon. (P8 retained as a
+  cooperation rule; the requirement still applies.)
+- **No sync, no watcher, no queue.** `ingest_jobs` is dropped in
+  `schema v11`; the missing rows live as the query
+  `uncached_memory_episodes` (deduped, content-hash-keyed). Backlogs
+  cannot silently rot. The carry-over 1024 pull-source rows that the old
+  watcher tried to mount are kept as retired `sources` so the FK chain
+  (196 episodes) is preserved, but they have no live effect; doctor
+  shows them only in the `legacy pull sources (provenance-only)` section.
+
+### Removed
+
+- `oxibrain daemon` subcommand, the `serve --daemon` path, the default
+  `~/.oxi/brain/oxibrain.sock` socket, `~/.oxi/brain/.oxibrain.pid`,
+  `extract_pending` background loop, and `oxibrain::daemon` module.
+  `BrainClient::connect_default` / `connect_endpoint` /
+  `endpoint_default_path` / `default_socket_path` are deleted.
+- `crates/oxibrain-store/src/watch.rs` (vault watcher).
+
+### Features
+
+- **`serve --stdio` and `serve --http` (caller-owned)** — `--stdio` keeps
+  the process alive until the consumer closes stdin; `--http` binds a
+  foreground server. No sockets to discover, no `bootout` to forget.
+- **`BrainClient::spawn_local` / `spawn_local_with_token`** — wraps a
+  stdio child in `LocalProcessEndpoint { executable, dir }` so a child
+  started by the client is reaped with `kill_on_drop`.
+- **`documents.toml` (canonical config) + `index --documents` CLI** — the
+  root table is `[[root]]` with `alias, path, space, include?, exclude?,
+  max_file_bytes?`. `oxibrain init` seeds a single `vault` root when the
+  resolved data directory is the default AND the user did not pass `--dir`
+  AND `~/.oxi/vault` exists (spec §4 canonical config). `index --documents
+  [--embed]` reconciles + applies chunks + optionally embeds.
+- **Native RPC `document_history`** — returns the per-locator revision
+  chain from the documents cache (`DocumentRevision { locator, revision,
+  modified_at, content_hash, content }`). Read-capability gated like
+  `resources/read`. Not a 16th MCP tool.
+- **`extract --pending`** — replaces the old `extract_pending` queue
+  drain. Pulls rows from `uncached_memory_episodes`, dedupes by
+  `(space, content_hash)`, and exits when done. No daemon, no PID,
+  no launcher.
+- **`BrainClient::document_history` + `DocumentRevision` DTO** — read
+  surface for the cache.
+- **`oxibrain-client@0.8.0`** — fork of the workspace version (lockstep
+  was always a mistake: client is the deployment boundary, not the
+  engine). The 0.7.0 client remains compatible with 0.8.0 server.
 - **Per-note revision history — `Brain::episodes_for_locator` (Consumption
   Contract 1.3)** — the read side of the vault occurrence chain (§4.2.1):
   every episode ingested for `<dir>/<locator>`, oldest first, full content
@@ -16,13 +81,6 @@ squash-merged.
   records why vault git history stays consumer-owned
   (`oxi-vault-git@0.1.0`) and why the read-only occurrence query is the
   read-side complement.
-
-### Fixes
-
-- **Root inbox file exclusions** — `Chat.md` and `Later.md` at the vault root are
-  excluded from ingestion, while similarly named notes in subfolders remain
-  eligible.
-
 ## [0.6.0] — 2026-08-20
 ### Features
 
