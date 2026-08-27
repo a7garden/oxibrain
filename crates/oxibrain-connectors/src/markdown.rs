@@ -150,6 +150,52 @@ fn is_excluded_dir(entry: &walkdir::DirEntry) -> bool {
     name.starts_with('.') || name == "_assets"
 }
 
+/// Strip a leading YAML (`---\n…\n---`) or TOML (`+++\n…\n+++`) frontmatter
+/// block from a markdown document. Anything before the first heading block
+/// is metadata and must not bleed into the FTS index.
+///
+/// Recognises the block when:
+/// - the file starts with `---` or `+++` on its own line (after one optional
+///   leading BOM); and
+/// - the matching close fence (`---` or `+++`) appears on its own line
+///   somewhere later in the file.
+///
+/// Files without a recognisable frontmatter are returned verbatim so
+/// non-conformant prose documents are not silently truncated.
+pub fn strip_markdown_frontmatter(input: &str) -> String {
+    let trimmed = input.strip_prefix('\u{feff}').unwrap_or(input);
+    let trimmed = trimmed.trim_start_matches('\n');
+    let (fence, rest) = if let Some(rest) = strip_front_line(trimmed, "---") {
+        ("---", rest)
+    } else if let Some(rest) = strip_front_line(trimmed, "+++") {
+        ("+++", rest)
+    } else {
+        return input.to_string();
+    };
+    let close = format!("\n{fence}\n");
+    let end = match rest.find(&close) {
+        Some(p) => p,
+        None => {
+            // Unterminated block: leave the document alone rather than
+            // dropping content.
+            return input.to_string();
+        }
+    };
+    let body = &rest[end + close.len()..];
+    let body = body.strip_prefix('\n').unwrap_or(body);
+    body.to_string()
+}
+
+fn strip_front_line<'a>(s: &'a str, fence: &str) -> Option<&'a str> {
+    let line_end = s.find('\n')?;
+    let first = &s[..line_end];
+    if first.trim_end() == fence {
+        Some(&s[line_end + 1..])
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

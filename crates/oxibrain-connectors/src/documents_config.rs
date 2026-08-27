@@ -1,0 +1,185 @@
+//! `documents.toml` — the plain-text declaration of which on-disk roots the
+//! document plane should reconcile.
+//!
+//! The shape and the rules below mirror `docs/superpowers/specs/2026-08-27-…`
+//! §4.1 verbatim: every root entry carries an alias (unique identifier inside
+//! this file), a filesystem `path` (with `~` expanded at load), the target
+//! `space`, an include and exclude glob list, and a size limit. Defaults match
+//! the spec so an empty section behaves sensibly:
+//!
+//! ```toml
+//! [[root]]
+//! alias = "vault"
+//! path = "~/.oxi/vault"
+//! space = "personal"
+//! include = ["**/*.md", "**/*.txt", "**/*.html"]
+//! exclude = ["**/.git/**", "**/.DS_Store", "**/*.tmp", "**/*.lock"]
+//! max_file_bytes = 10485760
+//! ```
+//!
+//! Loaded from `<dir>/documents.toml`. Missing files are not an error: they
+//! produce an empty configuration so the first run on a fresh brain is harmless
+//! (operators seed the file intentionally via `oxibrain init`).
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+const DEFAULT_INCLUDE: &[&str] = &["**/*.md", "**/*.txt", "**/*.html"];
+const DEFAULT_EXCLUDE: &[&str] = &["**/.git/**", "**/.DS_Store", "**/*.tmp", "**/*.lock"];
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// File-name of the on-disk configuration inside the brain directory.
+pub const CONFIG_FILE_NAME: &str = "documents.toml";
+
+/// One declared root (alias + on-disk location + matching rules).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootEntry {
+    pub alias: String,
+    /// Filesystem path. A leading `~` expands to `$HOME` at load time.
+    pub path: PathBuf,
+    /// Logical space this root writes into.
+    pub space: String,
+    #[serde(default = "default_include")]
+    pub include: Vec<String>,
+    #[serde(default = "default_exclude")]
+    pub exclude: Vec<String>,
+    #[serde(default = "default_max_file_bytes")]
+    pub max_file_bytes: u64,
+}
+
+/// The complete configuration: an ordered list of root entries plus the
+/// surrounding metadata we may grow later (default space, etc.).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentsConfig {
+    #[serde(rename = "root", default)]
+    pub roots: Vec<RootEntry>,
+}
+
+/// Errors surfaced by [`DocumentsConfig`] load/save/validate.
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("parse error in {path}: {message}")]
+    Parse { path: PathBuf, message: String },
+    #[error("invalid configuration: {0}")]
+    Invalid(String),
+    #[error("io error: {0}")]
+    Io(String),
+}
+
+impl DocumentsConfig {
+    /// Load `<dir>/documents.toml`. Missing file ⇒ empty config (not an error).
+    ///
+    /// The `~` prefix on each root's `path` is expanded against the calling
+    /// process's `$HOME` before returning; an unset `$HOME` leaves `~`
+    /// untouched so the caller can surface a helpful error at validate time.
+    pub fn load(dir: &Path) -> Result<Self, ConfigError> {
+        let path = dir.join(CONFIG_FILE_NAME);
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(ConfigError::Io(e.to_string())),
+        };
+        let mut cfg: Self = toml::from_str(&text).map_err(|e| ConfigError::Parse {
+            path,
+            message: e.to_string(),
+        })?;
+        for root in &mut cfg.roots {
+            expand_tilde(&mut root.path);
+        }
+        Ok(cfg)
+    }
+
+    /// Persist the configuration to `<dir>/documents.toml`. Creates the
+    /// directory if missing so callers can hand us a fresh brain dir.
+    pub fn save(dir: &Path, cfg: &DocumentsConfig) -> Result<(), ConfigError> {
+        if let Err(e) = fs::create_dir_all(dir) {
+            return Err(ConfigError::Io(e.to_string()));
+        }
+        let path = dir.join(CONFIG_FILE_NAME);
+        let text = toml::to_string_pretty(cfg).map_err(|e| ConfigError::Parse {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        if let Err(e) = fs::write(&path, text) {
+            return Err(ConfigError::Io(e.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Reject configurations that would never reconcile coherently:
+    /// duplicates aliases, empty required fields, etc.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for root in &self.roots {
+            if root.alias.is_empty() {
+                return Err(ConfigError::Invalid("root.alias must not be empty".into()));
+            }
+            if root.space.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "root.{}: space must not be empty",
+                    root.alias
+                )));
+            }
+            if root.path.as_os_str().is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "root.{}: path must not be empty",
+                    root.alias
+                )));
+            }
+            if root.max_file_bytes == 0 {
+                return Err(ConfigError::Invalid(format!(
+                    "root.{}: max_file_bytes must be > 0",
+                    root.alias
+                )));
+            }
+            if !seen.insert(root.alias.clone()) {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate root alias {:?}",
+                    root.alias
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Lookup by alias.
+    pub fn root(&self, alias: &str) -> Option<&RootEntry> {
+        self.roots.iter().find(|r| r.alias == alias)
+    }
+}
+
+fn default_include() -> Vec<String> {
+    DEFAULT_INCLUDE.iter().map(|s| (*s).to_string()).collect()
+}
+
+fn default_exclude() -> Vec<String> {
+    DEFAULT_EXCLUDE.iter().map(|s| (*s).to_string()).collect()
+}
+
+fn default_max_file_bytes() -> u64 {
+    DEFAULT_MAX_FILE_BYTES
+}
+
+/// Expand a leading `~` (or `~/…`) against `$HOME`. Anything else is left
+/// untouched so a relative or absolute path passes through verbatim.
+fn expand_tilde(path: &mut PathBuf) {
+    let s = path.to_string_lossy();
+    let stripped = match s.strip_prefix("~/") {
+        Some(rest) => rest.to_string(),
+        None => match s.as_ref() {
+            "~" => String::new(),
+            _ => return,
+        },
+    };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let mut combined = PathBuf::from(home);
+    if !stripped.is_empty() {
+        combined.push(stripped);
+    }
+    *path = combined;
+}

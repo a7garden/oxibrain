@@ -1300,11 +1300,17 @@ name = "oxibrain-connectors"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "blake3",
+ "glob",
+ "hex",
  "notify",
+ "oxibrain-core",
+ "oxibrain-ports",
  "rusqlite",
  "serde",
- "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
+ "toml",
  "tracing",
  "walkdir",
 ]

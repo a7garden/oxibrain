@@ -11,13 +11,19 @@ keywords = ["markdown", "vault", "import", "sync"]
 categories = ["text-processing"]
 
 [dependencies]
-tracing.workspace = true
 walkdir = "2"
 rusqlite.workspace = true
 notify.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+tracing.workspace = true
 anyhow.workspace = true
+glob.workspace = true
+toml.workspace = true
+blake3.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+oxibrain-core.workspace = true
+oxibrain-ports.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
