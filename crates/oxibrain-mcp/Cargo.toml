@@ -15,7 +15,6 @@ async-trait.workspace = true
 oxibrain-client.workspace = true
 oxibrain.workspace = true
 oxibrain-connectors.workspace = true
-notify.workspace = true
 oxibrain-core.workspace = true
 oxibrain-ports.workspace = true
 anyhow.workspace = true

@@ -2577,7 +2577,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "include_dir",
- "notify",
  "oxibrain",
  "oxibrain-client",
  "oxibrain-connectors",

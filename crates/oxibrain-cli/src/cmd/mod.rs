@@ -28,7 +28,6 @@ pub mod serve;
 pub mod source_policy;
 pub mod spaces;
 pub mod stats;
-pub mod sync;
 pub mod timeline;
 pub mod token;
 pub mod why;

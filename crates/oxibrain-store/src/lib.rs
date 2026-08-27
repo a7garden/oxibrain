@@ -161,3 +161,24 @@ impl Store {
         (write_conn, _lock)
     }
 }
+
+impl Store {
+    /// Open a fresh read-only SQLite connection to `<dir>/brain.db`. WAL
+    /// mode lets this connection coexist with the writer. No advisory lock,
+    /// no migrations, no spawned actor: callers get a normal query-only
+    /// connection that closes when dropped.
+    pub fn open_read_only(dir: &Path) -> Result<rusqlite::Connection, BrainError> {
+        crate::migration::ensure_vec_extension();
+        let db_path = dir.join("brain.db");
+        if !db_path.exists() {
+            return Err(BrainError::NotFound(format!(
+                "no brain.db at {} — initialize first with `oxibrain init`",
+                db_path.display()
+            )));
+        }
+        let conn = rusqlite::Connection::open(&db_path).map_err(sql_err)?;
+        conn.execute_batch("PRAGMA query_only=ON; PRAGMA foreign_keys=ON;")
+            .map_err(sql_err)?;
+        Ok(conn)
+    }
+}

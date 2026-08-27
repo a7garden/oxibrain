@@ -448,6 +448,11 @@ pub enum FtsIndex {
 /// FTS5/BM25 lexical search over one index. Returns hits sorted by BM25 score
 /// descending (FTS5 rank is negated so higher = better). Call twice — once per
 /// index — so both lists enter RRF as separate channels (§7.4).
+///
+/// Legacy `document` / `document_revision` episodes stay indexed (their FTS
+/// rows are kept) but are filtered out at fetch here: the default `search` /
+/// `recall` surfaces must never surface them (two-plane §8). Explicit legacy
+/// operators can still reach them through a direct FTS query.
 pub fn fts_search(
     conn: &Connection,
     space: &str,
@@ -476,6 +481,13 @@ pub fn fts_search(
         "SELECT target_kind, target_id, rank
          FROM {table}
          WHERE {table} MATCH ?1 AND space_id = ?2
+           AND NOT (
+             {table}.target_kind = 'episode' AND EXISTS (
+               SELECT 1 FROM episodes e
+               WHERE e.id = {table}.target_id
+                 AND e.source_kind IN ('document', 'document_revision')
+             )
+           )
          ORDER BY rank
          LIMIT ?3"
     );

@@ -33,7 +33,27 @@ pub fn assemble_context(
     hints: Option<&RecallHints>,
     tokenizer: &dyn TokenizerPort,
 ) -> Result<ContextResult, BrainError> {
+    let input = build_context_input(conn, space, query_text, hints)?;
     let policy = oxibrain_core::pack::PackPolicy::for_budget(budget);
+    Ok(oxibrain_core::pack::pack(
+        &input,
+        &ContextBudget { max_tokens: budget },
+        &policy,
+        tokenizer,
+    ))
+}
+
+/// Build the memory-plane [`ContextInput`] for a query — everything
+/// `assemble_context` gathers, without the packing step. Public so the
+/// facade can attach documents-plane excerpts (`input.documents`) before
+/// packing: `core::pack` positions the Documents layer between
+/// QueryNeighborhood and RecentEpisodes and applies its reserve floor.
+pub fn build_context_input(
+    conn: &Connection,
+    space: &str,
+    query_text: &str,
+    hints: Option<&RecallHints>,
+) -> Result<oxibrain_core::pack::ContextInput, BrainError> {
     let mut input = oxibrain_core::pack::ContextInput::default();
 
     // 1. Profile — beliefs whose predicate is profile_relevant (§12.2).
@@ -63,7 +83,8 @@ pub fn assemble_context(
     // 3. Query neighborhood — 1-hop edges of the top entities.
     load_neighborhood(conn, space, &ranking, &mut input)?;
 
-    // 4. Recent episodes (wider when hints request it).
+    // 4. Recent episodes (wider when hints request it). Legacy document /
+    //    document_revision episodes never enter context (two-plane §8).
     let recent_limit: i64 = if let Some(h) = hints {
         if h.is_session_start || h.topic_changed {
             20
@@ -77,6 +98,7 @@ pub fn assemble_context(
         .prepare(
             "SELECT id, content, ingested_at FROM episodes
              WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
+               AND source_kind NOT IN ('document', 'document_revision')
              ORDER BY ingested_at DESC LIMIT ?2",
         )
         .map_err(sql_err)?;
@@ -104,12 +126,7 @@ pub fn assemble_context(
     // 5. Summaries with sources (§12.4) — cached Derived-episode summaries.
     load_summaries(conn, space, &mut input)?;
 
-    Ok(oxibrain_core::pack::pack(
-        &input,
-        &ContextBudget { max_tokens: budget },
-        &policy,
-        tokenizer,
-    ))
+    Ok(input)
 }
 
 /// Profile: beliefs where subject is a pinned/high-salience entity AND the

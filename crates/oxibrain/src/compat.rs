@@ -45,7 +45,6 @@ fn _check_methods(_brain: &Brain) {
     let _ = Brain::resolve_entity_id;
     let _ = Brain::list_entities;
     let _ = Brain::list_merges;
-    let _ = Brain::episodes_for_locator;
 
     // Mutation
     let _ = Brain::declare;
@@ -65,7 +64,6 @@ fn _check_methods(_brain: &Brain) {
     // Extraction
     let _ = Brain::extract_one;
     let _ = Brain::extract_one_with;
-    let _ = Brain::extract_pending;
     let _ = Brain::reextract;
     let _ = Brain::consolidate;
     let _ = Brain::summarize_communities;

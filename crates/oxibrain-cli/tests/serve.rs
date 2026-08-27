@@ -143,8 +143,12 @@ async fn second_serve_daemon_fails_fast_on_lock() {
     assert!(!output.status.success(), "second daemon must fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("locked") || stderr.contains("Lock"),
-        "expected lock-related error, got: {stderr}"
+        stderr.contains("locked")
+            || stderr.contains("Lock")
+            // Handle-free facade (Task 6): the advisory lock is
+            // per-operation, so the live-socket refusal fires first.
+            || stderr.contains("refusing to bind"),
+        "expected singleton-enforcement error, got: {stderr}"
     );
     assert!(
         elapsed < Duration::from_secs(5),

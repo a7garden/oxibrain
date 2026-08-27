@@ -30,7 +30,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Ingest { path, space } => cmd::ingest::run(&dir, path, &space).await,
         Command::Stats => cmd::stats::run(&dir).await,
         Command::Spaces => cmd::spaces::run(&dir).await,
-        Command::Sync { path, space } => cmd::sync::run(&dir, &path, &space).await,
         Command::Doctor => cmd::doctor::run(&dir).await,
         Command::Backup {
             no_projection,

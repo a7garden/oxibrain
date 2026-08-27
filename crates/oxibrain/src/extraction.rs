@@ -5,6 +5,22 @@
 use super::{Brain, BrainError, LlmPort, LlmRequest};
 use std::sync::Arc;
 
+/// The facade's default extractor config — the identity shared by the
+/// inline capture path (`remember`) and the backlog drain
+/// (`extract_uncached`), so an episode captured-but-not-extracted is
+/// always picked up by the same extractor id later.
+pub(crate) fn default_extractor_config() -> oxibrain_core::extraction::ExtractorConfig {
+    oxibrain_core::extraction::ExtractorConfig {
+        model_id: "oxibrain-default".into(),
+        prompt_version: 2, // v2: quote-based mentions (ADR-006)
+        registry_major: oxibrain_core::registry::CORE_V1_MAJOR,
+        mechanism: oxibrain_core::extraction::ExtractMechanism::JsonSchema,
+        max_tokens: 8192,
+        model_digest: None,
+        provider_profile_id: None,
+    }
+}
+
 impl Brain {
     /// Extract a single episode synchronously with an explicit LLM provider.
     ///
@@ -21,7 +37,7 @@ impl Brain {
     ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
         let now = self.clock.now();
 
-        // 1. Read episode content [reader].
+        // 1. Read episode content [read-only connection].
         let episode = self
             .get_episode(episode_id)
             .await?
@@ -38,9 +54,10 @@ impl Brain {
         let selected = oxibrain_core::extraction::few_shot_examples(&episode.content, &corpus, 2);
         system.push_str(&oxibrain_core::extraction::format_few_shot(&selected));
 
-        // 3. Call LLM [async, off-actor]. Grammar-capable adapters (the local
-        //    GGUF path, §9.4 D28) get a GBNF grammar generated from the
-        //    registry (P4); everything else takes schema-and-repair.
+        // 3. Call LLM [async, no store open anywhere in this phase].
+        //    Grammar-capable adapters (the local GGUF path, §9.4 D28) get a
+        //    GBNF grammar generated from the registry (P4); everything else
+        //    takes schema-and-repair.
         let req = LlmRequest {
             model: config.model_id.clone(),
             system: Some(system),
@@ -58,9 +75,9 @@ impl Brain {
         };
 
         // 4. Parse + validate [pure]. An unparseable response (truncated
-        // tool call, grammar runaway past the KV budget) is invalid output:
-        // it is recorded in extraction_failures like any other, never
-        // silently dropped, and then fails the episode loudly.
+        //    tool call, grammar runaway past the KV budget) is invalid output:
+        //    it is recorded in extraction_failures like any other, never
+        //    silently dropped, and then fails the episode loudly.
         let parsed: oxibrain_core::extraction::ExtractionResponse =
             match serde_json::from_str(&response.text) {
                 Ok(p) => p,
@@ -126,59 +143,49 @@ impl Brain {
         let valid = result.valid.clone();
         let invalid = result.invalid.clone();
 
-        // 6. Project [WriteOp].
-        let h = self.handle.clone();
-        let cache = self.cache.clone();
-        tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            h.writer()?.submit(Box::new(move |conn| {
-                // Cache the raw response.
-                oxibrain_store::extraction::cache_response(
+        // 6. Project [one short write op; fresh resolution cache].
+        self.write(move |conn| {
+            // Cache the raw response.
+            oxibrain_store::extraction::cache_response(
+                conn,
+                &episode_id,
+                &extractor_id,
+                &raw_response,
+                now,
+            )?;
+            // Project valid claims. The resolution cache is per-call: the
+            // handle-free facade holds no process-lifetime LSH state.
+            let mut cache = oxibrain_store::project::ResolutionCache::new();
+            let n = oxibrain_store::extraction::project_extraction(
+                conn,
+                &space,
+                &episode_id,
+                &extractor_id,
+                &valid,
+                now,
+                &mut cache,
+            )?;
+            // File invalid claims.
+            for (_claim, errors) in &invalid {
+                let errors_json = serde_json::to_string(errors).unwrap_or_else(|_| "[]".into());
+                oxibrain_store::quarantine::record_failure(
                     conn,
                     &episode_id,
                     &extractor_id,
                     &raw_response,
+                    &errors_json,
                     now,
                 )?;
-                // Project valid claims with the persistent resolution cache.
-                let mut cache = cache.lock().expect("resolution cache poisoned");
-                let n = oxibrain_store::extraction::project_extraction(
-                    conn,
-                    &space,
-                    &episode_id,
-                    &extractor_id,
-                    &valid,
-                    now,
-                    &mut cache,
-                )?;
-                // File invalid claims.
-                for (_claim, errors) in &invalid {
-                    let errors_json = serde_json::to_string(errors).unwrap_or_else(|_| "[]".into());
-                    oxibrain_store::quarantine::record_failure(
-                        conn,
-                        &episode_id,
-                        &extractor_id,
-                        &raw_response,
-                        &errors_json,
-                        now,
-                    )?;
-                }
-                let summary = oxibrain_core::extraction::ExtractSummary {
-                    extracted: n,
-                    quarantined: invalid_count,
-                    episodes_done: 1,
-                    episodes_failed: 0,
-                    failures: Vec::new(),
-                };
-                let _ = tx.send(summary);
-                Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("extract_one channel dropped".into()))
+            }
+            Ok(oxibrain_core::extraction::ExtractSummary {
+                extracted: n,
+                quarantined: invalid_count,
+                episodes_done: 1,
+                episodes_failed: 0,
+                failures: Vec::new(),
+            })
         })
         .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Best-effort recording of an unparseable LLM response into
@@ -191,14 +198,12 @@ impl Brain {
         error: &BrainError,
         now: oxibrain_ports::Timestamp,
     ) {
-        let h = self.handle.clone();
         let episode_id = episode_id.to_string();
         let extractor_id = extractor_id.to_string();
         let raw = raw_response.to_string();
         let msg = error.to_string();
-        let res = tokio::task::spawn_blocking(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            h.writer()?.submit(Box::new(move |conn| {
+        let res = self
+            .write(move |conn| {
                 let errors_json = serde_json::to_string(&[msg]).unwrap_or_else(|_| "[]".into());
                 oxibrain_store::quarantine::record_failure(
                     conn,
@@ -208,65 +213,66 @@ impl Brain {
                     &errors_json,
                     now,
                 )?;
-                let _ = tx.send(());
                 Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            rx.recv()
-                .map_err(|_| BrainError::Storage("record_failure channel dropped".into()))
-        })
-        .await;
+            })
+            .await;
         if let Err(e) = res {
             eprintln!("warn: recording response failure: {e}");
         }
     }
 
-    /// Extract uncached memory-plane episodes in batch (queue-less since
-    /// schema v11): takes up to `budget.max_episodes_per_batch` episodes
-    /// from the `uncached_memory_episodes` backlog and extracts each.
-    pub(crate) async fn extract_pending_impl(
-        &self,
-        space: &str,
-        config: &oxibrain_core::extraction::ExtractorConfig,
-        budget: &oxibrain_core::extraction::ExtractionBudget,
-    ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
+    /// Drain the queue-less memory-plane backlog: read up to `limit`
+    /// uncached episodes across **all** spaces and extract each with the
+    /// configured LLM. Returns the number of episodes *processed*
+    /// (successes + failures) — a provider failure still counts as work
+    /// done, matching `ExtractSummary::episodes_done + episodes_failed`.
+    ///
+    /// Each episode runs read → LLM (no store open) → write, so the model
+    /// call is never inside a transaction (§7.2).
+    pub async fn extract_uncached(&self, limit: usize) -> Result<usize, BrainError> {
         let _llm = self.require_llm()?;
+        let config = default_extractor_config();
         let extractor_id = config.id();
-        let batch_limit = budget.max_episodes_per_batch;
-        let query_space = space.to_string();
 
-        // 1. Read the queue-less backlog [reader].
-        let h = self.handle.clone();
-        let episode_ids: Vec<String> = tokio::task::spawn_blocking(move || {
-            h.readers.read(|conn| {
-                oxibrain_store::extraction::uncached_memory_episodes(
-                    conn,
-                    &query_space,
-                    &extractor_id,
-                )
+        // 1. List spaces, then take the backlog per space under one global
+        //    limit (read-only connection).
+        let targets: Vec<(String, String)> = self
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare("SELECT id FROM spaces ORDER BY id")
+                    .map_err(|e| BrainError::Storage(format!("space list: {e}")))?;
+                let spaces: Vec<String> = stmt
+                    .query_map([], |r| r.get(0))
+                    .map_err(|e| BrainError::Storage(format!("space list: {e}")))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| BrainError::Storage(format!("space list: {e}")))?;
+                drop(stmt);
+                let mut out: Vec<(String, String)> = Vec::new();
+                for space in spaces {
+                    if out.len() >= limit {
+                        break;
+                    }
+                    let remaining = limit - out.len();
+                    let ids = oxibrain_store::extraction::uncached_memory_episodes(
+                        conn,
+                        &space,
+                        &extractor_id,
+                    )?;
+                    out.extend(ids.into_iter().take(remaining).map(|id| (space.clone(), id)));
+                }
+                Ok(out)
             })
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
-        let episode_ids: Vec<String> = episode_ids.into_iter().take(batch_limit).collect();
+            .await?;
 
-        // 2. Extract each episode; `cache_response` inside `extract_one`
-        //    removes it from the backlog.
-        let mut total = oxibrain_core::extraction::ExtractSummary::default();
-        for ep_id in episode_ids {
-            match self.extract_one(space, &ep_id, config).await {
-                Ok(summary) => {
-                    total.extracted += summary.extracted;
-                    total.quarantined += summary.quarantined;
-                    total.episodes_done += 1;
-                }
-                Err(e) => {
-                    total.episodes_failed += 1;
-                    total.failures.push((ep_id, e.to_string()));
-                }
+        // 2. Extract each; `cache_response` inside `extract_one` removes it
+        //    from the backlog. Failures count as processed.
+        let mut processed: usize = 0;
+        for (space, ep_id) in targets {
+            match self.extract_one(&space, &ep_id, &config).await {
+                Ok(_) | Err(_) => processed += 1,
             }
         }
-        Ok(total)
+        Ok(processed)
     }
 
     /// Re-extract all primary episodes with a new extractor config.
@@ -277,22 +283,19 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<oxibrain_core::extraction::ExtractSummary, BrainError> {
         let _llm = self.require_llm()?;
-        let h = self.handle.clone();
         let space = space.to_string();
         let query_space = space.clone();
         let extractor_id = config.id();
 
-        let episode_ids = tokio::task::spawn_blocking(move || {
-            h.readers.read(|conn| {
+        let episode_ids = self
+            .read(move |conn| {
                 oxibrain_store::extraction::uncached_memory_episodes(
                     conn,
                     &query_space,
                     &extractor_id,
                 )
             })
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+            .await?;
 
         // Extract each.
         let mut total = oxibrain_core::extraction::ExtractSummary::default();
@@ -334,7 +337,7 @@ impl Brain {
     /// * Profile failures may leave an in-progress checkpoint but never an
     ///   uncited summary and never a mutated source episode: the LLM call
     ///   happens outside any store transaction, and the cache write /
-    ///   derived episode write / checkpoint-complete land in one WriteOp
+    ///   derived episode write / checkpoint-complete land in one write op
     ///   so all three are atomic together.
     pub(crate) async fn consolidate_impl(
         &self,
@@ -343,35 +346,30 @@ impl Brain {
     ) -> Result<Vec<String>, BrainError> {
         let llm = self.require_llm()?.clone();
         let now = self.clock.now();
-        let h = self.handle.clone();
         let space_owned = space.to_string();
         let extractor_id = config.id();
 
-        // 1. Read clusters + filter to pending ones [reader].
-        let clusters = tokio::task::spawn_blocking({
-            let h = h.clone();
+        // 1. Read clusters + filter to pending ones [read-only].
+        let clusters = {
             let space_owned = space_owned.clone();
             let extractor_id = extractor_id.clone();
-            move || -> Result<Vec<oxibrain_store::consolidation::EpisodeCluster>, BrainError> {
-                h.readers.read(|conn| {
-                    let all =
-                        oxibrain_store::consolidation::find_episode_clusters(conn, &space_owned)?;
-                    oxibrain_store::consolidation::filter_pending_clusters(
-                        conn,
-                        &extractor_id,
-                        &all,
-                    )
-                })
-            }
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+            self.read(move |conn| {
+                let all =
+                    oxibrain_store::consolidation::find_episode_clusters(conn, &space_owned)?;
+                oxibrain_store::consolidation::filter_pending_clusters(
+                    conn,
+                    &extractor_id,
+                    &all,
+                )
+            })
+            .await?
+        };
 
-        // 2. For each pending cluster: establish checkpoint FIRST (WriteOp
-        //    outside any LLM transaction), then check cache, then build
-        //    prompt + call LLM only on a miss. The LLM call is NEVER inside
-        //    a store transaction; the cache write, derived-episode write,
-        //    and checkpoint-complete happen together in step 3.
+        // 2. For each pending cluster: establish checkpoint FIRST (one short
+        //    write op), then check cache, then build prompt + call LLM only
+        //    on a miss. The LLM call is NEVER inside a store transaction;
+        //    the cache write, derived-episode write, and checkpoint-complete
+        //    happen together in step 3.
         let mut summaries: Vec<(Vec<String>, String)> = Vec::new();
         for cluster in clusters {
             let episode_ids = cluster.episode_ids.clone();
@@ -382,74 +380,54 @@ impl Brain {
             //     leaves a resumable `in_progress` row; the next call to
             //     `consolidate_impl` re-attempts the cluster because
             //     `filter_pending_clusters` only filters `completed` ones.
-            tokio::task::spawn_blocking({
-                let h = h.clone();
+            {
                 let extractor_id = extractor_id.clone();
-                move || -> Result<(), BrainError> {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    h.writer()?.submit(Box::new(move |conn| {
-                        oxibrain_store::consolidation::checkpoint_begin(
-                            conn,
-                            &member_hash,
-                            &extractor_id,
-                            now,
-                        )?;
-                        let _ = tx.send(());
-                        Ok(())
-                    }))?;
-                    h.writer()?.flush()?;
-                    rx.recv().map_err(|_| {
-                        BrainError::Storage("checkpoint_begin channel dropped".into())
-                    })?;
-                    Ok(())
-                }
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+                self.write(move |conn| {
+                    oxibrain_store::consolidation::checkpoint_begin(
+                        conn,
+                        &member_hash,
+                        &extractor_id,
+                        now,
+                    )
+                })
+                .await?;
+            }
 
-            // 2b. Cache check + (on miss) prompt build — all under readers,
-            //     outside any writer transaction.
-            let cached = tokio::task::spawn_blocking({
-                let h = h.clone();
+            // 2b. Cache check + (on miss) prompt build — both reads, no
+            //     store lock held across the model call.
+            let cached = {
                 let extractor_id = extractor_id.clone();
-                move || {
-                    h.readers.read(|conn| {
-                        oxibrain_store::consolidation::get_cached_summary(
-                            conn,
-                            "consolidation",
-                            &member_hash,
-                            &extractor_id,
-                        )
-                    })
-                }
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+                self.read(move |conn| {
+                    oxibrain_store::consolidation::get_cached_summary(
+                        conn,
+                        "consolidation",
+                        &member_hash,
+                        &extractor_id,
+                    )
+                })
+                .await?
+            };
 
             if let Some(text) = cached {
                 summaries.push((episode_ids.clone(), text));
                 continue;
             }
 
-            let prompt = tokio::task::spawn_blocking({
-                let h = h.clone();
+            let prompt = {
                 let space_owned = space_owned.clone();
                 let prompt_ids = episode_ids.clone();
-                move || {
-                    h.readers.read(|conn| {
-                        oxibrain_store::consolidation::build_consolidation_prompt(
-                            conn,
-                            &space_owned,
-                            &oxibrain_store::consolidation::EpisodeCluster {
-                                episode_ids: prompt_ids,
-                                shared_entities: Vec::new(),
-                            },
-                        )
-                    })
-                }
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+                self.read(move |conn| {
+                    oxibrain_store::consolidation::build_consolidation_prompt(
+                        conn,
+                        &space_owned,
+                        &oxibrain_store::consolidation::EpisodeCluster {
+                            episode_ids: prompt_ids,
+                            shared_entities: Vec::new(),
+                        },
+                    )
+                })
+                .await?
+            };
 
             // 2c. LLM call — OUTSIDE any store transaction, no Keychain
             //     access on this path (the Keychain lookup is in the
@@ -466,84 +444,48 @@ impl Brain {
             summaries.push((episode_ids, response.text));
         }
 
-        // 3. One single transaction inside the writer actor holds
-        //    cache_summary + write_derived_episode (with Uncertainty) +
-        //    checkpoint_complete. The writer serialises all writes
-        //    through one connection (§16.3, P8), so the single tx
-        //    is the atomicity boundary. Either all three rows land or
-        //    none do — so a profile failure cannot leave the cache
-        //    half pointing at a derived episode that isn't in the
-        //    ledger (cross-thread atomicity is NOT provided; do not
-        //    rely on it).
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>, BrainError> {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let (etx, erx) = std::sync::mpsc::channel::<BrainError>();
-            h.writer()?.submit(Box::new(move |conn| {
-                let mut ids = Vec::new();
-                let res: Result<Vec<String>, BrainError> =
-                    (|| -> Result<Vec<String>, BrainError> {
-                        for (episode_ids, text) in &summaries {
-                            let member_hash =
-                                oxibrain_store::consolidation::hash_member_set(episode_ids);
-                            let shared_entities =
-                                oxibrain_store::consolidation::entities_for_episodes(
-                                    conn,
-                                    &space_owned,
-                                    episode_ids,
-                                )?;
-                            let uncertainty =
-                                oxibrain_store::consolidation::uncertainty_for_cluster(
-                                    conn,
-                                    &space_owned,
-                                    &shared_entities,
-                                    now,
-                                )?;
-                            oxibrain_store::consolidation::cache_summary(
-                                conn,
-                                "consolidation",
-                                &member_hash,
-                                &extractor_id,
-                                text,
-                                now,
-                            )?;
-                            let id = oxibrain_store::consolidation::write_derived_episode(
-                                conn,
-                                &space_owned,
-                                text,
-                                episode_ids,
-                                Some(&uncertainty),
-                                now,
-                            )?;
-                            oxibrain_store::consolidation::checkpoint_complete(
-                                conn,
-                                &member_hash,
-                                now,
-                            )?;
-                            ids.push(id);
-                        }
-                        Ok(ids)
-                    })();
-                match res {
-                    Ok(v) => {
-                        let _ = tx.send(v);
-                    }
-                    Err(e) => {
-                        let _ = etx.send(e);
-                    }
-                }
-                Ok(())
-            }))?;
-            h.writer()?.flush()?;
-            match rx.recv() {
-                Ok(v) => Ok(v),
-                Err(_) => match erx.try_recv() {
-                    Ok(e) => Err(e),
-                    Err(_) => Err(BrainError::Storage("consolidate channel dropped".into())),
-                },
+        // 3. One single transaction holds cache_summary + write_derived_episode
+        //    (with Uncertainty) + checkpoint_complete. Either all three rows
+        //    land or none do — so a profile failure cannot leave the cache
+        //    half pointing at a derived episode that isn't in the ledger.
+        self.write(move |conn| {
+            let mut ids = Vec::new();
+            for (episode_ids, text) in &summaries {
+                let member_hash = oxibrain_store::consolidation::hash_member_set(episode_ids);
+                let shared_entities =
+                    oxibrain_store::consolidation::entities_for_episodes(
+                        conn,
+                        &space_owned,
+                        episode_ids,
+                    )?;
+                let uncertainty = oxibrain_store::consolidation::uncertainty_for_cluster(
+                    conn,
+                    &space_owned,
+                    &shared_entities,
+                    now,
+                )?;
+                oxibrain_store::consolidation::cache_summary(
+                    conn,
+                    "consolidation",
+                    &member_hash,
+                    &extractor_id,
+                    text,
+                    now,
+                )?;
+                let id = oxibrain_store::consolidation::write_derived_episode(
+                    conn,
+                    &space_owned,
+                    text,
+                    episode_ids,
+                    Some(&uncertainty),
+                    now,
+                )?;
+                oxibrain_store::consolidation::checkpoint_complete(conn, &member_hash, now)?;
+                ids.push(id);
             }
+            Ok(ids)
         })
         .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Generate community summary text as cached Derived episodes (§9.4, §5.3).
@@ -551,11 +493,11 @@ impl Brain {
     /// Mirrors [`consolidate_impl`] so community summaries satisfy the
     /// same deterministic consolidation invariants:
     ///
-    /// 1. `checkpoint_begin` runs in its own WriteOp BEFORE the LLM call
+    /// 1. `checkpoint_begin` runs in its own write op BEFORE the LLM call
     ///    so a profile / LLM failure leaves a resumable `in_progress`
     ///    row instead of writing an uncited summary.
     /// 2. `cache_summary + write_derived_episode(sources, uncertainty) +
-    ///    checkpoint_complete` run atomically in a single final WriteOp
+    ///    checkpoint_complete` run atomically in a single final write op
     ///    so the cache can never land without the derived episode row.
     /// 3. Sources are the primary episodes that cite the group's entities
     ///    (sorted, deterministic via `episodes_for_entities`), and the
@@ -574,51 +516,38 @@ impl Brain {
     ) -> Result<usize, BrainError> {
         let llm = self.require_llm()?.clone();
         let now = self.clock.now();
-        let h = self.handle.clone();
         let space_owned = space.to_string();
         let extractor_id = config.id();
 
-        // 1. Read community groups [reader].
-        let groups = tokio::task::spawn_blocking({
-            let h = h.clone();
+        // 1. Read community groups [read-only].
+        let groups = {
             let space_owned = space_owned.clone();
-            move || {
-                h.readers.read(|conn| {
-                    oxibrain_store::consolidation::load_community_entities(conn, &space_owned)
-                })
-            }
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+            self.read(move |conn| {
+                oxibrain_store::consolidation::load_community_entities(conn, &space_owned)
+            })
+            .await?
+        };
 
         // 2. Filter pending groups (skip already-completed cache entries,
         //    but keep in-progress rows so a crash resumes). Done in a
         //    single read op so we can short-circuit the LLM for done work.
-        let extractor_id_for_filter = extractor_id.clone();
-        let pending_groups: Vec<oxibrain_store::consolidation::CommunityGroup> =
-            tokio::task::spawn_blocking({
-                let h = h.clone();
-                move || {
-                    h.readers.read(|conn| {
-                        let done = oxibrain_store::consolidation::completed_clusters(
-                            conn,
-                            &extractor_id_for_filter,
-                        )?;
-                        let mut kept = Vec::new();
-                        for g in groups {
-                            let h = oxibrain_store::consolidation::hash_community_member_set(
-                                &g.entity_ids,
-                            );
-                            if !done.contains(&hex::encode(h)) {
-                                kept.push(g);
-                            }
-                        }
-                        Ok::<_, BrainError>(kept)
-                    })
+        let pending_groups: Vec<oxibrain_store::consolidation::CommunityGroup> = {
+            let extractor_id = extractor_id.clone();
+            self.read(move |conn| {
+                let done =
+                    oxibrain_store::consolidation::completed_clusters(conn, &extractor_id)?;
+                let mut kept = Vec::new();
+                for g in groups {
+                    let h =
+                        oxibrain_store::consolidation::hash_community_member_set(&g.entity_ids);
+                    if !done.contains(&hex::encode(h)) {
+                        kept.push(g);
+                    }
                 }
+                Ok::<_, BrainError>(kept)
             })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+            .await?
+        };
 
         // 3. For each pending group: checkpoint_begin BEFORE LLM call so
         //    a crash here leaves a resumable in_progress row.
@@ -627,52 +556,38 @@ impl Brain {
             let entity_ids = group.entity_ids.clone();
             let member_hash = oxibrain_store::consolidation::hash_community_member_set(&entity_ids);
             let extractor_id = extractor_id.clone();
-            let result: Result<(), BrainError> = tokio::task::spawn_blocking({
-                let h = h.clone();
-                move || {
-                    h.writer()?.submit(Box::new(move |conn| {
-                        oxibrain_store::consolidation::checkpoint_begin(
-                            conn,
-                            &member_hash,
-                            &extractor_id,
-                            now,
-                        )?;
-                        Ok(())
-                    }))?;
-                    h.writer()?.flush()?;
-                    Ok(())
-                }
+            self.write(move |conn| {
+                oxibrain_store::consolidation::checkpoint_begin(
+                    conn,
+                    &member_hash,
+                    &extractor_id,
+                    now,
+                )
             })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))?;
-            result?;
+            .await?;
             checkpointed_hashes.push(member_hash);
         }
 
         // 4. Cache check + LLM call OUTSIDE any transaction. Cache
-        //    hits short-circuit the LLM (and the final WriteOp), only
+        //    hits short-circuit the LLM (and the final write op), only
         //    completing the checkpoint that the previous run already
         //    began.
         let mut ltm_results: Vec<(Vec<String>, String)> = Vec::new();
         for group in pending_groups.iter() {
             let entity_ids = group.entity_ids.clone();
             let member_hash = oxibrain_store::consolidation::hash_community_member_set(&entity_ids);
-            let cached = tokio::task::spawn_blocking({
-                let h = h.clone();
+            let cached = {
                 let extractor_id = extractor_id.clone();
-                move || {
-                    h.readers.read(|conn| {
-                        oxibrain_store::consolidation::get_cached_summary(
-                            conn,
-                            "community",
-                            &member_hash,
-                            &extractor_id,
-                        )
-                    })
-                }
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+                self.read(move |conn| {
+                    oxibrain_store::consolidation::get_cached_summary(
+                        conn,
+                        "community",
+                        &member_hash,
+                        &extractor_id,
+                    )
+                })
+                .await?
+            };
 
             if let Some(text) = cached {
                 ltm_results.push((entity_ids, text));
@@ -680,22 +595,18 @@ impl Brain {
             }
 
             // Build prompt and call LLM.
-            let prompt = tokio::task::spawn_blocking({
-                let h = h.clone();
+            let prompt = {
                 let space_owned = space_owned.clone();
                 let group = group.clone();
-                move || {
-                    h.readers.read(|conn| {
-                        oxibrain_store::consolidation::build_community_prompt(
-                            conn,
-                            &space_owned,
-                            &group,
-                        )
-                    })
-                }
-            })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+                self.read(move |conn| {
+                    oxibrain_store::consolidation::build_community_prompt(
+                        conn,
+                        &space_owned,
+                        &group,
+                    )
+                })
+                .await?
+            };
 
             let response = llm
                 .complete(LlmRequest {
@@ -709,81 +620,48 @@ impl Brain {
             ltm_results.push((entity_ids, response.text));
         }
 
-        // 5. Final WriteOp: gather sources + Uncertainty per group, then
+        // 5. Final write op: gather sources + Uncertainty per group, then
         //    atomically cache_summary + write_derived_episode +
         //    checkpoint_complete. Same atomicity boundary as
-        //    consolidate_impl — single sqlite transaction inside the
-        //    writer actor (writer serialises all writes; §16.3, P8),
-        //    not cross-thread atomicity.
+        //    consolidate_impl — one sqlite transaction.
         let count = ltm_results.len();
         if count > 0 {
-            tokio::task::spawn_blocking(move || -> Result<(), BrainError> {
-                let (tx, rx) = std::sync::mpsc::channel::<()>();
-                let (etx, erx) = std::sync::mpsc::channel::<BrainError>();
-                h.writer()?.submit(Box::new(move |conn| {
-                    let res: Result<(), BrainError> = (|| -> Result<(), BrainError> {
-                        for ((entity_ids, text), member_hash) in
-                            ltm_results.iter().zip(checkpointed_hashes.iter())
-                        {
-                            let sources = oxibrain_store::consolidation::episodes_for_entities(
-                                conn,
-                                &space_owned,
-                                entity_ids,
-                            )?;
-                            let uncertainty =
-                                oxibrain_store::consolidation::uncertainty_for_cluster(
-                                    conn,
-                                    &space_owned,
-                                    entity_ids,
-                                    now,
-                                )?;
-                            oxibrain_store::consolidation::cache_summary(
-                                conn,
-                                "community",
-                                member_hash,
-                                &extractor_id,
-                                text,
-                                now,
-                            )?;
-                            oxibrain_store::consolidation::write_derived_episode(
-                                conn,
-                                &space_owned,
-                                text,
-                                &sources,
-                                Some(&uncertainty),
-                                now,
-                            )?;
-                            oxibrain_store::consolidation::checkpoint_complete(
-                                conn,
-                                member_hash,
-                                now,
-                            )?;
-                        }
-                        Ok(())
-                    })();
-                    match res {
-                        Ok(()) => {
-                            let _ = tx.send(());
-                        }
-                        Err(e) => {
-                            let _ = etx.send(e);
-                        }
-                    }
-                    Ok(())
-                }))?;
-                h.writer()?.flush()?;
-                match rx.recv() {
-                    Ok(()) => Ok(()),
-                    Err(_) => match erx.try_recv() {
-                        Ok(e) => Err(e),
-                        Err(_) => Err(BrainError::Storage(
-                            "summarize_communities channel dropped".into(),
-                        )),
-                    },
+            self.write(move |conn| {
+                for ((entity_ids, text), member_hash) in
+                    ltm_results.iter().zip(checkpointed_hashes.iter())
+                {
+                    let sources = oxibrain_store::consolidation::episodes_for_entities(
+                        conn,
+                        &space_owned,
+                        entity_ids,
+                    )?;
+                    let uncertainty = oxibrain_store::consolidation::uncertainty_for_cluster(
+                        conn,
+                        &space_owned,
+                        entity_ids,
+                        now,
+                    )?;
+                    oxibrain_store::consolidation::cache_summary(
+                        conn,
+                        "community",
+                        member_hash,
+                        &extractor_id,
+                        text,
+                        now,
+                    )?;
+                    oxibrain_store::consolidation::write_derived_episode(
+                        conn,
+                        &space_owned,
+                        text,
+                        &sources,
+                        Some(&uncertainty),
+                        now,
+                    )?;
+                    oxibrain_store::consolidation::checkpoint_complete(conn, member_hash, now)?;
                 }
+                Ok(())
             })
-            .await
-            .map_err(|e| BrainError::Storage(format!("join: {e}")))??;
+            .await?;
         }
         Ok(count)
     }
