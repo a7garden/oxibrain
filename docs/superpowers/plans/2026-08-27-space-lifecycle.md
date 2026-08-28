@@ -1238,11 +1238,16 @@ pub async fn run(dir: &Path, home: Option<&Path>, name: &str, purge: bool) -> an
     }
 
     let mut cfg = DocumentsConfig::load(dir)?;
-    let scaffold_path = format!("~/.oxi/vault/{name}");
+    // Scaffold detection (Task 7 review finding): documents.toml stores
+    // EXPANDED absolute paths — `DocumentsConfig::load` expands `~` against
+    // $HOME and `save` serializes the expanded form, so a tilde-literal
+    // comparison never matches. The provisioning scaffold is uniquely
+    // identified by alias == space == name (aliases are unique in
+    // documents.toml); filter on that.
     let roots_referencing: Vec<_> = cfg
         .roots
         .iter()
-        .filter(|r| r.space == name && !(r.alias == name && r.path == scaffold_path))
+        .filter(|r| r.space == name && r.alias != name)
         .cloned()
         .collect();
 

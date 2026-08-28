@@ -21,7 +21,7 @@ pub async fn run(dir: &Path, space: &str) -> anyhow::Result<()> {
         }
         None => Brain::with_llm(BrainConfig::at(dir), clock, provider.port.clone()).await?,
     };
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let config = llm::config(
         provider.model_id.clone(),
         provider.mechanism,

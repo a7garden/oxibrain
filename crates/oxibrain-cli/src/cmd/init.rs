@@ -1,17 +1,16 @@
 //! `oxibrain init` — initialize a brain store (spec §4).
 //!
-//! Optionally seeds `documents.toml` with a `vault` root when ALL of the
-//! spec's conditions hold (§4.1 "explicit init, default dir"):
-//!
-//! 1. the user passed no `--dir` (an explicit dir is a deliberate store and
-//!    is never touched beyond creating it), and
-//! 2. the resolved dir IS the default `~/.oxi/brain`, and
-//! 3. `~/.oxi/vault` exists (the Oxi Foundation vault layout).
-//!
-//! An existing `documents.toml` is never overwritten.
+//! The CLI arm has already resolved the space; init validates the name,
+//! ensures the space exists, and — only when the resolved dir is a default
+//! dir (no `--dir` passed and a home is known) — provisions the per-space
+//! vault directory and its `documents.toml` root (§4.3), then writes
+//! `~/.oxi/config.toml` with `default_space` when no config file exists
+//! yet. An explicit `--dir` is a deliberate store: nothing under home is
+//! touched. Provisioning is idempotent: re-running init neither clobbers
+//! an existing config nor duplicates roots.
 
+use crate::cmd::provision::provision_space_vault;
 use oxibrain::{Brain, BrainConfig};
-use oxibrain_connectors::documents_config::{DocumentsConfig, RootEntry};
 use std::path::Path;
 
 pub async fn run(
@@ -20,30 +19,25 @@ pub async fn run(
     explicit_dir: bool,
     home: Option<&Path>,
 ) -> anyhow::Result<()> {
+    let name =
+        oxibrain_core::spaces::validate_space_name(space).map_err(|e| anyhow::anyhow!("{e}"))?;
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let id = brain.ensure_space(space).await?;
+    let id = brain.ensure_space(&name).await?;
     println!("initialized brain at {}", dir.display());
-    println!("space '{space}' -> {id}");
-    if let Some(seed_path) = seed_target(dir, explicit_dir, home) {
-        let cfg = DocumentsConfig {
-            roots: vec![RootEntry {
-                alias: "vault".into(),
-                path: seed_path.clone(),
-                space: "personal".into(),
-                include: vec!["**/*.md".into(), "**/*.txt".into(), "**/*.html".into()],
-                exclude: vec![
-                    "**/.git/**".into(),
-                    "**/.DS_Store".into(),
-                    "**/*.tmp".into(),
-                    "**/*.lock".into(),
-                ],
-                max_file_bytes: oxibrain_connectors::documents_config::DEFAULT_MAX_FILE_BYTES,
-            }],
-        };
-        cfg.validate().map_err(|e| anyhow::anyhow!("seed: {e}"))?;
-        let seeded = seed_path.display();
-        DocumentsConfig::save(dir, &cfg).map_err(|e| anyhow::anyhow!("seed: {e}"))?;
-        println!("seeded documents.toml with vault root ({seeded})");
+    println!("space '{name}' -> {id}");
+
+    if let (Some(h), false) = (home, explicit_dir) {
+        let r = provision_space_vault(dir, h, &name)?;
+        println!("vault dir: {}", r.vault_dir.display());
+        if r.root_added {
+            println!("documents root '{name}' added");
+        }
+        let cfg_path = oxibrain::config::UserConfig::config_path(h);
+        if !cfg_path.exists() {
+            oxibrain::config::UserConfig::set_default_space(h, &name)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("default space: {name} ({})", cfg_path.display());
+        }
     }
 
     // ADR-005: init stays offline; say so instead of surprising the user later.
@@ -53,53 +47,37 @@ pub async fn run(
     Ok(())
 }
 
-/// The vault path to seed, when the spec §4 conditions hold. `None` means
-/// "do not seed".
-fn seed_target(dir: &Path, explicit_dir: bool, home: Option<&Path>) -> Option<std::path::PathBuf> {
-    if explicit_dir {
-        return None; // --dir passed: never seed.
-    }
-    let home = home?;
-    if dir != home.join(".oxi").join("brain") {
-        return None; // resolved dir is not the default brain dir.
-    }
-    let vault = home.join(".oxi").join("vault");
-    if !vault.is_dir() {
-        return None; // no foundation vault: nothing to point at.
-    }
-    if dir.join("documents.toml").exists() {
-        return None; // never overwrite an existing config.
-    }
-    Some(vault)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn seed_target_requires_default_dir_and_vault() {
+    #[tokio::test]
+    async fn init_provisions_per_space_vault_and_config() {
+        let dir = tempfile::TempDir::new().unwrap();
         let home = tempfile::TempDir::new().unwrap();
-        let brain_dir = home.path().join(".oxi").join("brain");
-        std::fs::create_dir_all(&brain_dir).unwrap();
+        run(dir.path(), "personal", false, Some(home.path()))
+            .await
+            .unwrap();
+        assert!(home.path().join(".oxi/vault/personal").is_dir());
+        assert!(dir.path().join("documents.toml").exists());
+        let cfg = std::fs::read_to_string(home.path().join(".oxi/config.toml")).unwrap();
+        assert!(cfg.contains("default_space = \"personal\""));
+        // Idempotent: second init neither clobbers nor duplicates.
+        run(dir.path(), "personal", false, Some(home.path()))
+            .await
+            .unwrap();
+        let text = std::fs::read_to_string(dir.path().join("documents.toml")).unwrap();
+        assert_eq!(text.matches("[[root]]").count(), 1);
+    }
 
-        // No vault yet: no seed.
-        assert_eq!(seed_target(&brain_dir, false, Some(home.path())), None);
-        // --dir passed: never seed.
-        assert_eq!(seed_target(&brain_dir, true, Some(home.path())), None);
-        // Different dir: no seed.
-        let other = home.path().join("elsewhere");
-        assert_eq!(seed_target(&other, false, Some(home.path())), None);
-
-        // Vault exists + default dir + no explicit --dir: seed.
-        std::fs::create_dir_all(home.path().join(".oxi").join("vault")).unwrap();
-        assert_eq!(
-            seed_target(&brain_dir, false, Some(home.path())),
-            Some(home.path().join(".oxi").join("vault"))
-        );
-
-        // Existing documents.toml: untouched.
-        std::fs::write(brain_dir.join("documents.toml"), "[[root]]\n").unwrap();
-        assert_eq!(seed_target(&brain_dir, false, Some(home.path())), None);
+    #[tokio::test]
+    async fn init_explicit_dir_does_not_touch_foundation() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = tempfile::TempDir::new().unwrap();
+        run(dir.path(), "work", true, Some(home.path()))
+            .await
+            .unwrap();
+        assert!(!dir.path().join("documents.toml").exists());
+        assert!(!home.path().join(".oxi/config.toml").exists());
     }
 }

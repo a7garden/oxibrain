@@ -30,6 +30,11 @@ fn ask_prints_content_excerpt_for_episode_hits() {
     )
     .expect("write note");
 
+    // `init` seeds the `personal` space — implicit space creation is abolished
+    // outside `init`, `space add`, and archive imports.
+    let (ok, _) = run_oxibrain(store.path(), &["init"]);
+    assert!(ok, "init failed");
+
     let (ok, out) = run_oxibrain(store.path(), &["ingest", file.to_str().unwrap()]);
     assert!(ok, "ingest failed: {out}");
 

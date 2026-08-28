@@ -30,6 +30,7 @@ hex.workspace = true
 serde.workspace = true
 rusqlite.workspace = true
 toml = "0.8"
+toml_edit = "0.22"
 reqwest.workspace = true
 
 [dev-dependencies]

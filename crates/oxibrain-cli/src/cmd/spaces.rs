@@ -7,22 +7,28 @@ use anyhow::Result;
 use oxibrain::{Brain, BrainConfig};
 use std::path::Path;
 
-pub async fn run(dir: &Path) -> Result<()> {
+pub async fn run(dir: &Path, home: Option<&Path>) -> Result<()> {
     let brain = Brain::open_ro(BrainConfig::at(dir)).await?;
+    let default_space = oxibrain::config::UserConfig::load(home)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .default_space;
     let spaces = brain.list_spaces().await?;
     println!(
-        "{:<24} {:<16} {:<20} {:>9} {:>9}",
-        "NAME", "ID", "CREATED", "EPISODES", "ENTITIES"
+        "{:<26} {:<16} {:<20} {:>9} {:>9} {:>6}",
+        "NAME", "ID", "CREATED", "EPISODES", "ENTITIES", "DOCS"
     );
     for s in &spaces {
+        let marker = if s.name == default_space { "*" } else { "" };
+        let docs = brain.document_count_for_space(&s.name).await.unwrap_or(0);
         let id = s.id.chars().take(16).collect::<String>();
         println!(
-            "{:<24} {:<16} {:<20} {:>9} {:>9}",
-            s.name,
+            "{:<26} {:<16} {:<20} {:>9} {:>9} {:>6}",
+            format!("{}{}", s.name, marker),
             id,
             millis_to_iso(s.created_at.millis()),
             s.episode_count,
-            s.entity_count
+            s.entity_count,
+            docs
         );
     }
     Ok(())
@@ -63,7 +69,18 @@ mod tests {
         drop(brain);
 
         // Run the read-only listing; asserts no error.
-        run(dir.path()).await.unwrap();
+        run(dir.path(), None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn spaces_marks_default_and_shows_docs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let _ = brain.ensure_space("work").await.unwrap();
+        drop(brain);
+        // No documents.toml roots: DOCS column is 0; default (config absent) is
+        // "personal", which is not in the store — no row is marked.
+        run(dir.path(), None).await.unwrap();
     }
 
     #[test]

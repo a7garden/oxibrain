@@ -13,7 +13,7 @@ pub async fn run(
     topic: Option<&str>,
 ) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let page = match kind {
         "entity" => {
             let id = entity

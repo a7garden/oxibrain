@@ -1,5 +1,14 @@
 # oxibrain — Architecture
-> **Version:** v2.11 · **Date:** 2026-08-27 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.12 · **Date:** 2026-08-28 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.12 — Space lifecycle (spec 2026-08-27).** Spaces are a managed unit:
+> `oxibrain space add|remove|default`, `~/.oxi/config.toml` (`default_space`,
+> strict parse, first §18 key implemented), per-space vault provisioning at
+> `~/.oxi/vault/<space>/` with legacy flat-root `exclude` fixup, and P5 purge
+> via `RedactTarget::Space` (audited; documents cache swept; vault files never
+> deleted). Implicit space creation is abolished outside `init`, `space add`,
+> and archive imports; the default space resolves as `--space` > config.toml >
+> `"personal"` on CLI and MCP alike. Workspace `0.8.0 → 0.9.0`; Consumption
+> Contract 1.5.
 > **v2.11 — Two planes, no daemon (spec 2026-08-27).** Documents move to a
 > separate `documents.db` cache rebuilt from configured files and gix history.
 > `Brain` becomes a handle-free runtime facade: read methods open their store
@@ -451,10 +460,11 @@ Rules:
   `doctor`; they never fail a query.
 - git roots additionally honor repository ignore rules through gix (§5).
 - `oxibrain init` seeds `documents.toml` only when: the resolved data directory is the
-  canonical default `~/.oxi/brain`, the user did not pass `--dir`, and `~/.oxi/vault`
-  exists. Explicit or temporary `--dir` never reads, writes, or references the default
-  vault. Upgrade-time `open` never seeds roots. Legacy `sources` rows are never
-  imported. Custom roots require an explicit config edit.
+  canonical default `~/.oxi/brain` and the user did not pass `--dir`; provisioning creates
+  `~/.oxi/vault/<space>/` when needed (§15.1) rather than requiring a pre-existing vault.
+  Explicit or temporary `--dir` never reads, writes, or references the default vault.
+  Upgrade-time `open` never seeds roots. Legacy `sources` rows are never imported.
+  Custom roots require an explicit config edit.
 
 **Document identity.** For a `(root_alias, locator)` pair the document identity is
 
@@ -2008,6 +2018,15 @@ yesterday's agent session if they land together. Apps are distinguished by `Sour
 it: resolution may consult `shared` as an additional **read-only candidate source**; writes never
 cross; a local entity linked to a shared one records that link explicitly.
 
+**Lifecycle (v2.12).** Spaces are created by `init`/`space add` (with per-space
+vault provisioning under `~/.oxi/vault/<space>/` for the default brain dir) and
+removed by `space remove` (empty-only, scaffold-aware) or `space remove --purge`
+(audited `RedactTarget::Space`; vault files are never deleted — §1.4). The
+default space lives in `~/.oxi/config.toml` and resolves identically for CLI
+and MCP. Provisioned vault roots persist in `documents.toml` as expanded
+absolute paths — loading expands a leading `~` against `$HOME`, and
+provisioning writes the resolved path, never the tilde literal.
+
 ### 15.2 Capabilities
 
 ```rust
@@ -2181,6 +2200,14 @@ boundary by construction.
 
 **Fifteen. That is the cap.** Adding a sixteenth requires removing one.
 
+**Default-space resolution (v2.12).** A tool call that omits `space` resolves
+the configured default — `~/.oxi/config.toml`'s `default_space` (§18), falling
+back to `"personal"` when no config exists — the same `--space` > config >
+builtin chain as the CLI (§16.4). `serve --stdio`/`serve --http` load the
+config once at startup and hand the value to the session. No tool or verb
+implicitly creates a space: unknown names fail fast with a `space add` hint
+(creation is `init`, `space add`, or archive import only).
+
 Resources: `spaces://` (list), `space://`, `entity://{id}`, `episode://{id}`, `graph://{entity}?depth=n`, `doc://<alias>/<locator>?rev=<rev>` (v2.11).
 
 **Schema evolution is additive, as §19.4 requires.** The v1.0 `search` and `traverse` schemas
@@ -2226,8 +2253,11 @@ removed (semantic occurrence history is replaced by gix-backed document history)
 ### 16.4 CLI
 
 ```
-oxibrain init [--space] [--dir D]              # seeds documents.toml only when dir == default and ~/.oxi/vault exists (§4.2.1)
-oxibrain spaces                                # list spaces with counts (read-only)
+oxibrain init [--space] [--dir D]              # provisions ~/.oxi/vault/<space>/ + its root when no --dir and $HOME resolves (§15.1)
+oxibrain spaces                                # list spaces with episode + document counts; * marks the config.toml default (v2.12)
+oxibrain space add <name>                      # create (idempotent) + provision ~/.oxi/vault/<name>/ + its documents.toml root (default dir only; §15.1)
+oxibrain space remove <name> [--purge]         # empty-only removal; --purge = audited RedactTarget::Space + documents cache sweep; vault files never deleted
+oxibrain space default [<name>]                # print or set ~/.oxi/config.toml default_space (§18)
 oxibrain doctor [--dir D]                      # freshness, skipped roots/files, dangling doc:// refs, legacy pull sources, pending stats, model digest
 oxibrain stats [--dir D]                       # counts (memory + per-root documents + pending extraction)
 oxibrain ingest <path|-> [--source kind] [--space s]   # trust is server-evaluated
@@ -2253,6 +2283,11 @@ oxibrain token issue|list|revoke
 oxibrain predicate add|list | eval [--suite fast|full|bench|parity]
 # removed: sync, sync/run, watcher flags, --daemon, --socket, default-socket discovery
 ```
+
+Every `--space`-carrying verb resolves its target as `--space` >
+`~/.oxi/config.toml` (`default_space`, §18) > `"personal"` — the same chain on
+CLI and MCP (§16.2). Unknown spaces fail fast with a `space add` hint; nothing
+implicitly creates a space — only `init`, `space add`, and archive imports do.
 
 `index [--documents] [--embed]` is the document-plane maintenance verb. It loads
 `documents.toml`, opens `documents.db` for a short locked apply, runs
@@ -2453,10 +2488,12 @@ directly; they reach the brain through a caller-owned stdio child (or in-process
 
 ```
 ~/.oxi/
-├── config.toml                 # shared: which brain, which space, provider settings
+├── config.toml                 # default_space (v2.12; dir/provider reserved) — strict parse
 ├── foundation/v1/              # Foundation v1 contract (ADR-007) — non-secret
 │   ├── profiles.json           # provider profiles (Keychain locator only — never a secret)
 │   └── packages.lock           # resolved Foundation packages (name/version/digest/source/trust)
+├── vault/                      # per-space note vaults (v2.12) — provisioned by init/space add; §15.1
+│   └── <space>/                # one directory per space; lands in documents.toml as an expanded absolute root
 └── brain/                      # oxibrain data directory (`<dir>``, default ~/.oxi/brain)
     ├── brain.db                # memory ledger + projections (schema v11)
     ├── brain.lock              # advisory lock on brain.db

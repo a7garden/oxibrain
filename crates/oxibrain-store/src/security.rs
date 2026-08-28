@@ -236,6 +236,21 @@ pub fn list_redactions(conn: &Connection) -> Result<Vec<(String, String, Timesta
     Ok(result)
 }
 
+/// True if a tombstone row exists for exactly this serialized target.
+/// `space remove --purge` re-runs gate crash-resume on the `Space`
+/// tombstone: its presence proves the brain-side redaction already ran
+/// (spec §4.5 crash recovery) even though the `spaces` row is gone.
+pub fn redaction_recorded(conn: &Connection, target_json: &str) -> Result<bool, BrainError> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM redactions WHERE target_json = ?1",
+            params![target_json],
+            |r| r.get(0),
+        )
+        .map_err(sql_err)?;
+    Ok(n > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

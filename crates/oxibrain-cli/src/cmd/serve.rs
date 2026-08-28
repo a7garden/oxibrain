@@ -13,6 +13,10 @@
 //! There is no socket, no daemon, and no PID file. Diagnostics go to stderr
 //! — stdout is the protocol channel.
 
+// §4.6: tools omitting `space` resolve the configured default from
+// `~/.oxi/config.toml`. A malformed config fails serve loudly rather than
+// silently landing data in a different space.
+
 use anyhow::Context;
 use oxibrain::{Brain, BrainConfig};
 use oxibrain_ports::BrainError;
@@ -22,7 +26,11 @@ pub async fn run(
     dir: &Path,
     http: Option<String>,
     ui_dir: Option<std::path::PathBuf>,
+    home: Option<&Path>,
 ) -> anyhow::Result<()> {
+    let default_space = oxibrain::config::UserConfig::load(home)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .default_space;
     let brain = match Brain::open(BrainConfig::at(dir)).await {
         Ok(b) => b,
         Err(BrainError::Locked { holder }) => {
@@ -40,12 +48,12 @@ pub async fn run(
         let addr: std::net::SocketAddr = addr_str
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid --http address '{addr_str}': {e}"))?;
-        return oxibrain_mcp::serve_http(brain, addr, ui_dir).await;
+        return oxibrain_mcp::serve_http(brain, addr, ui_dir, default_space).await;
     }
 
     // Stdio: one session per process, optionally token-gated when the first
     // message on stdin is an `auth` request.
-    oxibrain_mcp::serve_stdio(brain)
+    oxibrain_mcp::serve_stdio(brain, default_space)
         .await
         .context("stdio session")
 }

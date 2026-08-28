@@ -31,7 +31,7 @@ pub fn create_space(conn: &Connection, name: &str, now: Timestamp) -> Result<Str
 }
 
 /// Deterministic space id (blake3 of name). Keeps `init` reproducible.
-fn space_id(name: &str) -> String {
+pub fn space_id(name: &str) -> String {
     let mut h = blake3::Hasher::new();
     h.update(name.as_bytes());
     let mut out = [0u8; 16];
@@ -102,6 +102,24 @@ pub fn list_spaces(conn: &Connection) -> Result<Vec<SpaceRow>, BrainError> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(sql_err)?;
     Ok(rows)
+}
+
+/// Episode count for one space (decision-free fetch, P9).
+pub fn episode_count_for_space(conn: &Connection, space_id: &str) -> Result<i64, BrainError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM episodes WHERE space_id = ?1",
+        params![space_id],
+        |r| r.get(0),
+    )
+    .map_err(sql_err)
+}
+
+/// Drop a space row. Callers MUST have verified the space is empty or have
+/// purged its data (spec §4.5) — this deletes no dependent rows.
+pub fn drop_space(conn: &Connection, space_id: &str) -> Result<(), BrainError> {
+    conn.execute("DELETE FROM spaces WHERE id = ?1", params![space_id])
+        .map_err(sql_err)?;
+    Ok(())
 }
 
 /// Next monotonic seq for a space.

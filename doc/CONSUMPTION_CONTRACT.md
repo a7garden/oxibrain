@@ -1,4 +1,4 @@
-# Consumption Contract 1.4
+# Consumption Contract 1.5
 
 > `ARCHITECTURE.md` §19.2. This document pins the public surface consumers depend on and
 > the stability guarantees each tier carries. It is the contract between
@@ -39,6 +39,26 @@
 > `document_history` (read-gated like `resources/read`); native RPCs `sync/run`
 > and `episodes/for_locator` removed; `default_socket_path` /
 > `connect_default` / `connect_endpoint` / `BrainEndpoint` removed.
+>
+> **1.5 (2026-08-27) — space lifecycle.** Workspace crates (including
+> `oxibrain-client`) move `0.8.0 → 0.9.0` together; the changes are §1.5 below.
+> The MCP tool surface stays at fifteen.
+
+## 1.5 (2026-08-27) — Space lifecycle
+
+1. **Breaking (minor):** verbs and MCP tools no longer implicitly create
+   spaces. Create with `oxibrain space add` / `init` / archive import.
+   Unknown spaces fail fast with a `space add` hint.
+2. **Additive:** MCP tools omitting `space` resolve the default from
+   `~/.oxi/config.toml` (`default_space`), not a hardcoded `"personal"`.
+3. **Additive:** CLI `space add|remove|default`; `RedactTarget` serde gains
+   `{"kind":"space","id":…}`. No new MCP tools; fifteen-tool cap unchanged.
+4. **Breaking (unstable tier):** the `oxibrain-mcp` server entry points
+   `serve_stdio` / `serve_stdio_at` / `serve_http` / `run_session_gated`
+   each gain a `default_space: String` parameter — an arity change on every
+   signature (`BrainServer::with_default_space` is the builder alternative).
+   `oxibrain-mcp` is feature-gated unstable (see *Stability tiers*), so this
+   rides the minor bump like the rest of 1.5.
 ## Versioning
 
 - **Semver** on the `oxibrain` crate facade.

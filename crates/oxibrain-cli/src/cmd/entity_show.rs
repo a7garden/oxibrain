@@ -5,7 +5,7 @@ use std::path::Path;
 
 pub async fn run(dir: &Path, id: &str, space: &str) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let beliefs = brain.beliefs(&space_id, id).await?;
     println!("entity {id}: {} beliefs", beliefs.len());
     for b in &beliefs {

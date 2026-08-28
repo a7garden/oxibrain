@@ -16,8 +16,12 @@ use std::sync::Arc;
 
 async fn spawn_server() -> (tempfile::TempDir, BrainClient) {
     let dir = tempfile::TempDir::new().unwrap();
-    let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
     let (client_side, server_side) = tokio::io::duplex(8192);
+    let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+    // Tools never implicitly create spaces (§4.4) — seed the ones the
+    // round-trip tests use.
+    let _ = brain.ensure_space("personal").await.unwrap();
+    let _ = brain.ensure_space("work").await.unwrap();
     let (sr, sw) = tokio::io::split(server_side);
     tokio::spawn(async move {
         let _ = run_session(Arc::new(BrainServer::from_brain(brain)), sr, sw).await;
@@ -42,7 +46,7 @@ async fn spawn_auth_server(caps: &[Capability]) -> (tempfile::TempDir, BrainClie
     let (client_side, server_side) = tokio::io::duplex(8192);
     let (sr, sw) = tokio::io::split(server_side);
     tokio::spawn(async move {
-        let _ = run_session_gated(Arc::new(brain), sr, sw).await;
+        let _ = run_session_gated(Arc::new(brain), "personal".into(), sr, sw).await;
     });
     let (cr, cw) = tokio::io::split(client_side);
     let mut client = BrainClient::from_io(cr, cw);
@@ -158,7 +162,7 @@ async fn client_auth_invalid_token_fails_connection() {
     let (client_side, server_side) = tokio::io::duplex(8192);
     let (sr, sw) = tokio::io::split(server_side);
     tokio::spawn(async move {
-        let _ = run_session_gated(Arc::new(brain), sr, sw).await;
+        let _ = run_session_gated(Arc::new(brain), "personal".into(), sr, sw).await;
     });
     let (cr, cw) = tokio::io::split(client_side);
     let mut client = BrainClient::from_io(cr, cw);
@@ -242,6 +246,7 @@ async fn client_search_returns_both_planes_and_native_methods() {
     )
     .unwrap();
     let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+    let _ = brain.ensure_space("personal").await.unwrap();
     let (client_side, server_side) = tokio::io::duplex(8192);
     let (sr, sw) = tokio::io::split(server_side);
     tokio::spawn(async move {

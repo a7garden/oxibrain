@@ -41,7 +41,7 @@ pub fn run() -> anyhow::Result<()> {
 
 pub async fn run_add(dir: &Path, json: &str, space: &str) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     // Parse to extract name for the declaration.
     let v: serde_json::Value =
         serde_json::from_str(json).map_err(|e| anyhow::anyhow!("parse predicate def: {e}"))?;

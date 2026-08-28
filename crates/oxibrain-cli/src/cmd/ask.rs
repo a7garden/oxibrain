@@ -12,7 +12,7 @@ use std::path::Path;
 /// The two lists are printed separately, never blended.
 pub async fn run(dir: &Path, question: &str, space: &str) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
 
     let base = || oxibrain_core::Query {
         text: question.to_string(),

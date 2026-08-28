@@ -27,6 +27,7 @@ pub use oxibrain_ports::{
     SystemClock, Timestamp, TokenizerPort,
 };
 
+use oxibrain_store::documents::DocumentCache;
 pub use oxibrain_store::ledger::IngestAttachment;
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 pub use oxibrain_store::security::AuditRow;
@@ -283,6 +284,13 @@ impl Brain {
             .await
     }
 
+    /// Drop a space row (verified empty by the caller). Spec §4.5.
+    pub async fn drop_space(&self, space_id: &str) -> Result<(), BrainError> {
+        let space_id = space_id.to_string();
+        self.write(move |conn| ledger::drop_space(conn, &space_id))
+            .await
+    }
+
     /// List all spaces with live counts, ordered by (created_at, id).
     pub async fn list_spaces(&self) -> Result<Vec<SpaceInfo>, BrainError> {
         self.read(move |conn| {
@@ -299,6 +307,51 @@ impl Brain {
                 .collect())
         })
         .await
+    }
+
+    /// Episode count for one space id (space-remove empty check, spec §4.5).
+    pub async fn episode_count_for_space(&self, space_id: &str) -> Result<i64, BrainError> {
+        let space_id = space_id.to_string();
+        self.read(move |conn| ledger::episode_count_for_space(conn, &space_id))
+            .await
+    }
+
+    /// Document rows in the documents cache for a space NAME (listing, spec §4.2).
+    pub async fn document_count_for_space(&self, space_name: &str) -> Result<u64, BrainError> {
+        let dir = self.config.dir.clone();
+        let name = space_name.to_string();
+        tokio::task::spawn_blocking(move || match DocumentCache::open_ro(&dir) {
+            Ok(cache) => cache.document_count_for_space(&name),
+            Err(BrainError::NotFound(_)) => Ok(0),
+            Err(e) => Err(e),
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Chunk count for a space NAME (empty check, spec §4.5).
+    pub async fn chunk_count_for_space(&self, space_name: &str) -> Result<u64, BrainError> {
+        let dir = self.config.dir.clone();
+        let name = space_name.to_string();
+        tokio::task::spawn_blocking(move || match DocumentCache::open_ro(&dir) {
+            Ok(cache) => cache.chunk_count_for_space(&name),
+            Err(BrainError::NotFound(_)) => Ok(0),
+            Err(e) => Err(e),
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
+    }
+
+    /// Purge every documents-cache row for a space NAME (purge step 3).
+    pub async fn purge_documents_for_space(&self, space_name: &str) -> Result<(), BrainError> {
+        let dir = self.config.dir.clone();
+        let name = space_name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let cache = DocumentCache::open_rw(&dir)?;
+            cache.purge_space(&name)
+        })
+        .await
+        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
     /// Ingest a note episode. Returns the episode id (content-derived).
@@ -951,6 +1004,18 @@ impl Brain {
             oxibrain_store::redaction::execute_redaction(conn, &target, &reason, &actor, now)
         })
         .await
+    }
+
+    /// True if a `redactions` tombstone exists for `target` — the audited
+    /// proof that a redaction already ran. `space remove --purge` re-runs
+    /// use the `Space` tombstone to tell a crash-resumed purge (brain-side
+    /// redaction done, cache sweep pending) from a space that never existed
+    /// (spec §4.5 crash recovery).
+    pub async fn redaction_recorded(&self, target: &RedactTarget) -> Result<bool, BrainError> {
+        let target_json = serde_json::to_string(target)
+            .map_err(|e| BrainError::Storage(format!("serialize redact target: {e}")))?;
+        self.read(move |conn| oxibrain_store::security::redaction_recorded(conn, &target_json))
+            .await
     }
 
     // ── Export / import ───────────────────────────────────────────────────

@@ -38,6 +38,7 @@ pub fn resolve_closure(
             entity_id,
             predicate,
         } => resolve_entity_closure(conn, space, entity_id, Some(predicate)),
+        RedactTarget::Space { id } => resolve_space_closure(conn, id),
     }
 }
 
@@ -142,6 +143,67 @@ fn resolve_entity_closure(
     })
 }
 
+/// Space-level closure (spec §4.5): every episode in the space and every
+/// derived row. Enumerated, not folded per-episode — a space purge leaves
+/// nothing to refold.
+fn resolve_space_closure(
+    conn: &Connection,
+    space_id: &str,
+) -> Result<RedactionClosure, BrainError> {
+    let episodes = query_strings(
+        conn,
+        "SELECT id FROM episodes WHERE space_id = ?1",
+        &[&space_id],
+    )?;
+    let statements = query_strings(
+        conn,
+        "SELECT id FROM statements WHERE space_id = ?1",
+        &[&space_id],
+    )?;
+    let assertions = if statements.is_empty() {
+        Vec::new()
+    } else {
+        query_strings(
+            conn,
+            "SELECT a.id FROM assertions a
+             JOIN statements s ON s.id = a.statement_id
+             WHERE s.space_id = ?1",
+            &[&space_id],
+        )?
+    };
+    let mentions = if assertions.is_empty() {
+        Vec::new()
+    } else {
+        query_strings(
+            conn,
+            "SELECT m.id FROM mentions m
+             JOIN assertions a ON a.id = m.assertion_id
+             JOIN statements s ON s.id = a.statement_id
+             WHERE s.space_id = ?1",
+            &[&space_id],
+        )?
+    };
+    let extractions = if episodes.is_empty() {
+        Vec::new()
+    } else {
+        query_strings_in(
+            conn,
+            "SELECT DISTINCT episode_id FROM extractions WHERE ",
+            &episodes,
+        )?
+    };
+    // `summaries` is keyed by (scope_kind, member_set_hash, extractor_id), not
+    // by space_id — left to cache-zone rebuild; nothing to enumerate here.
+    Ok(RedactionClosure {
+        episodes,
+        assertions,
+        statements,
+        mentions,
+        extractions,
+        summaries: Vec::new(),
+    })
+}
+
 /// Find statements that have zero assertions outside `delete_ids`.
 fn find_unsupported_statements(
     conn: &Connection,
@@ -193,6 +255,105 @@ fn find_unsupported_for_episode(
 
 // ── Execution ───────────────────────────────────────────────────────────
 
+/// Full space teardown (FK-safe order). Mirrors reproject's end state for a
+/// space with no episodes: nothing. Tombstones and audit rows stay.
+fn execute_space_redaction(
+    conn: &Connection,
+    space_id: &str,
+    reason: &str,
+    actor: &str,
+    now: Timestamp,
+) -> Result<RedactionResult, BrainError> {
+    let closure = resolve_closure(
+        conn,
+        &RedactTarget::Space {
+            id: space_id.to_string(),
+        },
+    )?;
+    // Empty-closure path (e.g. a space with zero episodes — only document
+    // chunks): the space row is administrative, not part of the
+    // episode-derived closure. Drop it directly and return. No
+    // audit/tombstone row is written (nothing was redacted; the row drop
+    // is bookkeeping). Idempotent: a second call against a gone space
+    // deletes 0 rows and returns an empty closure without error.
+    if closure.assertions.is_empty() && closure.episodes.is_empty() {
+        conn.execute("DELETE FROM spaces WHERE id = ?1", params![space_id])
+            .map_err(sql_err)?;
+        return Ok(RedactionResult {
+            closure,
+            beliefs_refolded: 0,
+        });
+    }
+
+    // 1. Audit BEFORE acting (§11.5). Same write_audit used by the generic
+    //    path; record before any data goes away.
+    crate::security::write_audit(
+        conn,
+        actor,
+        None,
+        "redact",
+        Some(
+            &serde_json::to_string(&RedactTarget::Space {
+                id: space_id.to_string(),
+            })
+            .unwrap_or_default(),
+        ),
+        Some(reason),
+        now,
+    )?;
+
+    // 2. Append to `redactions` table (INSERT OR IGNORE → idempotent on
+    //    repeated audit + replay during reproject).
+    let target_json = serde_json::to_string(&RedactTarget::Space {
+        id: space_id.to_string(),
+    })
+    .unwrap_or_default();
+    let rid = oxibrain_core::id::token_id(&target_json, now);
+    conn.execute(
+        "INSERT OR IGNORE INTO redactions (id, target_json, reason, actor, redacted_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![rid, target_json, reason, actor, now.millis()],
+    )
+    .map_err(sql_err)?;
+
+    // 3. Teardown in FK-safe order. Cache/derived tables first (no FKs into
+    //    truth tables), then truth half (children before parents).
+    //    `fts_word` / `fts_ngram` use column `space_id` (v6 schema —
+    //    `episodes_fts` was dropped in v6 and is gone in v11).
+    for sql in [
+        "DELETE FROM fts_word WHERE space_id = ?1",
+        "DELETE FROM fts_ngram WHERE space_id = ?1",
+        "DELETE FROM tfidf_vectors WHERE space_id = ?1",
+        "DELETE FROM entity_vectors WHERE entity_id IN (SELECT id FROM entities WHERE space_id = ?1)",
+        "DELETE FROM communities WHERE space_id = ?1",
+        "DELETE FROM chunks WHERE space_id = ?1",
+    ] {
+        conn.execute(sql, params![space_id]).map_err(sql_err)?;
+    }
+    for sql in [
+        "DELETE FROM extraction_failures WHERE episode_id IN (SELECT id FROM episodes WHERE space_id = ?1)",
+        "DELETE FROM extractions WHERE episode_id IN (SELECT id FROM episodes WHERE space_id = ?1)",
+        "DELETE FROM episode_links WHERE from_episode IN (SELECT id FROM episodes WHERE space_id = ?1) OR to_episode IN (SELECT id FROM episodes WHERE space_id = ?1)",
+        "DELETE FROM mentions WHERE assertion_id IN (SELECT a.id FROM assertions a JOIN statements s ON s.id = a.statement_id WHERE s.space_id = ?1)",
+        "DELETE FROM assertions WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1)",
+        "DELETE FROM beliefs WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1)",
+        "DELETE FROM statements WHERE space_id = ?1",
+        "DELETE FROM entity_merges WHERE loser_id IN (SELECT id FROM entities WHERE space_id = ?1) OR winner_id IN (SELECT id FROM entities WHERE space_id = ?1)",
+        "DELETE FROM entity_keys WHERE space_id = ?1",
+        "DELETE FROM entities WHERE space_id = ?1",
+        "DELETE FROM source_policies WHERE source_id IN (SELECT id FROM sources WHERE space_id = ?1)",
+        "DELETE FROM sources WHERE space_id = ?1",
+        "DELETE FROM episodes WHERE space_id = ?1",
+        "DELETE FROM spaces WHERE id = ?1",
+    ] {
+        conn.execute(sql, params![space_id]).map_err(sql_err)?;
+    }
+
+    Ok(RedactionResult {
+        closure,
+        beliefs_refolded: 0,
+    })
+}
+
 /// Execute redaction. Writes audit + redactions record FIRST, then tombstones
 /// and deletes. Returns what was affected.
 pub fn execute_redaction(
@@ -202,6 +363,15 @@ pub fn execute_redaction(
     actor: &str,
     now: Timestamp,
 ) -> Result<RedactionResult, BrainError> {
+    // Space purge: dedicated teardown path. Bypasses the generic
+    // closure-driven flow because every space-scoped row goes together —
+    // there is nothing to refold and tombstones are unnecessary (the space
+    // itself is dropped). Idempotent: a second call sees an empty closure
+    // and short-circuits.
+    if let RedactTarget::Space { id } = target {
+        return execute_space_redaction(conn, id, reason, actor, now);
+    }
+
     // 1. Resolve closure.
     let closure = resolve_closure(conn, target)?;
     if closure.assertions.is_empty() && closure.episodes.is_empty() {
@@ -296,6 +466,17 @@ pub fn apply_replay(
     target: &RedactTarget,
     at: Timestamp,
 ) -> Result<usize, BrainError> {
+    // Space purges never replay: `execute_space_redaction` physically
+    // deletes the purged space's episodes — no tombstoned rows remain — so
+    // replay cannot legitimately resurrect anything. Space ids are
+    // deterministic (`ledger::space_id`), so a live space bearing the
+    // redacted id can only be a post-purge re-add; replaying against it
+    // would silently destroy the re-added space's projection on every
+    // reproject, forever.
+    if matches!(target, RedactTarget::Space { .. }) {
+        return Ok(0);
+    }
+
     let closure = resolve_closure(conn, target)?;
     if closure.assertions.is_empty() {
         return Ok(0);
@@ -354,6 +535,10 @@ fn refold_affected(
             entity_id,
             predicate,
         } => (space.as_str(), entity_id.as_str(), Some(predicate.as_str())),
+        // Space purge short-circuits in execute_redaction and is replayed as
+        // a no-op (closure is empty once the space is gone), so this arm is
+        // only reached defensively.
+        RedactTarget::Space { .. } => return Ok(0),
     };
 
     // Find distinct (subject_id, predicate) groups for statements involving
@@ -564,11 +749,16 @@ fn delete_in(conn: &Connection, prefix: &str, ids: &[String]) -> Result<(), Brai
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ledger;
     use crate::migration;
     use crate::project::{DeclObject, Declaration, EntityRef};
     use rusqlite::Connection;
 
     fn fresh_db() -> Connection {
+        // Register sqlite-vec BEFORE opening: vec0 virtual tables (v5+)
+        // need the auto-extension in place at open time, and this module
+        // must not depend on some other test module having registered it.
+        crate::migration::ensure_vec_extension();
         let conn = Connection::open_in_memory().expect("open");
         migration::run(&conn).expect("migrate");
         // Ensure a space exists for FK constraints.
@@ -578,6 +768,14 @@ mod tests {
     }
 
     fn declare_alice_works_for_acme(conn: &Connection, now: Timestamp) -> String {
+        let sid = crate::ledger::create_space(conn, "personal", Timestamp::from_millis(0))
+            .expect("ensure space");
+        declare_in(conn, &sid, now)
+    }
+
+    /// Declare `Alice employed_by Acme` into an arbitrary space; returns the
+    /// declaration episode id.
+    fn declare_in(conn: &Connection, space: &str, now: Timestamp) -> String {
         let decl = Declaration::AddStatement {
             subject: EntityRef {
                 surface: "Alice".into(),
@@ -592,10 +790,8 @@ mod tests {
             valid_from: 0,
             valid_to: oxibrain_ports::TIME_MAX.millis(),
         };
-        let sid = crate::ledger::create_space(conn, "personal", Timestamp::from_millis(0))
-            .expect("ensure space");
         let mut cache = crate::project::ResolutionCache::new();
-        crate::project::project_declaration(conn, &sid, &decl, now, &mut cache).expect("declare")
+        crate::project::project_declaration(conn, space, &decl, now, &mut cache).expect("declare")
     }
 
     #[test]
@@ -729,5 +925,241 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM beliefs", [], |r| r.get(0))
             .unwrap();
         assert_eq!(beliefs_reproj, 0);
+    }
+
+    #[test]
+    fn redact_space_removes_everything_and_audits() {
+        let conn = fresh_db();
+        let now = Timestamp::from_millis(1000);
+        let space_id = ledger::space_id("personal");
+        declare_alice_works_for_acme(&conn, now);
+
+        let target = RedactTarget::Space {
+            id: space_id.clone(),
+        };
+        let closure = resolve_closure(&conn, &target).unwrap();
+        assert!(!closure.episodes.is_empty());
+        assert!(!closure.assertions.is_empty());
+
+        let result = execute_redaction(&conn, &target, "purge", "cli", now).unwrap();
+        assert!(!result.closure.episodes.is_empty());
+
+        // Nothing references the space anymore.
+        for (table, col) in [
+            ("episodes", "space_id"),
+            ("entities", "space_id"),
+            ("entity_keys", "space_id"),
+            ("statements", "space_id"),
+            ("communities", "space_id"),
+            ("chunks", "space_id"),
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE {col} = ?1"),
+                    [&space_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 0, "{table} still has rows for the space");
+        }
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM spaces WHERE id = ?1",
+                [&space_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "space row must be dropped");
+        // Audit trail kept.
+        let audited: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE operation = 'redact'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(audited >= 1);
+    }
+
+    #[test]
+    fn redact_space_is_idempotent() {
+        let conn = fresh_db();
+        let now = Timestamp::from_millis(1000);
+        declare_alice_works_for_acme(&conn, now);
+        let space_id = ledger::space_id("personal");
+        let target = RedactTarget::Space { id: space_id };
+        execute_redaction(&conn, &target, "purge", "cli", now).unwrap();
+        // Capture audit + tombstone counts after the first purge; the
+        // idempotent second call must leave them unchanged (no extra
+        // audit rows, no duplicate `redactions` tombstones).
+        let audit_after_first: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0))
+            .unwrap();
+        let redactions_after_first: i64 = conn
+            .query_row("SELECT COUNT(*) FROM redactions", [], |r| r.get(0))
+            .unwrap();
+        assert!(audit_after_first >= 1);
+        assert!(redactions_after_first >= 1);
+        let second = execute_redaction(&conn, &target, "purge", "cli", now).unwrap();
+        assert!(second.closure.episodes.is_empty());
+        let audit_after_second: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0))
+            .unwrap();
+        let redactions_after_second: i64 = conn
+            .query_row("SELECT COUNT(*) FROM redactions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            audit_after_second, audit_after_first,
+            "idempotent redaction must not re-write audit_log rows"
+        );
+        assert_eq!(
+            redactions_after_second, redactions_after_first,
+            "idempotent redaction must not duplicate redactions tombstones"
+        );
+    }
+
+    #[test]
+    fn reproject_after_space_redaction_stays_empty() {
+        let conn = fresh_db();
+        let now = Timestamp::from_millis(1000);
+        declare_alice_works_for_acme(&conn, now);
+        let space_id = ledger::space_id("personal");
+        execute_redaction(&conn, &RedactTarget::Space { id: space_id }, "t", "t", now).unwrap();
+        // Reproject must not resurrect anything for the redacted space.
+        crate::reproject::reproject(&conn).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn readded_space_survives_reproject_after_purge() {
+        // Regression (final review): purge 'dev' → re-add 'dev' (same
+        // deterministic id) → re-declare → reproject. The permanent Space
+        // tombstone used to replay against the RE-ADDED space's rows and
+        // silently delete them — the projection stayed poisoned forever.
+        // Replay must leave a live space bearing a purged id untouched.
+        let conn = fresh_db();
+        let dev = ledger::create_space(&conn, "dev", Timestamp::from_millis(0)).unwrap();
+        assert_eq!(dev, ledger::space_id("dev"), "space ids are deterministic");
+        declare_in(&conn, &dev, Timestamp::from_millis(1000));
+
+        execute_redaction(
+            &conn,
+            &RedactTarget::Space { id: dev.clone() },
+            "purge",
+            "cli",
+            Timestamp::from_millis(2000),
+        )
+        .unwrap();
+
+        // Re-add 'dev' — the deterministic id collides with the tombstone —
+        // and declare fresh content into it.
+        let dev_again = ledger::create_space(&conn, "dev", Timestamp::from_millis(3000)).unwrap();
+        assert_eq!(dev_again, dev);
+        declare_in(&conn, &dev, Timestamp::from_millis(4000));
+
+        let counts = |conn: &Connection| -> (i64, i64, i64) {
+            let eps: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM episodes WHERE space_id = ?1",
+                    params![dev],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let asserts: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM assertions a JOIN statements s ON s.id = a.statement_id WHERE s.space_id = ?1",
+                    params![dev],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let stmts: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM statements WHERE space_id = ?1",
+                    params![dev],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            (eps, asserts, stmts)
+        };
+        assert_eq!(counts(&conn), (1, 1, 1), "probe before reproject");
+
+        crate::reproject::reproject(&conn).unwrap();
+
+        assert_eq!(
+            counts(&conn),
+            (1, 1, 1),
+            "re-added space must survive reproject (episodes/assertions/statements)"
+        );
+    }
+
+    #[test]
+    fn redact_space_on_empty_space_still_drops_row() {
+        // A space with NO episodes (e.g. only document chunks — the exact
+        // case that forces `--purge`) must still drop its `spaces` row.
+        // Without this, `space remove X --purge` would print "removed"
+        // while the row survives as a ghost.
+        let conn = fresh_db();
+        let now = Timestamp::from_millis(1000);
+        // Create a second space that has zero episodes. `personal` already
+        // exists from `fresh_db()`, but we want an empty target.
+        let empty_id = ledger::space_id("empty-space");
+        crate::ledger::create_space(&conn, "empty-space", now).unwrap();
+
+        // Sanity: the row exists and has no episodes.
+        let pre: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM spaces WHERE id = ?1",
+                [&empty_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pre, 1, "empty space row must exist before purge");
+        let pre_episodes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM episodes WHERE space_id = ?1",
+                [&empty_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pre_episodes, 0, "empty space must have zero episodes");
+
+        let target = RedactTarget::Space {
+            id: empty_id.clone(),
+        };
+        let result = execute_redaction(&conn, &target, "purge", "cli", now).unwrap();
+        assert!(result.closure.episodes.is_empty());
+
+        // The spaces row MUST be gone even though the closure was empty.
+        let post: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM spaces WHERE id = ?1",
+                [&empty_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(post, 0, "spaces row must be dropped on empty-space purge");
+
+        // Idempotent: second call returns empty closure without error.
+        let audit_after_first: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0))
+            .unwrap();
+        let redactions_after_first: i64 = conn
+            .query_row("SELECT COUNT(*) FROM redactions", [], |r| r.get(0))
+            .unwrap();
+        let second = execute_redaction(&conn, &target, "purge", "cli", now).unwrap();
+        assert!(second.closure.episodes.is_empty());
+        // Audit + redactions counts unchanged (no event was redacted; the
+        // empty-space drop is administrative bookkeeping, not a redaction).
+        let audit_after_second: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0))
+            .unwrap();
+        let redactions_after_second: i64 = conn
+            .query_row("SELECT COUNT(*) FROM redactions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(audit_after_second, audit_after_first);
+        assert_eq!(redactions_after_second, redactions_after_first);
     }
 }

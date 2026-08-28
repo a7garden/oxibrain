@@ -43,6 +43,7 @@ pub mod lifecycle;
 pub mod rank;
 pub mod retrieval;
 pub mod security;
+pub mod spaces;
 pub use documents::{
     CachedFile, CachedRootMeta, FileAction, FileObservation, RootAction, RootFingerprint,
     chunk_id as document_chunk_id, diff_roots, document_id, plan_reconcile,

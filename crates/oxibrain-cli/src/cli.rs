@@ -18,15 +18,15 @@ pub struct Cli {
 pub enum Command {
     /// Initialize a new brain store.
     Init {
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Ingest a file or stdin as an episode.
     Ingest {
         /// File path, or `-` for stdin.
         path: PathBuf,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Show store statistics.
     Stats,
@@ -49,8 +49,8 @@ pub enum Command {
     /// Ask a question (hybrid query).
     Ask {
         question: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Entity management (DESIGN §12.4: `entity show|merge|split|alias`).
     Entity {
@@ -59,14 +59,14 @@ pub enum Command {
     },
     Timeline {
         entity_id: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Provenance for a statement.
     Why {
         statement_id: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
         /// Print what `rank` discarded for a query instead of provenance.
         /// `statement_id` is then the query text (DESIGN §11.8).
         #[arg(long)]
@@ -78,8 +78,8 @@ pub enum Command {
     },
     /// List contradicted statements.
     Contradictions {
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Render a page (brief) with followable links. `--kind entity` is the
     /// default; `--kind space` shows counts + top entities; `--kind topic`
@@ -87,8 +87,8 @@ pub enum Command {
     Page {
         /// Entity id (when --kind entity, default), or ignored for space/topic.
         entity: Option<String>,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
         /// Target kind: entity (default), space, or topic.
         #[arg(long, default_value = "entity")]
         kind: String,
@@ -101,8 +101,8 @@ pub enum Command {
     /// Redact (the only true delete).
     Redact {
         target: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
@@ -120,8 +120,8 @@ pub enum Command {
         /// Path to the oxios-memory `memory.db` file.
         db: PathBuf,
         /// Target space (default: personal).
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Token management (DESIGN §12.4: `token issue|list|revoke`).
     Token {
@@ -171,8 +171,8 @@ pub enum Command {
     },
     /// Re-extract all primary episodes with the configured extractor.
     Reextract {
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Model artifact management (§8.4: `model list|pull|verify|use`).
     Model {
@@ -190,13 +190,18 @@ pub enum Command {
     Declare {
         /// Canonical declaration JSON.
         json: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Source management.
     Source {
         #[command(subcommand)]
         command: SourceCmd,
+    },
+    /// Manage spaces (spec: space lifecycle).
+    Space {
+        #[command(subcommand)]
+        command: SpaceCmd,
     },
 }
 
@@ -224,8 +229,8 @@ pub enum ModelCmd {
 pub enum TokenCmd {
     /// Issue a new token (returns the secret once).
     Issue {
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
         #[arg(long, help = "Comma-separated capabilities (Read,Ingest,Write,Sample)")]
         caps: String,
         #[arg(long)]
@@ -245,8 +250,8 @@ pub enum PredicateCmd {
     Add {
         /// Full PredicateDef JSON.
         json: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
 }
 
@@ -255,8 +260,8 @@ pub enum EntityCmd {
     /// Show entity beliefs.
     Show {
         id: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Merge two entities (loser → winner).
     Merge {
@@ -268,8 +273,8 @@ pub enum EntityCmd {
         winner: String,
         /// Winner entity type.
         winner_type: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Split: undo the most recent merge for an entity.
     Split {
@@ -277,8 +282,8 @@ pub enum EntityCmd {
         surface: String,
         /// Entity type.
         ty: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Add an alias to an entity.
     Alias {
@@ -288,15 +293,15 @@ pub enum EntityCmd {
         ty: String,
         /// Alias surface form to add.
         alias: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
     /// Retract a statement by ID.
     Retract {
         /// Statement ID to retract.
         statement_id: String,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
     },
 }
 
@@ -315,7 +320,38 @@ pub enum SourceCmd {
         /// Effective to (epoch ms). Open-ended if omitted.
         #[arg(long)]
         effective_to: Option<i64>,
-        #[arg(long, default_value = "personal")]
-        space: String,
+        #[arg(long)]
+        space: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SpaceCmd {
+    /// Create a space (idempotent) and provision its vault dir + root.
+    ///
+    /// Names that begin with `-` are not directly accepted by clap; pass the
+    /// name after `--` (e.g. `oxibrain space add -- -draft`) which clap
+    /// forwards verbatim.
+    Add {
+        /// Space name. See `validate_space_name` (Task 1) for rules.
+        name: String,
+    },
+    /// Print or set the toml-configured default space (`~/.oxi/config.toml`).
+    ///
+    /// With no argument, prints the current default. With a name, validates
+    /// it, confirms the space exists in the resolved brain, then writes it.
+    Default {
+        /// Space name to promote to default.
+        name: Option<String>,
+    },
+    /// Remove a space. Refuses by default if the space has episodes,
+    /// document chunks, or documents.toml roots referencing it; pass
+    /// `--purge` to drop everything (audited redaction).
+    Remove {
+        /// Space name.
+        name: String,
+        /// Drop all data and clear the documents cache (audited).
+        #[arg(long)]
+        purge: bool,
     },
 }

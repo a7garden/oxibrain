@@ -5,7 +5,7 @@ use std::path::Path;
 
 pub async fn run(dir: &Path, surface: &str, ty: &str, space: &str) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let decl = Declaration::Split {
         entity: EntityRef {
             surface: surface.to_string(),

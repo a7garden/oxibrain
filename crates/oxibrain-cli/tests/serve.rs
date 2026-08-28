@@ -88,10 +88,20 @@ impl Drop for StdioChild {
     }
 }
 
-#[test]
-fn serve_stdio_raw_jsonrpc_round_trip() {
+#[tokio::test]
+async fn serve_stdio_raw_jsonrpc_round_trip() {
     let dir = tempfile::TempDir::new().unwrap();
-    let mut child = StdioChild::spawn(dir.path(), &[]);
+    // Tools never implicitly create spaces (§4.4) — seed "personal" before
+    // spawning the child.
+    let brain = oxibrain::Brain::open(oxibrain::BrainConfig::at(dir.path()))
+        .await
+        .unwrap();
+    let _ = brain.ensure_space("personal").await.unwrap();
+    // Isolated HOME: without this the child resolves default_space from
+    // the developer's real ~/.oxi/config.toml.
+    let fake_home = tempfile::TempDir::new().unwrap();
+    let home_str = fake_home.path().to_str().unwrap().to_string();
+    let mut child = StdioChild::spawn(dir.path(), &[("HOME", &home_str)]);
 
     // MCP initialize handshake.
     let resp = child.request(
@@ -134,6 +144,13 @@ fn serve_stdio_raw_jsonrpc_round_trip() {
 #[tokio::test]
 async fn spawn_local_client_round_trip_and_native_methods() {
     let dir = tempfile::TempDir::new().unwrap();
+    // Tools never implicitly create spaces (§4.4) — seed "personal" before
+    // spawning the child.
+    let seed = oxibrain::Brain::open(oxibrain::BrainConfig::at(dir.path()))
+        .await
+        .unwrap();
+    let _ = seed.ensure_space("personal").await.unwrap();
+    drop(seed);
     let vault = tempfile::TempDir::new().unwrap();
     std::fs::write(vault.path().join("note.md"), "zephyr document body").unwrap();
     std::fs::write(
@@ -295,7 +312,10 @@ fn serve_stays_alive_until_stdin_closes() {
     // volume can be slow, and the invariant is "alive while stdin is open",
     // not "alive exactly 200 ms in".
     let dir = tempfile::TempDir::new().unwrap();
-    let mut child = StdioChild::spawn(dir.path(), &[]);
+    // Isolated HOME: keep the child off the developer's real ~/.oxi.
+    let fake_home = tempfile::TempDir::new().unwrap();
+    let home_str = fake_home.path().to_str().unwrap().to_string();
+    let mut child = StdioChild::spawn(dir.path(), &[("HOME", &home_str)]);
     child.request(1, "ping", json!({}));
     for _ in 0..20 {
         match child.child.try_wait() {

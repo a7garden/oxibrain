@@ -22,13 +22,32 @@ pub mod llm;
 pub mod model;
 pub mod page;
 pub mod predicate;
+pub mod provision;
 pub mod redact;
 pub mod reextract;
 pub mod reproject;
 pub mod serve;
 pub mod source_policy;
+pub mod space_add;
+pub mod space_default;
+pub mod space_remove;
 pub mod spaces;
 pub mod stats;
 pub mod timeline;
 pub mod token;
 pub mod why;
+
+use anyhow::Result;
+use oxibrain::Brain;
+
+/// Resolve a space name to its id WITHOUT creating it (spec §4.4).
+/// Unknown space ⇒ error carrying the `oxibrain space add` hint.
+pub async fn space_id(brain: &Brain, name: &str) -> Result<String> {
+    match brain.lookup_space(name).await {
+        Ok(Some(id)) => Ok(id),
+        Ok(None) => Err(anyhow::anyhow!(
+            "space '{name}' not found — create it with: oxibrain space add {name}"
+        )),
+        Err(e) => Err(anyhow::anyhow!("lookup space: {e}")),
+    }
+}

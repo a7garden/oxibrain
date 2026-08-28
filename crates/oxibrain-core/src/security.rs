@@ -146,6 +146,9 @@ pub enum RedactTarget {
         entity_id: String,
         predicate: String,
     },
+    /// Redact an entire space and everything derived from it (spec §4.5).
+    /// Terminal: no episodes, entities, statements, or beliefs remain.
+    Space { id: String },
 }
 
 /// The set of objects that will be affected by a redaction.

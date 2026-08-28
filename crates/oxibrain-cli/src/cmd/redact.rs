@@ -9,7 +9,7 @@ pub async fn run(
     reason: &str,
 ) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let parsed = parse_target(target, &space_id)?;
     if dry_run {
         let closure = brain.redact_dry_run(&parsed).await?;

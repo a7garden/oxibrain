@@ -12,7 +12,7 @@ pub async fn run(
     space: &str,
 ) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let decl = Declaration::Merge {
         loser: EntityRef {
             surface: loser.to_string(),

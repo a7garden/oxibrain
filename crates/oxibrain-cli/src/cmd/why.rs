@@ -13,7 +13,7 @@ pub async fn run_dropped(
     min_confidence: f32,
 ) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let q = Query {
         text: query_text.to_string(),
         mode: QueryMode::Hybrid,
@@ -68,7 +68,7 @@ pub async fn run_dropped(
 
 pub async fn run(dir: &Path, statement_id: &str, space: &str) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let block = brain.why(&space_id, statement_id).await?;
     println!("statement: {}", block.statement.id);
     println!("  subject: {}", block.statement.subject);

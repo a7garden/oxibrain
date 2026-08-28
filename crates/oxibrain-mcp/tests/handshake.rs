@@ -65,7 +65,7 @@ async fn spawn_auth_server(caps: &[Capability]) -> (tempfile::TempDir, BrainClie
     let (client_side, server_side) = tokio::io::duplex(8192);
     let (sr, sw) = tokio::io::split(server_side);
     tokio::spawn(async move {
-        let _ = run_session_gated(Arc::new(brain), sr, sw).await;
+        let _ = run_session_gated(Arc::new(brain), "personal".into(), sr, sw).await;
     });
     let (cr, cw) = tokio::io::split(client_side);
     let mut client = BrainClient::from_io(cr, cw);

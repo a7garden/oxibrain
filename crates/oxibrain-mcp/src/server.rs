@@ -62,6 +62,9 @@ pub struct BrainServer {
     /// When set (authenticated transport), tool calls are gated by capability +
     /// space membership (DESIGN §11.2). `None` = trusted local channel.
     scope: Option<Scope>,
+    /// Default space for tool calls that omit `space` (spec §4.1/§4.6).
+    /// Set from `~/.oxi/config.toml` by `serve`; tests default to "personal".
+    default_space: String,
 }
 
 impl BrainServer {
@@ -71,6 +74,7 @@ impl BrainServer {
         Ok(Self {
             brain: Arc::new(brain),
             scope: None,
+            default_space: "personal".to_string(),
         })
     }
 
@@ -79,6 +83,7 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: None,
+            default_space: "personal".to_string(),
         }
     }
 
@@ -89,6 +94,7 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: Some(scope),
+            default_space: "personal".to_string(),
         }
     }
 
@@ -97,7 +103,11 @@ impl BrainServer {
     /// Used by authenticated transports that share one brain across many
     /// connections, each resolved to its own scope.
     pub fn from_arc(brain: Arc<Brain>) -> Self {
-        Self { brain, scope: None }
+        Self {
+            brain,
+            scope: None,
+            default_space: "personal".to_string(),
+        }
     }
 
     /// Wrap a shared `Arc<Brain>` with an authorization scope.
@@ -105,12 +115,49 @@ impl BrainServer {
         Self {
             brain,
             scope: Some(scope),
+            default_space: "personal".to_string(),
         }
     }
 
-    /// Resolve a space name to its content-derived ID, creating it if absent.
-    async fn ensure_space(&self, name: &str) -> Result<String, ToolErr> {
-        self.brain.ensure_space(name).await.map_err(ToolErr::run)
+    /// Override the default space applied when a tool omits `space`.
+    /// `serve` sets this from `~/.oxi/config.toml` (spec §4.6).
+    pub fn with_default_space(mut self, name: String) -> Self {
+        self.default_space = name;
+        self
+    }
+
+    /// Resolve a space name to its content-derived ID without creating it
+    /// (spec §4.4). Unknown space ⇒ error carrying the `space add` hint.
+    async fn resolve_space_id(&self, name: &str) -> Result<String, ToolErr> {
+        match self.brain.lookup_space(name).await {
+            Ok(Some(id)) => Ok(id),
+            Ok(None) => Err(ToolErr::Params(format!(
+                "space '{name}' not found — create it with: oxibrain space add {name}"
+            ))),
+            Err(e) => Err(ToolErr::run(e)),
+        }
+    }
+
+    /// The configured default space applied when a tool omits `space`.
+    fn default_space(&self) -> &str {
+        &self.default_space
+    }
+
+    /// The `space` tool argument, falling back to the configured default.
+    fn space_arg(&self, args: &Value) -> String {
+        args.get("space")
+            .and_then(|v| v.as_str())
+            .unwrap_or(self.default_space())
+            .to_string()
+    }
+
+    /// Map a ToolErr onto the JSON-RPC (code, message) pair for the native
+    /// methods and resource reads, which sit outside `call_tool`'s dispatch.
+    fn tool_err_code(e: ToolErr) -> (i64, String) {
+        match e {
+            ToolErr::Params(m) => (INVALID_PARAMS, m),
+            ToolErr::Run(m) => (INTERNAL_ERROR, m),
+        }
     }
 
     /// Capability required to invoke a tool (DESIGN §12.2 surface table).
@@ -155,7 +202,7 @@ impl BrainServer {
         let space = args
             .get("space")
             .and_then(|v| v.as_str())
-            .unwrap_or("personal");
+            .unwrap_or(self.default_space());
         let space_id = match self
             .brain
             .lookup_space(space)
@@ -517,7 +564,7 @@ impl BrainServer {
 
     async fn tool_search(&self, args: &Value) -> Result<String, ToolErr> {
         let query = str_arg(args, "query")?;
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let mode = parse_mode(&str_arg_or(args, "mode", "hybrid"));
         let limit = u_arg_or(args, "limit", 20);
         let q = Query {
@@ -534,7 +581,7 @@ impl BrainServer {
     }
     async fn tool_recall(&self, args: &Value) -> Result<String, ToolErr> {
         let query = str_arg(args, "query")?;
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let budget = u_arg_or(args, "token_budget", 3000);
         let ctx = self
             .brain
@@ -545,7 +592,7 @@ impl BrainServer {
     }
 
     async fn tool_brief(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         // Discriminator: `target_kind` is `entity` (default for back-compat),
         // `space`, or `topic`. Entity uses `entity_id`; topic uses `topic`.
         let kind = args
@@ -581,7 +628,7 @@ impl BrainServer {
     async fn tool_navigate(&self, args: &Value) -> Result<String, ToolErr> {
         let from = str_arg(args, "from")?;
         let link = str_arg(args, "link")?;
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         self.brain
             .navigate(&space_id, from, link)
             .await
@@ -639,7 +686,7 @@ impl BrainServer {
         session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
     ) -> Result<String, ToolErr> {
         let content = str_arg(args, "content")?;
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let path = str_arg_or(args, "source_path", "mcp");
         let extract = args
             .get("extract")
@@ -727,7 +774,7 @@ impl BrainServer {
 
     async fn tool_declare(&self, args: &Value) -> Result<String, ToolErr> {
         let decl_json = str_arg(args, "declaration_json")?;
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let decl: Declaration = serde_json::from_str(decl_json)
             .map_err(|e| ToolErr::Params(format!("declaration parse: {e}")))?;
         let id = self
@@ -740,7 +787,7 @@ impl BrainServer {
 
     async fn tool_why(&self, args: &Value) -> Result<String, ToolErr> {
         let statement_id = str_arg(args, "statement_id")?;
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let explain = self
             .brain
             .why(&space_id, statement_id)
@@ -780,7 +827,7 @@ impl BrainServer {
         serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
     }
     async fn tool_contradictions(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let details = self
             .brain
             .contradiction_details(&space_id)
@@ -790,7 +837,7 @@ impl BrainServer {
     }
 
     async fn tool_stats(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let stats = self.brain.stats(&space_id).await.map_err(ToolErr::run)?;
         to_json(&stats)
     }
@@ -798,7 +845,7 @@ impl BrainServer {
     // ── Read tools: traverse, timeline, review_merges ────────────────────
 
     async fn tool_traverse(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let start = args
             .get("start")
             .and_then(|v| v.as_array())
@@ -841,7 +888,7 @@ impl BrainServer {
     }
 
     async fn tool_review_merges(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let section = str_arg_or(args, "section", "merges");
         match section.as_str() {
             "failures" => {
@@ -876,17 +923,17 @@ impl BrainServer {
     /// ledger, then refresh embeddings. Intentionally **not** an MCP tool:
     /// too destructive for agent access. Returns post-reproject stats so the
     /// console can confirm what changed. Optional `space` param defaults to
-    /// the console's `personal` space.
+    /// the configured default space.
     async fn rpc_reproject(&self, args: Option<&Value>) -> Result<Value, (i64, String)> {
         let space = args
             .and_then(|a| a.get("space"))
             .and_then(Value::as_str)
-            .unwrap_or("personal");
+            .unwrap_or(self.default_space());
+        // Read-only resolution (§4.4): reproject must not create spaces.
         let space_id = self
-            .brain
-            .ensure_space(space)
+            .resolve_space_id(space)
             .await
-            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+            .map_err(Self::tool_err_code)?;
 
         let before = self
             .brain
@@ -935,7 +982,7 @@ impl BrainServer {
         let space = params
             .get("space")
             .and_then(Value::as_str)
-            .unwrap_or("personal");
+            .unwrap_or(self.default_space());
         let alias = params
             .get("alias")
             .and_then(Value::as_str)
@@ -947,6 +994,12 @@ impl BrainServer {
         let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
 
         self.enforce_scope_resource(space).await?;
+        // Read-only resolution (§4.4): an unknown space is a caller error
+        // carrying the `space add` hint, never an implicit creation.
+        let _space_id = self
+            .resolve_space_id(space)
+            .await
+            .map_err(Self::tool_err_code)?;
         let revisions = self
             .brain
             .document_history(space, alias, locator, limit)
@@ -1006,7 +1059,7 @@ impl BrainServer {
         session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
     ) -> Result<String, ToolErr> {
         let content = str_arg(args, "content")?;
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let path = str_arg_or(args, "source_path", "remember");
         let now = SystemClock.now();
         let trust = self.resolve_trust(args);
@@ -1030,7 +1083,7 @@ impl BrainServer {
     }
 
     async fn tool_retract(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         // Statement-first path: when `statement_id` is given, the declaration
         // inputs are rebuilt from the stored statement — callers that hold a
         // statement id (the conflicts inbox) don't have to resubmit resolvable
@@ -1067,7 +1120,7 @@ impl BrainServer {
     }
 
     async fn tool_merge_entities(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let loser: EntityRef =
             serde_json::from_value(args.get("loser").cloned().unwrap_or_default())
                 .map_err(|e| ToolErr::Params(format!("parse loser: {e}")))?;
@@ -1086,7 +1139,7 @@ impl BrainServer {
     // ── Redact tool ──────────────────────────────────────────────────────
 
     async fn tool_redact(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.ensure_space(&space_arg(args)).await?;
+        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
         let kind = str_arg(args, "target_kind")?;
         let target_id = str_arg(args, "target_id")?;
         let reason = str_arg_or(args, "reason", "mcp redact");
@@ -1138,10 +1191,11 @@ impl BrainServer {
     // ── Resources (DESIGN §12.2) ─────────────────────────────────────────
 
     fn resources_list(&self, _params: Option<&Value>) -> Value {
+        let default = self.default_space();
         json!({
             "resources": [{
-                "uri": "space://personal",
-                "name": "Space: personal",
+                "uri": format!("space://{default}"),
+                "name": format!("Space: {default}"),
                 "description": "Space overview: entity count, episode count, contradictions, recent entities.",
                 "mimeType": "application/json"
             }, {
@@ -1195,24 +1249,30 @@ impl BrainServer {
             .filter(|s| !s.is_empty())
             .filter_map(|s| s.split_once('='))
             .collect();
-        // For space:// URIs the path IS the space name. For entity/episode/graph
-        // URIs, the space comes from the ?space= query param (default: personal).
+        // For space:// URIs the path IS the space name. For entity/episode/
+        // graph URIs, the space comes from the ?space= query param
+        // (default: the configured default space).
 
         let space_name = if scheme == "space" {
             path
         } else {
-            qp.get("space").copied().unwrap_or("personal")
+            qp.get("space").copied().unwrap_or(self.default_space())
         };
         // Scope gate: spaces are hard boundaries (§15.1). The `spaces://`
         // scheme self-filters via visible_spaces below, so it is exempt.
         if scheme != "spaces" {
             self.enforce_scope_resource(space_name).await?;
         }
-        let space_id = self
-            .brain
-            .ensure_space(space_name)
-            .await
-            .map_err(|e| (INTERNAL_ERROR, format!("ensure_space: {e}")))?;
+        // Resolve the space read-only (§4.4). Only the per-space schemes
+        // need it: `spaces://` self-filters via visible_spaces, and unknown
+        // schemes must report METHOD_NOT_FOUND rather than a space error.
+        let space_id = match scheme {
+            "space" | "entity" | "episode" | "graph" | "timeline" => self
+                .resolve_space_id(space_name)
+                .await
+                .map_err(Self::tool_err_code)?,
+            _ => String::new(),
+        };
         let text = match scheme {
             "space" => {
                 let cards = self
@@ -1357,10 +1417,6 @@ fn str_arg_or(args: &Value, key: &str, default: &str) -> String {
         .to_string()
 }
 
-fn space_arg(args: &Value) -> String {
-    str_arg_or(args, "space", "personal")
-}
-
 fn u_arg_or(args: &Value, key: &str, default: usize) -> usize {
     args.get(key)
         .and_then(|v| v.as_u64())
@@ -1438,7 +1494,7 @@ fn tool_list() -> Value {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "The search query text." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." },
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." },
                         "mode": { "type": "string", "enum": ["hybrid","lexical","lexical-vector","graph","community"], "description": "Retrieval mode (default: hybrid)." },
                         "planes": { "type": "array", "items": { "type": "string", "enum": ["memory","documents"] }, "description": "Planes to search (default: both)." },
                         "limit": { "type": "integer", "minimum": 1, "description": "Maximum results per plane (default: 20)." },
@@ -1454,7 +1510,7 @@ fn tool_list() -> Value {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "What information to assemble." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." },
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." },
                         "token_budget": { "type": "integer", "minimum": 1, "description": "Maximum tokens for the assembled context (default: 3000)." }
                     },
                     "required": ["query"]
@@ -1467,7 +1523,7 @@ fn tool_list() -> Value {
                         "target_kind": { "type": "string", "enum": ["entity", "space", "topic"], "description": "Which brief to render. Default: entity." },
                         "entity_id": { "type": "string", "description": "Required when target_kind=entity. The entity's content-derived ID." },
                         "topic": { "type": "string", "description": "Required when target_kind=topic. A keyword to match against entity surface forms (case-insensitive substring)." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     },
                     "required": []
                 })),
@@ -1478,7 +1534,7 @@ fn tool_list() -> Value {
                     "properties": {
                         "from": { "type": "string", "description": "The view/page the link came from (e.g. an entity:// id)." },
                         "link": { "type": "string", "description": "The link to follow (entity://<id> or a raw entity id)." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     },
                     "required": ["from", "link"]
                 })),
@@ -1488,7 +1544,7 @@ fn tool_list() -> Value {
                     "type": "object",
                     "properties": {
                         "content": { "type": "string", "description": "The text to ingest." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." },
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." },
                         "source_path": { "type": "string", "description": "Optional source label, e.g. a file path (default: mcp)." },
                         "extract": { "type": "boolean", "description": "If true, extract claims via client sampling immediately (default: false)." },
                         "trust": { "type": "string", "enum": ["trusted","semi_trusted","untrusted"], "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands)." }
@@ -1501,7 +1557,7 @@ fn tool_list() -> Value {
                     "type": "object",
                     "properties": {
                         "declaration_json": { "type": "string", "description": "Canonical declaration JSON (op = add_statement | merge | retract)." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     },
                     "required": ["declaration_json"]
                 })),
@@ -1511,7 +1567,7 @@ fn tool_list() -> Value {
                     "type": "object",
                     "properties": {
                         "statement_id": { "type": "string", "description": "The statement ID." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     },
                     "required": ["statement_id"]
                 })),
@@ -1520,7 +1576,7 @@ fn tool_list() -> Value {
                 json!({
                     "type": "object",
                     "properties": {
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     }
                 })),
             tool("stats",
@@ -1528,7 +1584,7 @@ fn tool_list() -> Value {
                 json!({
                     "type": "object",
                     "properties": {
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     }
                 })),
             tool("traverse",
@@ -1537,7 +1593,7 @@ fn tool_list() -> Value {
                     "type": "object",
                     "properties": {
                         "start": { "type": "array", "items": { "type": "string" }, "description": "Entity IDs to start from (at least one required)." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." },
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." },
                         "depth": { "type": "integer", "minimum": 1, "description": "Max traversal depth (default: 3)." },
                         "max_nodes": { "type": "integer", "minimum": 1, "description": "Max nodes to return (default: 256)." },
                         "direction": { "type": "string", "enum": ["out","in","both"], "description": "Edge direction (default: both)." },
@@ -1552,7 +1608,7 @@ fn tool_list() -> Value {
                     "type": "object",
                     "properties": {
                         "section": { "type": "string", "enum": ["merges", "failures", "sources"], "description": "What to list (default: merges)." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     }
                 })),
             tool("remember",
@@ -1561,7 +1617,7 @@ fn tool_list() -> Value {
                     "type": "object",
                     "properties": {
                         "content": { "type": "string", "description": "The fact or note to remember." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." },
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." },
                         "source_path": { "type": "string", "description": "Optional source label (default: remember)." },
                         "trust": { "type": "string", "enum": ["trusted","semi_trusted","untrusted"], "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands)." }
                     },
@@ -1577,7 +1633,7 @@ fn tool_list() -> Value {
                         "predicate": { "type": "string", "description": "Predicate name (legacy path)." },
                         "object": { "type": "object", "description": "Entity or literal object (legacy path).", "properties": { "kind": {"type":"string","enum":["entity","literal"]} } },
                         "episode": { "type": "string", "description": "Originating episode id (audit context)." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     },
                     "required": []
                 })),
@@ -1588,7 +1644,7 @@ fn tool_list() -> Value {
                     "properties": {
                         "loser": { "type": "object", "description": "Entity to merge away: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
                         "winner": { "type": "object", "description": "Entity to keep: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     },
                     "required": ["loser", "winner"]
                 })),
@@ -1601,7 +1657,7 @@ fn tool_list() -> Value {
                         "target_id": { "type": "string", "description": "Episode ID, entity ID, or 'entity_id/predicate' for predicate kind." },
                         "reason": { "type": "string", "description": "Audit reason (default: 'mcp redact')." },
                         "dry_run": { "type": "boolean", "description": "Preview the closure without modifying anything (default: false)." },
-                        "space": { "type": "string", "description": "Space name (default: personal)." }
+                        "space": { "type": "string", "description": "Space name (default: the configured default space)." }
                     },
                     "required": ["target_kind", "target_id"]
                 })),
@@ -1746,14 +1802,21 @@ where
 /// session is token-gated when (and only when) the first message on stdin is
 /// an `auth` request; any other first message proceeds as a trusted local
 /// session, which is what plain MCP clients send (`initialize`).
-pub async fn serve_stdio(brain: Brain) -> anyhow::Result<()> {
-    run_session_gated(Arc::new(brain), tokio::io::stdin(), tokio::io::stdout()).await
+pub async fn serve_stdio(brain: Brain, default_space: String) -> anyhow::Result<()> {
+    run_session_gated(
+        Arc::new(brain),
+        default_space,
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+    )
+    .await
 }
 
-/// Open a Brain at `dir` and serve it over stdio.
-pub async fn serve_stdio_at(dir: &std::path::Path) -> anyhow::Result<()> {
+/// Open a Brain at `dir` and serve it over stdio. Tools omitting `space`
+/// resolve `default_space` (spec §4.6).
+pub async fn serve_stdio_at(dir: &std::path::Path, default_space: String) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    serve_stdio(brain).await
+    serve_stdio(brain, default_space).await
 }
 
 /// Run one token-gated MCP session over a read/write pair (the stdio shape).
@@ -1766,7 +1829,12 @@ pub async fn serve_stdio_at(dir: &std::path::Path) -> anyhow::Result<()> {
 ///   written and the session ends.
 /// - Anything else runs as a trusted local session (the parent process owns
 ///   the pipes, so the channel itself is the trust boundary).
-pub async fn run_session_gated<R, W>(brain: Arc<Brain>, reader: R, writer: W) -> anyhow::Result<()>
+pub async fn run_session_gated<R, W>(
+    brain: Arc<Brain>,
+    default_space: String,
+    reader: R,
+    writer: W,
+) -> anyhow::Result<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -1791,7 +1859,7 @@ where
             .is_some_and(|m| m == "auth")
     });
     if !is_auth {
-        let server = Arc::new(BrainServer::from_arc(brain));
+        let server = Arc::new(BrainServer::from_arc(brain).with_default_space(default_space));
         return session_loop(server, reader, Some(first), out).await;
     }
 
@@ -1811,7 +1879,9 @@ where
                     &success(id_for_response, json!({"authenticated": true})),
                 )
                 .await?;
-                Arc::new(BrainServer::from_arc_scoped(brain, scope))
+                Arc::new(
+                    BrainServer::from_arc_scoped(brain, scope).with_default_space(default_space),
+                )
             }
             Ok(None) => {
                 write_line(
@@ -1859,6 +1929,7 @@ pub async fn serve_http(
     brain: Brain,
     addr: std::net::SocketAddr,
     ui_dir: Option<std::path::PathBuf>,
+    default_space: String,
 ) -> anyhow::Result<()> {
     if !addr.ip().is_loopback() {
         anyhow::bail!(
@@ -1867,7 +1938,7 @@ pub async fn serve_http(
         );
     }
     use tokio::net::TcpListener;
-    let server = Arc::new(BrainServer::from_brain(brain));
+    let server = Arc::new(BrainServer::from_brain(brain).with_default_space(default_space));
     let ui_dir = ui_dir.map(std::sync::Arc::new);
     let listener = TcpListener::bind(addr)
         .await
@@ -2511,6 +2582,7 @@ mod tests {
         let (_dir, server) = fresh_server().await;
 
         // Declare so the query has something to index, then index it.
+        let _ = server.brain.ensure_space("personal").await.unwrap();
         let decl = json!({
             "op": "add_statement",
             "subject": { "surface": "Alice", "type": "Person" },
@@ -2577,6 +2649,7 @@ mod tests {
         let (_dir, server) = fresh_server().await;
 
         // Declare "Alice employed_by Acme Corp" — deterministic, no LLM.
+        let _ = server.brain.ensure_space("t").await.unwrap();
         let decl = json!({
             "op": "add_statement",
             "subject": { "surface": "Alice", "type": "Person" },
@@ -2758,6 +2831,7 @@ mod tests {
     #[tokio::test]
     async fn ingest_creates_episode() {
         let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
         let resp = server
             .handle(msg(
                 1,
@@ -2806,6 +2880,7 @@ mod tests {
     async fn stats_tool_reports_counts() {
         let (_dir, server) = fresh_server().await;
         // Ingest one note into the space.
+        let _ = server.brain.ensure_space("t").await.unwrap();
         let resp = server
             .handle(msg(
                 1,
@@ -3071,6 +3146,7 @@ mod tests {
         let (client, server_side) = duplex(64 * 1024);
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let _ = brain.ensure_space("t").await.unwrap();
         let server = Arc::new(BrainServer::from_brain(brain));
         let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(run_session(server, read_half, write_half));
@@ -3184,7 +3260,8 @@ mod tests {
         let (mut client, server_side) = tokio::io::duplex(4096);
         let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
+            let _ =
+                run_session_gated(Arc::new(brain), "personal".into(), read_half, write_half).await;
         });
 
         // A non-auth first message proceeds as a trusted local session.
@@ -3224,7 +3301,8 @@ mod tests {
         let (mut stream, server_side) = tokio::io::duplex(8192);
         let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
+            let _ =
+                run_session_gated(Arc::new(brain), "personal".into(), read_half, write_half).await;
         });
 
         // Send auth as the first message.
@@ -3266,7 +3344,8 @@ mod tests {
         let (mut stream, server_side) = tokio::io::duplex(4096);
         let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
+            let _ =
+                run_session_gated(Arc::new(brain), "personal".into(), read_half, write_half).await;
         });
 
         // Send bad token.
@@ -3288,6 +3367,7 @@ mod tests {
     #[tokio::test]
     async fn native_document_history_rejects_plain_root() {
         let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
         let resp = server
             .handle(msg(
                 1,
@@ -3319,6 +3399,7 @@ mod tests {
     #[tokio::test]
     async fn search_tool_planes_parameter_selects_memory_only() {
         let (dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
         let vault = tempfile::TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("documents.toml"),
@@ -3395,7 +3476,7 @@ mod tests {
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let addr: std::net::SocketAddr = "127.0.0.1:18099".parse().unwrap();
         let _task = tokio::spawn(async move {
-            let _ = serve_http(brain, addr, None).await;
+            let _ = serve_http(brain, addr, None, "personal".into()).await;
         });
 
         // Wait for listener.
@@ -3436,7 +3517,7 @@ mod tests {
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let addr: std::net::SocketAddr = "127.0.0.1:18100".parse().unwrap();
         let _task = tokio::spawn(async move {
-            let _ = serve_http(brain, addr, None).await;
+            let _ = serve_http(brain, addr, None, "personal".into()).await;
         });
 
         // Wait for listener.
@@ -3476,6 +3557,7 @@ mod tests {
     async fn contradictions_tool_returns_detail_dto_contract() {
         let (_dir, server) = fresh_server().await;
         // Two conflicting static values for born_in(Alice, …).
+        let _ = server.brain.ensure_space("t").await.unwrap();
         for city in ["Seoul", "Busan"] {
             let decl = serde_json::json!({
                 "op": "add_statement",
@@ -3552,6 +3634,9 @@ mod tests {
 
     /// Helper: declare a statement and return the episode id + subject entity id.
     async fn declare_alice(server: &BrainServer, space: &str) -> (String, String) {
+        // Spaces are never implicitly created by tools (§4.4) — create the
+        // fixture's space up front.
+        let _ = server.brain.ensure_space(space).await.unwrap();
         let decl = json!({
             "op": "add_statement",
             "subject": { "surface": "Alice", "type": "Person" },
@@ -3956,6 +4041,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_omitting_space_uses_configured_default() {
+        let (dir, server) = fresh_server().await;
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let _ = brain.ensure_space("dev").await.unwrap();
+        drop(brain);
+        let server = server.with_default_space("dev".into());
+
+        // A read tool with no `space` param must resolve the configured
+        // default ("dev"), not the built-in "personal" (spec §4.6).
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({ "name": "stats", "arguments": {} })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            resp["result"]["content"][0]["text"].is_string(),
+            "stats via configured default must succeed, got: {resp}"
+        );
+
+        // An unknown explicit space is a caller error carrying the hint —
+        // never an implicit creation (spec §4.4).
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({ "name": "stats", "arguments": { "space": "ghost" } })),
+            ))
+            .await
+            .unwrap();
+        let err = resp["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            err.contains("oxibrain space add ghost"),
+            "unknown space must carry the hint, got: {resp}"
+        );
+        let spaces = server.brain.list_spaces().await.unwrap();
+        let names: Vec<&str> = spaces.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            !names.contains(&"ghost"),
+            "failed lookup must not create a space, got: {names:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn retract_denies_a_statement() {
         let (_dir, server) = fresh_server().await;
         let (ep_id, _alice) = declare_alice(&server, "t").await;
@@ -3984,6 +4115,7 @@ mod tests {
         // contradiction, then retracting one statement by id, must remove it
         // from the contradiction list — the inbox count drops to zero.
         let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
         let acme = json!({
             "op": "add_statement",
             "subject": { "surface": "Alice", "type": "Person" },
@@ -4072,6 +4204,7 @@ mod tests {
         // without losing the (literal_type, value) pair (silent no-op if it
         // passes the raw JSON string).
         let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
         let make = |value: &str| {
             json!({
                 "op": "add_statement",
@@ -4190,6 +4323,7 @@ mod tests {
     #[tokio::test]
     async fn remember_ingests_without_session() {
         let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
         let resp = server
             .handle(msg(
                 1,
@@ -4482,7 +4616,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let addr: std::net::SocketAddr = "0.0.0.0:8080".parse().unwrap();
-        let result = serve_http(brain, addr, None).await;
+        let result = serve_http(brain, addr, None, "personal".into()).await;
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("loopback"), "got: {msg}");

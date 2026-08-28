@@ -34,6 +34,12 @@ pub enum BrainError {
     Conflict(String),
     #[error("busy: {0}")]
     Busy(String),
+    #[error("space '{name}' not found — create it with: oxibrain space add {name}")]
+    SpaceNotFound { name: String },
+    #[error("space '{name}' cannot be removed: {reasons:?}")]
+    SpaceRemoveRefused { name: String, reasons: Vec<String> },
+    #[error("invalid space name '{name}': {reason}")]
+    SpaceNameInvalid { name: String, reason: String },
 }
 
 impl BrainError {

@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub async fn run(dir: &Path, statement_id: &str, space: &str) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let (subject, predicate, object) = brain.retract_parts(&space_id, statement_id).await?;
     // Find the originating episode for audit context.
     let episode = String::new(); // retract_parts doesn't return episode; use empty.

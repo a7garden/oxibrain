@@ -8,7 +8,7 @@ pub async fn run_issue(
     label: Option<&str>,
 ) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    let space_id = brain.ensure_space(space).await?;
+    let space_id = crate::cmd::space_id(&brain, space).await?;
     let caps_set = Capability::parse_set(caps);
     let scope = Scope {
         spaces: vec![space_id],

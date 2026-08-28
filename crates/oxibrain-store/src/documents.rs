@@ -635,6 +635,49 @@ impl DocumentCache {
         Ok((embedded as u64, total as u64))
     }
 
+    /// Rows in `documents` for one space (listing stat; spec §4.2).
+    pub fn document_count_for_space(&self, space: &str) -> Result<u64, BrainError> {
+        let n: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM documents WHERE space = ?1",
+                params![space],
+                |r| r.get(0),
+            )
+            .map_err(sql_err)?;
+        Ok(n as u64)
+    }
+
+    /// Chunks for one space (empty-check input; spec §4.5).
+    pub fn chunk_count_for_space(&self, space: &str) -> Result<u64, BrainError> {
+        let n: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM doc_chunks WHERE space = ?1",
+                params![space],
+                |r| r.get(0),
+            )
+            .map_err(sql_err)?;
+        Ok(n as u64)
+    }
+
+    /// Delete every row this cache holds for a space (documents.db is a
+    /// disposable cache — no episode semantics involved). Spec §4.5 step 3.
+    pub fn purge_space(&self, space: &str) -> Result<(), BrainError> {
+        for sql in [
+            "DELETE FROM doc_fts_word WHERE space = ?1",
+            "DELETE FROM doc_fts_ngram WHERE space = ?1",
+            "DELETE FROM doc_vectors WHERE chunk_id IN (SELECT id FROM doc_chunks WHERE space = ?1)",
+            "DELETE FROM doc_chunks WHERE space = ?1",
+            "DELETE FROM doc_manifest WHERE root_alias IN (SELECT alias FROM doc_roots WHERE space = ?1)",
+            "DELETE FROM documents WHERE space = ?1",
+            "DELETE FROM doc_roots WHERE space = ?1",
+        ] {
+            self.conn.execute(sql, params![space]).map_err(sql_err)?;
+        }
+        Ok(())
+    }
+
     /// Chunks in `space` without a vector row yet. Returns `(chunk_id, text)`
     /// where `text` is recovered from `doc_fts_word.body` (the canonical
     /// decoded-text store; `doc_chunks` deliberately does not duplicate it).
@@ -1559,5 +1602,36 @@ mod tests {
         assert_eq!(rows[0].locator, "notes/a.md");
         assert_eq!(rows[0].revision, "rev1");
         assert_eq!(rows[0].media_type, "text/markdown");
+    }
+
+    #[test]
+    fn document_and_chunk_counts_are_space_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let cache = DocumentCache::open_rw(dir.path()).unwrap();
+            let plan = add_plan("alpha", "s1", "a.md", "r1");
+            cache.apply(&plan).unwrap();
+            let plan2 = add_plan("beta", "s2", "b.md", "r1");
+            cache.apply(&plan2).unwrap();
+        }
+        let cache = DocumentCache::open_ro(dir.path()).unwrap();
+        assert_eq!(cache.document_count_for_space("s1").unwrap(), 1);
+        assert!(cache.chunk_count_for_space("s1").unwrap() > 0);
+        assert_eq!(cache.document_count_for_space("s2").unwrap(), 1);
+    }
+
+    #[test]
+    fn purge_space_removes_only_that_space() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let cache = DocumentCache::open_rw(dir.path()).unwrap();
+            cache.apply(&add_plan("alpha", "s1", "a.md", "r1")).unwrap();
+            cache.apply(&add_plan("beta", "s2", "b.md", "r1")).unwrap();
+            cache.purge_space("s1").unwrap();
+        }
+        let cache = DocumentCache::open_ro(dir.path()).unwrap();
+        assert_eq!(cache.document_count_for_space("s1").unwrap(), 0);
+        assert_eq!(cache.chunk_count_for_space("s1").unwrap(), 0);
+        assert_eq!(cache.document_count_for_space("s2").unwrap(), 1);
     }
 }
