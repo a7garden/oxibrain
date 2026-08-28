@@ -116,6 +116,25 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.pragma_update(None, "user_version", 12i64)
             .map_err(sql_err)?;
     }
+    if current < 13 {
+        let sql = include_str!("migrations/v13.sql");
+        conn.execute_batch(sql).map_err(sql_err)?;
+        // Repopulate the contentless indexes for every space. Pure SQL +
+        // tokenization, no model calls (measured ~43 ms on the reference
+        // store).
+        let mut stmt = conn.prepare("SELECT id FROM spaces").map_err(sql_err)?;
+        let spaces: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .map_err(sql_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_err)?;
+        drop(stmt);
+        for space in &spaces {
+            crate::index_ops::rebuild_fts(conn, space)?;
+        }
+        conn.pragma_update(None, "user_version", 13i64)
+            .map_err(sql_err)?;
+    }
     let now: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sql_err)?;

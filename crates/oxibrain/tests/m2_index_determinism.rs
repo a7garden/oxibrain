@@ -109,8 +109,8 @@ async fn index_rebuild_is_deterministic() {
     // Snapshot the ranking half (equivalent contract, currently deterministic).
     let ranking1 = brain.snapshot_ranking(&space).await.expect("ranking1");
     assert!(
-        ranking1.contains("---fts_word---"),
-        "ranking snapshot missing fts_word section"
+        ranking1.contains("---fts_targets---"),
+        "ranking snapshot missing fts_targets section"
     );
     assert!(
         ranking1.contains("---vectors---"),

@@ -403,6 +403,23 @@ impl Brain {
         self.read(ledger::episode_count).await
     }
 
+    /// Source-registry rows no episode references (doctor surface). v13
+    /// deletes them at migration; this counts any registered since by a
+    /// scan/push that never landed an episode.
+    pub async fn orphan_source_count(&self) -> Result<i64, BrainError> {
+        self.read(move |conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sources
+                  WHERE id NOT IN (SELECT source_id FROM episodes
+                                    WHERE source_id IS NOT NULL)",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(oxibrain_store::sql_err)
+        })
+        .await
+    }
+
     // ── Projection lifecycle ──────────────────────────────────────────────
 
     /// Drop and rebuild the entire projection from the ledger. When an

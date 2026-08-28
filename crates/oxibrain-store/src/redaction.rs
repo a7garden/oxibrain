@@ -319,9 +319,9 @@ fn execute_space_redaction(
     //    truth tables), then truth half (children before parents).
     //    `fts_word` / `fts_ngram` use column `space_id` (v6 schema —
     //    `episodes_fts` was dropped in v6 and is gone in v11).
+    // Contentless FTS (v13): rowid-mediated delete through fts_map.
+    crate::index_ops::fts_delete_space(conn, space_id)?;
     for sql in [
-        "DELETE FROM fts_word WHERE space_id = ?1",
-        "DELETE FROM fts_ngram WHERE space_id = ?1",
         "DELETE FROM tfidf_vectors WHERE space_id = ?1",
         "DELETE FROM entity_vectors WHERE entity_id IN (SELECT id FROM entities WHERE space_id = ?1)",
         "DELETE FROM communities WHERE space_id = ?1",

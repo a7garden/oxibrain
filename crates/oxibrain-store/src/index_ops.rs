@@ -59,32 +59,134 @@ pub fn entity_surface(conn: &Connection, entity_id: &str) -> Result<String, Brai
     }
 }
 
-/// Drop and rebuild all FTS5 content for a space — both word and trigram
-/// indexes (§7.4). Both are always populated; no script detection, no routing.
+// ─── Contentless FTS5 (v13) ────────────────────────────────────────────────
+//
+// fts_word / fts_ngram store no content at all (content='', with
+// contentless_delete=1). They keep only their inverted indexes; the body
+// lives exactly once, in `episodes.content` (episodes/statements) or
+// `entity_keys.surface` (entities). `fts_map` maps each FTS rowid to its
+// (space, target_kind, target_id).
+
+/// Effective episode text: the in-line `content`, or the compacted payload
+/// when `compact_episodes` cleared it. Compaction stores raw UTF-8 bytes,
+/// so the payload is restored only when it is valid UTF-8 (mirrors
+/// `ledger::get_episode`'s transparent decompression). Without this,
+/// compacted episodes indexed as empty text and silently left search.
+fn effective_episode_content<'a>(
+    content: &'a str,
+    compacted: &'a [u8],
+) -> std::borrow::Cow<'a, str> {
+    if content.is_empty() && !compacted.is_empty() {
+        if let Ok(text) = std::str::from_utf8(compacted) {
+            return std::borrow::Cow::Borrowed(text);
+        }
+    }
+    std::borrow::Cow::Borrowed(content)
+}
+
+/// Insert one target into `fts_map` + both contentless indexes.
+/// The map row allocates the rowid both FTS rows share.
+fn fts_insert(
+    conn: &Connection,
+    space: &str,
+    kind: &str,
+    target_id: &str,
+    content: &str,
+) -> Result<(), BrainError> {
+    if content.is_empty() {
+        return Ok(()); // nothing to tokenize
+    }
+    conn.execute(
+        "INSERT INTO fts_map (space_id, target_kind, target_id) VALUES (?1, ?2, ?3)",
+        params![space, kind, target_id],
+    )
+    .map_err(sql_err)?;
+    let rowid = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO fts_word (rowid, body) VALUES (?1, ?2)",
+        params![rowid, content],
+    )
+    .map_err(sql_err)?;
+    conn.execute(
+        "INSERT INTO fts_ngram (rowid, body) VALUES (?1, ?2)",
+        params![rowid, content],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+/// Remove one target's rows from the map + both contentless indexes.
+/// No-op when the target has no rows. Contentless DELETE by rowid requires
+/// `contentless_delete=1` (SQLite 3.43+; v13 declares it).
+fn fts_delete_target(
+    conn: &Connection,
+    space: &str,
+    kind: &str,
+    target_id: &str,
+) -> Result<(), BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT rowid FROM fts_map
+              WHERE space_id = ?1 AND target_kind = ?2 AND target_id = ?3",
+        )
+        .map_err(sql_err)?;
+    let rowids: Vec<i64> = stmt
+        .query_map(params![space, kind, target_id], |r| r.get(0))
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    drop(stmt);
+    for rowid in rowids {
+        conn.execute("DELETE FROM fts_word WHERE rowid = ?1", params![rowid])
+            .map_err(sql_err)?;
+        conn.execute("DELETE FROM fts_ngram WHERE rowid = ?1", params![rowid])
+            .map_err(sql_err)?;
+    }
+    conn.execute(
+        "DELETE FROM fts_map
+          WHERE space_id = ?1 AND target_kind = ?2 AND target_id = ?3",
+        params![space, kind, target_id],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+/// Remove every FTS row + map row for a space (redaction, rebuild).
+pub fn fts_delete_space(conn: &Connection, space: &str) -> Result<(), BrainError> {
+    let mut stmt = conn
+        .prepare("SELECT rowid FROM fts_map WHERE space_id = ?1")
+        .map_err(sql_err)?;
+    let rowids: Vec<i64> = stmt
+        .query_map(params![space], |r| r.get(0))
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    drop(stmt);
+    for rowid in rowids {
+        conn.execute("DELETE FROM fts_word WHERE rowid = ?1", params![rowid])
+            .map_err(sql_err)?;
+        conn.execute("DELETE FROM fts_ngram WHERE rowid = ?1", params![rowid])
+            .map_err(sql_err)?;
+    }
+    conn.execute("DELETE FROM fts_map WHERE space_id = ?1", params![space])
+        .map_err(sql_err)?;
+    Ok(())
+}
+
 /// Incrementally index a single episode body into both FTS tables.
 ///
 /// Keeps the lexical index in sync at ingest time — the full
 /// [`rebuild_fts`] pass only runs on `rebuild_indexes`/`reextract`, which
 /// would otherwise leave freshly ingested episodes unsearchable until then.
+/// Delete-then-insert keeps it idempotent.
 pub fn index_episode_fts(
     conn: &Connection,
     space: &str,
     episode_id: &str,
     content: &str,
 ) -> Result<(), BrainError> {
-    conn.execute(
-        "INSERT INTO fts_word (body, space_id, target_kind, target_id)
-         VALUES (?1, ?2, 'episode', ?3)",
-        params![content, space, episode_id],
-    )
-    .map_err(sql_err)?;
-    conn.execute(
-        "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
-         VALUES (?1, ?2, 'episode', ?3)",
-        params![content, space, episode_id],
-    )
-    .map_err(sql_err)?;
-    Ok(())
+    fts_delete_target(conn, space, "episode", episode_id)?;
+    fts_insert(conn, space, "episode", episode_id, content)
 }
 
 /// Incrementally refresh the entity-surface rows of both FTS indexes for the
@@ -101,18 +203,7 @@ pub fn index_entities_fts(
     entity_ids: &[String],
 ) -> Result<(), BrainError> {
     for id in entity_ids {
-        conn.execute(
-            "DELETE FROM fts_word
-             WHERE space_id = ?1 AND target_kind = 'entity' AND target_id = ?2",
-            params![space, id],
-        )
-        .map_err(sql_err)?;
-        conn.execute(
-            "DELETE FROM fts_ngram
-             WHERE space_id = ?1 AND target_kind = 'entity' AND target_id = ?2",
-            params![space, id],
-        )
-        .map_err(sql_err)?;
+        fts_delete_target(conn, space, "entity", id)?;
         let mut stmt = conn
             .prepare(
                 "SELECT surface FROM entity_keys
@@ -126,76 +217,44 @@ pub fn index_entities_fts(
             .map_err(sql_err)?;
         drop(stmt);
         for surface in &surfaces {
-            conn.execute(
-                "INSERT INTO fts_word (body, space_id, target_kind, target_id)
-                 VALUES (?1, ?2, 'entity', ?3)",
-                params![surface, space, id],
-            )
-            .map_err(sql_err)?;
-            conn.execute(
-                "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
-                 VALUES (?1, ?2, 'entity', ?3)",
-                params![surface, space, id],
-            )
-            .map_err(sql_err)?;
+            fts_insert(conn, space, "entity", id, surface)?;
         }
     }
     Ok(())
 }
 
+/// Drop and rebuild all FTS5 content for a space — both word and trigram
+/// indexes (§7.4). Both are always populated; no script detection, no
+/// routing. Contentless since v13: only the inverted indexes are written;
+/// the map carries the target identity.
 pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
-    conn.execute("DELETE FROM fts_word WHERE space_id = ?1", params![space])
-        .map_err(sql_err)?;
-    conn.execute("DELETE FROM fts_ngram WHERE space_id = ?1", params![space])
-        .map_err(sql_err)?;
-    // Index episodes.
-    // Declaration episodes carry machine-readable canonical JSON, not
-    // human text — they must not pollute the retrieval index. Only
-    // primary episodes (real source text) are searchable here.
+    fts_delete_space(conn, space)?;
+
+    // Index episodes. Declaration episodes carry machine-readable canonical
+    // JSON, not human text — they must not pollute the retrieval index. Only
+    // primary episodes (real source text) are searchable here. Compacted
+    // episodes contribute their compacted payload (effective content).
     let mut stmt = conn
         .prepare(
-            "SELECT id, content FROM episodes
+            "SELECT id, content, content_compacted FROM episodes
               WHERE space_id = ?1 AND redacted_at IS NULL AND kind != 'declaration'",
         )
         .map_err(sql_err)?;
-    let episodes: Vec<(String, String)> = stmt
-        .query_map(params![space], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })
+    let episodes: Vec<(String, String, Option<Vec<u8>>)> = stmt
+        .query_map(params![space], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .map_err(sql_err)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(sql_err)?;
     drop(stmt);
-    for (id, content) in &episodes {
-        conn.execute(
-            "INSERT INTO fts_word (body, space_id, target_kind, target_id)
-             VALUES (?1, ?2, 'episode', ?3)",
-            params![content, space, id],
-        )
-        .map_err(sql_err)?;
-        conn.execute(
-            "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
-             VALUES (?1, ?2, 'episode', ?3)",
-            params![content, space, id],
-        )
-        .map_err(sql_err)?;
+    for (id, content, compacted) in &episodes {
+        let text = effective_episode_content(content, compacted.as_deref().unwrap_or(&[]));
+        fts_insert(conn, space, "episode", id, &text)?;
     }
     // Index statement renderings.
     let statements = load_statements(conn, space)?;
-    for stmt in &statements {
-        let body = render_statement(conn, stmt)?;
-        conn.execute(
-            "INSERT INTO fts_word (body, space_id, target_kind, target_id)
-             VALUES (?1, ?2, 'statement', ?3)",
-            params![body, space, stmt.id],
-        )
-        .map_err(sql_err)?;
-        conn.execute(
-            "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
-             VALUES (?1, ?2, 'statement', ?3)",
-            params![body, space, stmt.id],
-        )
-        .map_err(sql_err)?;
+    for stmt_row in &statements {
+        let body = render_statement(conn, stmt_row)?;
+        fts_insert(conn, space, "statement", &stmt_row.id, &body)?;
     }
     // Index entity surfaces so that FTS search by entity name returns Entity
     // targets — the graph expansion seeds from these (§11.4). Without this,
@@ -212,18 +271,7 @@ pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
         .map_err(sql_err)?;
     drop(entity_stmt);
     for (eid, surface) in &entity_rows {
-        conn.execute(
-            "INSERT INTO fts_word (body, space_id, target_kind, target_id)
-             VALUES (?1, ?2, 'entity', ?3)",
-            params![surface, space, eid],
-        )
-        .map_err(sql_err)?;
-        conn.execute(
-            "INSERT INTO fts_ngram (body, space_id, target_kind, target_id)
-             VALUES (?1, ?2, 'entity', ?3)",
-            params![surface, space, eid],
-        )
-        .map_err(sql_err)?;
+        fts_insert(conn, space, "entity", eid, surface)?;
     }
     Ok(())
 }
@@ -420,12 +468,11 @@ pub fn snapshot_ranking(conn: &Connection, space: &str) -> Result<String, BrainE
     let mut out = String::new();
     for (label, sql) in [
         (
-            "fts_word",
-            "SELECT target_kind, target_id, body FROM fts_word WHERE space_id = ?1 ORDER BY target_kind, target_id",
-        ),
-        (
-            "fts_ngram",
-            "SELECT target_kind, target_id, body FROM fts_ngram WHERE space_id = ?1 ORDER BY target_kind, target_id",
+            "fts_targets",
+            // Contentless since v13: membership only — the body is not stored
+            // in the FTS layer, and both indexes always share the same target
+            // set (rebuild and incremental paths insert into both).
+            "SELECT target_kind, target_id FROM fts_map WHERE space_id = ?1 ORDER BY target_kind, target_id",
         ),
         (
             "vectors",
@@ -490,7 +537,7 @@ pub fn rebuild_chunks(conn: &Connection, space: &str) -> Result<(), BrainError> 
     // Read all non-redacted episodes in canonical (seq) order.
     let mut ep_stmt = conn
         .prepare(
-            "SELECT id, content, occurred_at, source_kind
+            "SELECT id, content, content_compacted, occurred_at, source_kind
                FROM episodes
               WHERE space_id = ?1 AND redacted_at IS NULL
               ORDER BY seq ASC",
@@ -499,22 +546,26 @@ pub fn rebuild_chunks(conn: &Connection, space: &str) -> Result<(), BrainError> 
     let episodes = ep_stmt
         .query_map(params![space], |r| {
             Ok((
-                r.get::<_, String>(0)?, // id
-                r.get::<_, String>(1)?, // content
-                r.get::<_, i64>(2)?,    // occurred_at
-                r.get::<_, String>(3)?, // source_kind
+                r.get::<_, String>(0)?,          // id
+                r.get::<_, String>(1)?,          // content
+                r.get::<_, Option<Vec<u8>>>(2)?, // content_compacted
+                r.get::<_, i64>(3)?,             // occurred_at
+                r.get::<_, String>(4)?,          // source_kind
             ))
         })
         .map_err(sql_err)?
-        .collect::<Result<Vec<(String, String, i64, String)>, _>>()
+        .collect::<Result<Vec<(String, String, Option<Vec<u8>>, i64, String)>, _>>()
         .map_err(sql_err)?;
     drop(ep_stmt);
 
     let policy = ChunkPolicy::default();
     let empty: Vec<String> = Vec::new();
-    for (id, content, occurred_at, source_kind) in episodes {
+    for (id, content, compacted, occurred_at, source_kind) in episodes {
         let episode_mentions = mentions.get(&id).unwrap_or(&empty);
-        let chunks = split_into_chunks(&content, &policy);
+        // Compacted episodes chunk over their effective text (§5.7: offsets
+        // refer to the recoverable content, not the cleared column).
+        let effective = effective_episode_content(&content, compacted.as_deref().unwrap_or(&[]));
+        let chunks = split_into_chunks(&effective, &policy);
         for chunk in chunks {
             let cid = chunk_id(&id, chunk.ordinal);
             let context =

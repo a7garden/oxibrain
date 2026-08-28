@@ -78,5 +78,11 @@ pub async fn run(dir: &Path) -> anyhow::Result<()> {
         }
     }
 
+    // Orphaned source-registry rows: sources that never produced an episode.
+    // v13 deletes them at migration; this counts any that appeared since
+    // (a scan/push that registered but never landed an episode).
+    let orphaned = brain.orphan_source_count().await?;
+    println!("orphan sources (registered, never produced an episode): {orphaned}");
+
     Ok(())
 }

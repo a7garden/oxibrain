@@ -105,7 +105,7 @@ pub struct Store {
 /// `From<rusqlite::Error> for BrainError` would violate the orphan rule (BrainError is
 /// foreign to this crate, and so is rusqlite). Use `.map_err(sql_err)?` at every rusqlite
 /// boundary; the `?`-on-rusqlite shortcut does not compile here.
-pub(crate) fn sql_err(e: rusqlite::Error) -> BrainError {
+pub fn sql_err(e: rusqlite::Error) -> BrainError {
     BrainError::Storage(e.to_string())
 }
 pub(crate) fn io_err(e: std::io::Error) -> BrainError {

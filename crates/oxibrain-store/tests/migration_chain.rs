@@ -51,8 +51,10 @@ fn has_table(conn: &Connection, name: &str) -> bool {
 fn migrates_from_empty_to_current() {
     migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
-    // simulate a pre-migration db
-    conn.execute_batch("CREATE TABLE spaces(id TEXT);").unwrap();
+    // simulate a pre-migration db (id as PK: sources' FK needs a parent
+    // index — the v13 orphan-source DELETE compiles that FK)
+    conn.execute_batch("CREATE TABLE spaces(id TEXT PRIMARY KEY);")
+        .unwrap();
     let v = migration::run(&conn).unwrap();
     assert_eq!(v, LEDGER_SCHEMA_VERSION);
     let _n: i64 = conn
@@ -303,6 +305,107 @@ fn migrates_from_v11_converting_float_vectors() {
         "dequantized first dim: {}",
         v[0]
     );
+}
+
+// ── v12 → current (v13 contentless FTS + orphan sources) ────────────────────
+
+#[test]
+fn migrates_from_v12_rebuilding_contentless_fts() {
+    migration::ensure_vec_extension();
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(V1_SQL).unwrap();
+    conn.execute_batch(V2_SQL).unwrap();
+    registry::seed_core_v1(&conn).unwrap();
+    conn.pragma_update(None, "user_version", 2i64).unwrap();
+    for sql in [
+        include_str!("../src/migrations/v3.sql"),
+        include_str!("../src/migrations/v4.sql"),
+        include_str!("../src/migrations/v5.sql"),
+        include_str!("../src/migrations/v6.sql"),
+        include_str!("../src/migrations/v7.sql"),
+        include_str!("../src/migrations/v8.sql"),
+        include_str!("../src/migrations/v9.sql"),
+        include_str!("../src/migrations/v10.sql"),
+        include_str!("../src/migrations/v11.sql"),
+        include_str!("../src/migrations/v12.sql"),
+    ] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 12i64).unwrap();
+    insert_test_data(&conn);
+
+    // One orphan source (never produced an episode) + one referenced one.
+    conn.execute(
+        "INSERT INTO sources (id, space_id, name, kind, mode, claims_json, created_at)
+         VALUES ('src_kept', 'sp1', 'kept-source', 'mcp', 'push', '{}', 1000)",
+        [],
+    )
+    .unwrap();
+    conn.execute("UPDATE episodes SET source_id = 'src_kept'", [])
+        .unwrap();
+    conn.execute(
+        "INSERT INTO sources (id, space_id, name, kind, mode, claims_json, created_at)
+         VALUES ('src_orphan', 'sp1', '/tmp/gone-vault', 'document_revision', 'pull', '{}', 1000)",
+        [],
+    )
+    .unwrap();
+
+    let v = migration::run(&conn).unwrap();
+    assert_eq!(v, LEDGER_SCHEMA_VERSION);
+
+    // v13 effect: contentless FTS + map, rebuilt from the live episodes.
+    for shadow in ["fts_word_content", "fts_ngram_content"] {
+        let present: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
+                rusqlite::params![shadow],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(present, 0, "no {shadow} shadow table");
+    }
+    let has_map: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'fts_map'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_map, 1, "fts_map exists");
+
+    let ep_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fts_map WHERE target_kind = 'episode'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let live_eps: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM episodes WHERE redacted_at IS NULL AND kind != 'declaration'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(ep_rows, live_eps, "migration rebuilt episode targets");
+
+    // Orphan source deleted; referenced source kept.
+    let orphan: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sources WHERE id = 'src_orphan'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(orphan, 0, "orphan source row removed");
+    let kept: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sources WHERE id = 'src_kept'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, 1, "episode-referenced source stays (provenance)");
 }
 
 // ── Idempotency ──────────────────────────────────────────────────────────────
