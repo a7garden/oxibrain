@@ -16,15 +16,31 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Orientation: spaces with counts, document freshness, versions — the
+    /// agent's first call and the `space` enum source (agent-first-cli §7).
+    Describe,
+    /// Registry introspection: per-op schema, caps, mutating (agent-first-cli §7).
+    Schema {
+        /// Op name; omit for the full catalogue.
+        op: Option<String>,
+    },
+    /// Agent op dispatch: `oxibrain <op> --json PAYLOAD` — the ops, 1:1
+    /// with MCP tools/list. The payload is the MCP `tools/call` arguments
+    /// object; stdout carries one JSON envelope (agent-first-cli §2–§3).
+    #[command(external_subcommand)]
+    Op(Vec<String>),
+    /// Machine/product lifecycle verbs — NOT the agent surface (spec §10).
+    /// These never appear in `tools/list` and do not count against the cap.
+    Admin {
+        #[command(subcommand)]
+        command: AdminCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AdminCmd {
     /// Initialize a new brain store.
     Init {
-        #[arg(long)]
-        space: Option<String>,
-    },
-    /// Ingest a file or stdin as an episode.
-    Ingest {
-        /// File path, or `-` for stdin.
-        path: PathBuf,
         #[arg(long)]
         space: Option<String>,
     },
@@ -46,68 +62,15 @@ pub enum Command {
     },
     /// Restore from a backup.
     Restore { backup: PathBuf },
-    /// Ask a question (hybrid query).
-    Ask {
-        question: String,
+    /// Undo the most recent merge for an entity (D34) — console repair.
+    EntitySplit {
+        surface: String,
+        ty: String,
         #[arg(long)]
         space: Option<String>,
-    },
-    /// Entity management (DESIGN §12.4: `entity show|merge|split|alias`).
-    Entity {
-        #[command(subcommand)]
-        command: EntityCmd,
-    },
-    Timeline {
-        entity_id: String,
-        #[arg(long)]
-        space: Option<String>,
-    },
-    /// Provenance for a statement.
-    Why {
-        statement_id: String,
-        #[arg(long)]
-        space: Option<String>,
-        /// Print what `rank` discarded for a query instead of provenance.
-        /// `statement_id` is then the query text (DESIGN §11.8).
-        #[arg(long)]
-        dropped: bool,
-        /// Confidence floor for --dropped (default 0). Raises it to see
-        /// BelowConfidenceFloor drops.
-        #[arg(long, default_value_t = 0.0)]
-        min_confidence: f32,
-    },
-    /// List contradicted statements.
-    Contradictions {
-        #[arg(long)]
-        space: Option<String>,
-    },
-    /// Render a page (brief) with followable links. `--kind entity` is the
-    /// default; `--kind space` shows counts + top entities; `--kind topic`
-    /// keyword-searches entity surfaces (`--topic` is the keyword).
-    Page {
-        /// Entity id (when --kind entity, default), or ignored for space/topic.
-        entity: Option<String>,
-        #[arg(long)]
-        space: Option<String>,
-        /// Target kind: entity (default), space, or topic.
-        #[arg(long, default_value = "entity")]
-        kind: String,
-        /// Keyword for --kind topic.
-        #[arg(long)]
-        topic: Option<String>,
     },
     /// Reproject the store.
     Reproject,
-    /// Redact (the only true delete).
-    Redact {
-        target: String,
-        #[arg(long)]
-        space: Option<String>,
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        reason: String,
-    },
     /// Export to JSONL.
     Export {
         #[arg(long)]
@@ -179,19 +142,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ModelCmd,
     },
-
     /// Run the extraction evaluation suite (DESIGN §14.2).
     Eval {
         /// Suite: `fast` (fixture-replayed, no network) or `full` (live provider).
         #[arg(long, default_value = "fast")]
         suite: String,
-    },
-    /// Declare a statement from raw JSON (power-user path).
-    Declare {
-        /// Canonical declaration JSON.
-        json: String,
-        #[arg(long)]
-        space: Option<String>,
     },
     /// Source management.
     Source {

@@ -38,6 +38,7 @@ serde.workspace = true
 oxibrain-llm-http.workspace = true
 oxibrain-llm-local.workspace = true
 oxibrain-ports.workspace = true
+oxibrain-ops.workspace = true
 oxibrain-connectors.workspace = true
 clap = { workspace = true, features = ["env"] }
 tokio.workspace = true

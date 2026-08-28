@@ -34,7 +34,11 @@ struct StdioChild {
 impl StdioChild {
     fn spawn(dir: &Path, env: &[(&str, &str)]) -> Self {
         let mut cmd = Command::new(SERVE_BINARY);
-        cmd.arg("--dir").arg(dir).arg("serve").arg("--stdio");
+        cmd.arg("--dir")
+            .arg(dir)
+            .arg("admin")
+            .arg("serve")
+            .arg("--stdio");
         cmd.env_remove("OXIBRAIN_SOCKET");
         for (k, v) in env {
             cmd.env(k, v);
