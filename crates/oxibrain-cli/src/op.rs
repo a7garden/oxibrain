@@ -241,10 +241,29 @@ pub async fn run(dir: &Path, args: &[String]) -> i32 {
         .unwrap_or(false)
     {
         // The tool ran and failed (MCP semantics: runtime failure inside a
-        // successful JSON-RPC response). P2 surfaces the message verbatim;
-        // typed BrainError mapping lands with the P3 cutover.
-        print_envelope(&err_envelope(&op_name, "internal", &text, false));
-        return EXIT_INTERNAL;
+        // successful JSON-RPC response). The BrainError Display prefixes in
+        // `oxibrain-ports/src/error.rs` are a stable contract — classify on
+        // them until ToolErr carries the typed error (P6).
+        let (code, exit, retry) =
+            if text.starts_with("invalid input:") || text.starts_with("invalid space name") {
+                ("invalid_input", EXIT_INVALID_INPUT, false)
+            } else if text.starts_with("not found:") || text.starts_with("space '") {
+                ("not_found", EXIT_NOT_FOUND, false)
+            } else if text.starts_with("unauthorized:") || text.starts_with("insufficient scope") {
+                ("unauthorized", EXIT_UNAUTHORIZED, false)
+            } else if text.starts_with("store locked") || text.starts_with("busy:") {
+                ("locked", EXIT_LOCKED, true)
+            } else if text.starts_with("budget exceeded:") {
+                ("budget", 7, false)
+            } else if text.starts_with("model error:") || text.starts_with("provider error") {
+                ("model", 8, false)
+            } else if text.starts_with("conflict:") {
+                ("conflict", 6, false)
+            } else {
+                ("internal", EXIT_INTERNAL, false)
+            };
+        print_envelope(&err_envelope(&op_name, code, &text, retry));
+        return exit;
     }
 
     // Success payloads are pretty-JSON strings; plain text falls back to a

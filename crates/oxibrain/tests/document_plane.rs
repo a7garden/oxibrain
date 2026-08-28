@@ -123,7 +123,7 @@ async fn search_documents_returns_verbatim_slice_with_revision() {
     let hit = &docs[0];
     assert_eq!(hit.root, "vault");
     assert_eq!(hit.locator, "alpha/notes.md");
-    assert!(hit.text.contains("alpha content"));
+    assert!(hit.text.text.contains("alpha content"));
     assert!(!hit.revision.is_empty());
 }
 
@@ -170,7 +170,7 @@ async fn search_documents_detects_in_place_edit() {
         response
             .documents
             .iter()
-            .any(|d| d.text.contains("second version")),
+            .any(|d| d.text.text.contains("second version")),
         "expected fresh edit to be visible: {:?}",
         response.documents
     );
@@ -469,7 +469,9 @@ async fn search_response_keeps_planes_separate_when_both_requested() {
     // Memory plane is empty (no episodes ingested) but must be present.
     assert!(memory.is_empty(), "memory should be empty");
     assert!(
-        documents.iter().any(|d| d.text.contains("alpha content")),
+        documents
+            .iter()
+            .any(|d| d.text.text.contains("alpha content")),
         "documents plane should still hit: {documents:?}"
     );
 }

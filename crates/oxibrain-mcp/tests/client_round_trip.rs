@@ -261,10 +261,11 @@ async fn client_search_returns_both_planes_and_native_methods() {
         .expect("search");
     assert!(response.memory.is_empty());
     assert!(
-        response
-            .documents
-            .iter()
-            .any(|d: &DocumentHitDto| d.text.contains("quantum llama content")),
+        response.documents.iter().any(|d: &DocumentHitDto| d
+            .text
+            .text
+            .contains("quantum llama content")
+            && d.text.kind == "untrusted_content"),
         "documents plane should hit: {:?}",
         response.documents
     );

@@ -199,7 +199,7 @@ async fn spawn_local_client_round_trip_and_native_methods() {
         docs_only
             .documents
             .iter()
-            .any(|d| d.text.contains("zephyr document body")),
+            .any(|d| d.text.text.contains("zephyr document body")),
         "documents plane hit expected: {:?}",
         docs_only.documents
     );

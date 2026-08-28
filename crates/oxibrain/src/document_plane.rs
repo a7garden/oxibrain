@@ -61,6 +61,29 @@ use crate::Brain;
 
 // ─── Public surface ─────────────────────────────────────────────────────────
 
+/// Verbatim retrieved text, typed as untrusted at the boundary (spec
+/// `agent-first-cli-v1` §4): oxibrain feeds untrusted documents to agents,
+/// so a hit is never a bare string an agent might mistake for instructions.
+/// Defense is representational, never detective — no language-specific
+/// scanning (P11).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UntrustedContent {
+    /// Always `"untrusted_content"`.
+    pub kind: String,
+    pub text: String,
+    pub provenance: ContentProvenance,
+}
+
+/// Where an `UntrustedContent` value came from. `trust` is `"unverified"`
+/// until per-root trust evaluation exists — which is the truth today.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ContentProvenance {
+    /// Stable URI (`doc://<alias>/<locator>?rev=<revision>`).
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub trust: String,
+}
+
 /// A single document plane hit (§7.2). Score is the post-RRF value inside
 /// the documents plane; it is never compared against memory-plane scores.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -70,7 +93,7 @@ pub struct DocumentHit {
     pub locator: String,
     pub revision: String,
     pub ordinal: u32,
-    pub text: String,
+    pub text: UntrustedContent,
     pub modified_at: Timestamp,
     pub score: f64,
 }
@@ -218,7 +241,9 @@ impl Brain {
             .iter()
             .map(|h| oxibrain_core::pack::DocumentExcerpt {
                 uri: build_doc_uri(&h.root, &h.locator, &h.revision),
-                text: h.text.clone(),
+                // Internal consumer (context packing) unwraps — the
+                // untrusted typing applies to agent-facing boundaries.
+                text: h.text.text.clone(),
                 score: h.score as f32,
             })
             .collect();
@@ -828,13 +853,21 @@ impl Brain {
                 Ok(Some(t)) => t,
                 _ => continue, // stale or vanished — drop the hit
             };
+            let reference = format!("doc://{}/{}?rev={}", ch.root_alias, ch.locator, ch.revision);
             out.push(DocumentHit {
                 document_id: text.document_id,
                 root: ch.root_alias,
                 locator: ch.locator,
                 revision: ch.revision,
                 ordinal: ch.ordinal,
-                text: text.text,
+                text: UntrustedContent {
+                    kind: "untrusted_content".to_string(),
+                    text: text.text,
+                    provenance: ContentProvenance {
+                        reference,
+                        trust: "unverified".to_string(),
+                    },
+                },
                 modified_at: Timestamp::from_millis(ch.modified_at * 1000),
                 score,
             });

@@ -106,6 +106,22 @@ pub struct DocumentRevisionDto {
     pub content: String,
 }
 
+/// Verbatim retrieved text typed as untrusted (v2.13 spec §4) — never a
+/// bare string. Client-owned mirror of the facade's `UntrustedContent`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UntrustedContentDto {
+    pub kind: String,
+    pub text: String,
+    pub provenance: ContentProvenanceDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentProvenanceDto {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub trust: String,
+}
+
 /// A documents-plane hit in [`SearchResponseDto::documents`] — client-owned
 /// mirror of the facade's `DocumentHit` (millis on the wire).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,7 +131,7 @@ pub struct DocumentHitDto {
     pub locator: String,
     pub revision: String,
     pub ordinal: u32,
-    pub text: String,
+    pub text: UntrustedContentDto,
     /// Millis since epoch; the wire key is `modified_at` (engine shape).
     #[serde(rename = "modified_at")]
     pub modified_at_ms: i64,
@@ -633,7 +649,11 @@ mod tests {
                 "locator": "notes.md",
                 "revision": "blake3:abc",
                 "ordinal": 0,
-                "text": "alpha content",
+                "text": {
+                    "kind": "untrusted_content",
+                    "text": "alpha content",
+                    "provenance": { "ref": "doc://vault/notes.md?rev=blake3:abc", "trust": "unverified" }
+                },
                 "modified_at": 1700000000000i64,
                 "score": 0.5
             }],

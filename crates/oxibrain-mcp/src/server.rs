@@ -640,6 +640,7 @@ impl BrainServer {
         match kind {
             "entity" => {
                 let entity_id = str_arg(args, "entity_id")?;
+                validate_id("entity_id", entity_id)?;
                 self.brain
                     .brief(&space_id, entity_id)
                     .await
@@ -667,6 +668,11 @@ impl BrainServer {
         let from = str_arg(args, "from")?;
         let link = str_arg(args, "link")?;
         let space_id = self.resolve_space_arg(args).await?;
+        // `link` carries the target entity id (optionally `entity://`-
+        // prefixed). Restriction to links that exist on the source page is
+        // the anti-hallucination guard; id-shape validation is the floor.
+        // (`from` is advisory — the views layer does not read it.)
+        validate_id("link", link.trim_start_matches("entity://"))?;
         self.brain
             .navigate(&space_id, from, link)
             .await
@@ -912,6 +918,9 @@ impl BrainServer {
                 "'start' must contain at least one entity ID".into(),
             ));
         }
+        for id in &start_ids {
+            validate_id("start", id)?;
+        }
         let max_depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
         let max_nodes = args
             .get("max_nodes")
@@ -1046,6 +1055,19 @@ impl BrainServer {
             .get("locator")
             .and_then(Value::as_str)
             .ok_or((INVALID_PARAMS, "missing required argument 'locator'".into()))?;
+        // Boundary floor (v2.13 spec §5): the plane sandbox is the wall;
+        // this rejects the agent-typical malformations early.
+        if locator
+            .bytes()
+            .any(|b| b < 0x20 || b == b'%' || b == b'?' || b == b'#')
+        {
+            return Err((
+                INVALID_PARAMS,
+                format!(
+                    "invalid locator '{locator}': control characters, '%', '?', and '#' are rejected"
+                ),
+            ));
+        }
         let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
 
         self.enforce_scope_resource(space).await?;
@@ -1144,6 +1166,9 @@ impl BrainServer {
         // statement id (the conflicts inbox) don't have to resubmit resolvable
         // surfaces or entity types.
         let sid = str_arg_or(args, "statement_id", "");
+        if !sid.is_empty() {
+            validate_id("statement_id", &sid)?;
+        }
         let (subject, predicate, object) = if sid.is_empty() {
             let subject: EntityRef =
                 serde_json::from_value(args.get("subject").cloned().unwrap_or_default())
@@ -1197,6 +1222,15 @@ impl BrainServer {
         let space_id = self.resolve_space_arg(args).await?;
         let kind = str_arg(args, "target_kind")?;
         let target_id = str_arg(args, "target_id")?;
+        match kind {
+            "episode" | "entity" => validate_id("target_id", target_id)?,
+            "predicate" => {
+                if let Some((eid, _pred)) = target_id.split_once('/') {
+                    validate_id("target_id", eid)?;
+                }
+            }
+            _ => {}
+        }
         let reason = str_arg_or(args, "reason", "mcp redact");
         let dry_run = args
             .get("dry_run")
@@ -1463,6 +1497,20 @@ enum ToolErr {
 impl ToolErr {
     fn run(e: impl std::fmt::Display) -> Self {
         Self::Run(e.to_string())
+    }
+}
+/// Ids are content-derived blake3 hex (64 chars, §5.6). Anything else in an
+/// id slot is a fabrication (v2.13 spec §5): reject with the legal-path
+/// hint and NEVER fall back to resolving a surface string — silent
+/// re-resolution would break P3's exact mention replay.
+fn validate_id(field: &str, id: &str) -> Result<(), ToolErr> {
+    if id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(ToolErr::Params(format!(
+            "'{field}' must be a content-derived id (64 hex chars) — obtain ids via the \
+             resolve or search op; never guess or construct them"
+        )))
     }
 }
 
@@ -2434,6 +2482,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp["error"]["code"], METHOD_NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn fabricated_entity_id_is_rejected_with_hint() {
+        let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "brief",
+                    "arguments": { "space": "t", "entity_id": "ent_alice" }
+                })),
+            ))
+            .await
+            .unwrap();
+        let m = resp["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            m.contains("resolve or search"),
+            "fabricated id must carry the legal-path hint, got: {m}"
+        );
+    }
+
+    #[tokio::test]
+    async fn traverse_rejects_fabricated_start_ids() {
+        let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "traverse",
+                    "arguments": { "space": "t", "start": ["../..%2f.ssh"] }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], INVALID_PARAMS);
     }
 
     #[tokio::test]
