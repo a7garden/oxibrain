@@ -228,7 +228,10 @@ pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
     Ok(())
 }
 
-/// Build TF-IDF model and persist vectors for all episodes + statements in a space.
+/// Build TF-IDF model and persist vectors for all episodes + statements in a
+/// space. Vectors are stored symmetric-int8 (§7.4 storage budget): 1 KB per
+/// row at dim 1024, cosine-preserving (per-vector max-abs rescale cancels in
+/// the cosine quotient).
 pub fn rebuild_tfidf(conn: &Connection, space: &str, dim: usize) -> Result<(), BrainError> {
     // Collect all texts.
     let mut texts: Vec<String> = Vec::new();
@@ -275,7 +278,12 @@ pub fn rebuild_tfidf(conn: &Connection, space: &str, dim: usize) -> Result<(), B
         conn.execute(
             "INSERT OR REPLACE INTO tfidf_vectors (space_id, target_kind, target_id, vector)
              VALUES (?1, ?2, ?3, ?4)",
-            params![space, kind, id, vector.to_bytes()],
+            params![
+                space,
+                kind,
+                id,
+                oxibrain_index::quantize_i8(vector.as_slice())
+            ],
         )
         .map_err(sql_err)?;
     }

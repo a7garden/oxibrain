@@ -17,7 +17,9 @@ pub use blocking::{BlockingConfig, LshIndex, entropy_gate};
 pub use community::{CommunityMap, label_propagation, label_propagation_weighted};
 pub use knn::KnnIndex;
 pub use ngram::{jaccard, lsh_bands, minhash, shingle_entropy, shingles};
-pub use quantize::{cosine_approx, dequantize_signs, hamming, quantize};
+pub use quantize::{
+    cosine_approx, dequantize_i8, dequantize_signs, hamming, max_abs, quantize, quantize_i8,
+};
 pub use rrf::{FusedItem, fuse};
 pub use spec::{Direction, PredicateFilter};
 pub use vector::{TfIdfModel, TfIdfVector, cosine_sim, features};

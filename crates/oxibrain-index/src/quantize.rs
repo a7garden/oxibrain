@@ -105,12 +105,111 @@ pub fn cosine_approx(hamming_dist: usize, dim: usize) -> f64 {
     1.0 - 2.0 * (hamming_dist as f64 / dim as f64)
 }
 
+// ─── Symmetric int8 quantization (storage footprint, §7.4) ────────────────
+
+/// Largest absolute component; `0.0` for an empty slice.
+pub fn max_abs(vec: &[f32]) -> f32 {
+    vec.iter().fold(0.0f32, |m, &v| m.max(v.abs()))
+}
+
+/// Symmetric int8 quantization against the vector's own max-abs component.
+///
+/// One byte per dimension (4× smaller than f32). Cosine similarity is
+/// invariant under positive per-vector rescaling, so quantizing each vector
+/// against its own `max_abs` preserves cosine ordering with no scale
+/// metadata to store. An all-zero vector quantizes to all-zero bytes
+/// (`max_abs == 0` is treated as scale 1).
+pub fn quantize_i8(vec: &[f32]) -> Vec<u8> {
+    let scale = max_abs(vec);
+    vec.iter()
+        .map(|&v| {
+            let unit = if scale > 0.0 {
+                (v / scale).clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            (unit * 127.0).round() as i8 as u8
+        })
+        .collect()
+}
+
+/// Inverse of [`quantize_i8`] up to quantization error (`b / 127`).
+pub fn dequantize_i8(bytes: &[u8]) -> Vec<f32> {
+    bytes.iter().map(|&b| b as i8 as f32 / 127.0).collect()
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    // ─── Symmetric int8 ──────────────────────────────────────────────────
+
+    #[test]
+    fn i8_roundtrip_preserves_cosine_ordering() {
+        let a = vec![0.1, -0.4, 0.9, 0.0, 0.3, -0.2, 0.05, 0.7];
+        let b = vec![0.12, -0.38, 0.85, 0.01, 0.28, -0.22, 0.04, 0.72];
+        let c = vec![-0.9, 0.4, -0.1, 0.5, -0.3, 0.8, -0.05, -0.7];
+        let cos = |x: &[f32], y: &[f32]| {
+            let d: f32 = x.iter().zip(y).map(|(p, q)| p * q).sum();
+            let na: f32 = x.iter().map(|p| p * p).sum::<f32>().sqrt();
+            let nb: f32 = y.iter().map(|p| p * p).sum::<f32>().sqrt();
+            d / (na * nb)
+        };
+        let qa = dequantize_i8(&quantize_i8(&a));
+        let qb = dequantize_i8(&quantize_i8(&b));
+        let qc = dequantize_i8(&quantize_i8(&c));
+        assert!(
+            cos(&qa, &qb) > cos(&qa, &qc),
+            "similarity ordering must survive"
+        );
+        assert!(
+            (cos(&qa, &qb) - cos(&a, &b)).abs() < 0.02,
+            "cosine drift < 0.02"
+        );
+    }
+
+    #[test]
+    fn i8_zero_vector_is_all_zeros() {
+        assert!(quantize_i8(&[0.0; 8]).iter().all(|&b| b == 0));
+        assert_eq!(dequantize_i8(&[0; 8]), vec![0.0; 8]);
+    }
+
+    #[test]
+    fn i8_length_matches_input() {
+        let v = vec![0.5f32; 100];
+        assert_eq!(quantize_i8(&v).len(), 100);
+    }
+
+    #[test]
+    fn i8_cosine_is_scale_invariant() {
+        // Scaling a vector must not change its quantized cosine against a peer:
+        // the per-vector max-abs rescale cancels in the cosine quotient.
+        let v = vec![0.2, -0.6, 0.4, 0.1, -0.3, 0.8, -0.5, 0.05];
+        let w = vec![0.9, -0.1, 0.3, -0.7, 0.2, 0.4, -0.6, 0.15];
+        let cos = |x: &[f32], y: &[f32]| {
+            let d: f32 = x.iter().zip(y).map(|(p, q)| p * q).sum();
+            let na: f32 = x.iter().map(|p| p * p).sum::<f32>().sqrt();
+            let nb: f32 = y.iter().map(|p| p * p).sum::<f32>().sqrt();
+            d / (na * nb)
+        };
+        let scaled: Vec<f32> = v.iter().map(|x| x * 3.0).collect();
+        let q = dequantize_i8(&quantize_i8(&w));
+        assert!(
+            (cos(&dequantize_i8(&quantize_i8(&v)), &q)
+                - cos(&dequantize_i8(&quantize_i8(&scaled)), &q))
+            .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn max_abs_finds_largest_component() {
+        assert_eq!(max_abs(&[0.1, -0.9, 0.3]), 0.9);
+        assert_eq!(max_abs(&[]), 0.0);
+    }
 
     // ─── Known-vector roundtrip ───────────────────────────────────────────
 
