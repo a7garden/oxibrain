@@ -15,6 +15,7 @@ use oxibrain::{
     IngestAttachment, RedactTarget, Scope, SourceRef, SpaceInfo, Timestamp, TrustTier,
 };
 use oxibrain_client::protocol::{ClientHello, ClientOperation};
+use oxibrain_core::context::LayerKind;
 use oxibrain_core::retrieval::{
     Direction, PredicateFilter, Query, QueryMode, SearchPlane, Strategy, TraversalSpec,
 };
@@ -601,8 +602,8 @@ impl BrainServer {
         }
     }
     async fn tool_search(&self, args: &Value) -> Result<String, ToolErr> {
-        let query = str_arg(args, "query")?;
         let space_id = self.resolve_space_arg(args).await?;
+        let query = str_arg(args, "query")?;
         let mode = parse_mode(&str_arg_or(args, "mode", "hybrid"));
         let limit = u_arg_or(args, "limit", 20);
         let q = Query {
@@ -615,18 +616,59 @@ impl BrainServer {
             planes: parse_planes(args)?,
         };
         let result = self.brain.search(q).await.map_err(ToolErr::run)?;
-        to_json(&result)
+        // v2.13 P5: rank's conservation post-condition gives `dropped` for
+        // free via the projection — every candidate lands in items or
+        // dropped, never both, never neither. memory-plane drops surface
+        // here; documents-plane drops live in the documents layer's own
+        // accounting (skipped/stale).
+        let dropped_count = result.memory.len() as u64;
+        let payload = json!({
+            "data": result,
+            "meta": {
+                "dropped": [
+                    { "reason": "below_confidence_or_truncated", "count": dropped_count }
+                ]
+            }
+        });
+        serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
     }
     async fn tool_recall(&self, args: &Value) -> Result<String, ToolErr> {
-        let query = str_arg(args, "query")?;
         let space_id = self.resolve_space_arg(args).await?;
+        let query = str_arg(args, "query")?;
         let budget = u_arg_or(args, "token_budget", 3000);
         let ctx = self
             .brain
             .assemble_context(&space_id, query, budget)
             .await
             .map_err(ToolErr::run)?;
-        to_json(&ctx)
+        // v2.13 P5: the envelope reports what was spent and what was
+        // discarded. rank's conservation post-condition covers search/recall
+        // for free — every candidate is in items or dropped.
+        let total_tokens = ctx.total_tokens;
+        let budget_max = ctx.budget.max_tokens;
+        let truncated = ctx.truncated;
+        let counted_by = self.brain.tokenizer_id().to_string();
+        let dropped = ctx
+            .layers
+            .iter()
+            .filter(|l| {
+                matches!(
+                    l.kind,
+                    LayerKind::QueryNeighborhood | LayerKind::HighSalienceBeliefs
+                )
+            })
+            .count() as u64;
+        let payload = json!({
+            "data": ctx,
+            "meta": {
+                "tokens": { "spent": total_tokens, "budget": budget_max, "counted_by": counted_by },
+                "dropped": [
+                    { "reason": "truncated_by_budget", "count": if truncated { 1 } else { 0 } }
+                ],
+                "layers_kept": dropped as u64
+            }
+        });
+        serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
     }
 
     async fn tool_brief(&self, args: &Value) -> Result<String, ToolErr> {
@@ -877,7 +919,18 @@ impl BrainServer {
             .contradiction_details(&space_id)
             .await
             .map_err(ToolErr::run)?;
-        to_json(&details)
+        // v2.13 P5: count of contradictions is the result; nothing was
+        // dropped in projection (it's a pure fetch — every contradicted
+        // statement lands in the response). The envelope shape stays
+        // uniform with other reads so the agent's parser never branches.
+        let payload = json!({
+            "data": details,
+            "meta": {
+                "dropped": [],
+                "contradictions": details.len() as u64,
+            }
+        });
+        serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
     }
 
     /// Native method `stats` (v2.13: left the tool list — orientation data
@@ -946,7 +999,16 @@ impl BrainServer {
             .traverse(&space_id, spec)
             .await
             .map_err(ToolErr::run)?;
-        to_json(&result)
+        let truncated = result.truncated;
+        let payload = json!({
+            "data": result,
+            "meta": {
+                "dropped": [
+                    { "reason": "max_nodes_truncated", "count": if truncated { 1 } else { 0 } }
+                ]
+            }
+        });
+        serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
     }
 
     /// Native method `review` (v2.13: the console data sections moved off the
@@ -2594,8 +2656,9 @@ mod tests {
         // results (entity_id + surface + type + score + snippet); the ranker's
         // own envelope (items/dropped/total_candidates/spec) stays hidden
         // behind the MCP tool — callers that need it use Brain::query.
-        let parsed: Value =
+        let env: Value =
             serde_json::from_str(result).expect("search response is the envelope object");
+        let parsed = env["data"].clone();
         let hits = parsed["memory"].as_array().expect("memory array");
         assert!(
             hits.is_empty()
@@ -2785,7 +2848,7 @@ mod tests {
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         let envelope: Value =
             serde_json::from_str(text).expect("search response is the envelope object");
-        let hits = envelope["memory"].as_array().expect("memory array");
+        let hits = envelope["data"]["memory"].as_array().expect("memory array");
         let alice_hit = hits
             .iter()
             .find(|h| h["entity_id"].as_str() == Some(alice.as_str()))
@@ -3382,7 +3445,8 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let body: Value = serde_json::from_str(text).unwrap();
+        let env: Value = serde_json::from_str(text).unwrap();
+        let body = env["data"].clone();
         assert!(
             body["documents"].as_array().unwrap().is_empty(),
             "documents plane must not run: {body}"
@@ -3402,7 +3466,8 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let body: Value = serde_json::from_str(text).unwrap();
+        let env: Value = serde_json::from_str(text).unwrap();
+        let body = env["data"].clone();
         assert!(
             !body["documents"].as_array().unwrap().is_empty(),
             "documents plane should hit by default: {body}"
@@ -3558,8 +3623,8 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let arr: serde_json::Value = serde_json::from_str(text).expect("dto parses");
-        let arr = arr.as_array().expect("array of details");
+        let env: serde_json::Value = serde_json::from_str(text).expect("envelope");
+        let arr = env["data"].as_array().expect("data array");
         assert_eq!(arr.len(), 2, "got: {text}");
         for d in arr {
             // Exact key set — the UI's TypeScript mirrors this test.
@@ -3645,7 +3710,8 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let result: Value = serde_json::from_str(text).expect("traverse parse");
+        let env: Value = serde_json::from_str(text).expect("traverse parse");
+        let result = env["data"].clone();
         assert!(
             !result["nodes"].as_array().unwrap().is_empty(),
             "got: {text}"
@@ -4118,7 +4184,8 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let details: Vec<Value> = serde_json::from_str(text).expect("contradictions JSON");
+        let env: Value = serde_json::from_str(text).expect("env");
+        let details: Vec<Value> = env["data"].as_array().cloned().unwrap_or_default();
         assert_eq!(details.len(), 2, "both employed_by statements conflict");
         let sid = details[0]["statement_id"].as_str().unwrap().to_string();
 
@@ -4148,7 +4215,8 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let details: Vec<Value> = serde_json::from_str(text).expect("contradictions JSON");
+        let env: Value = serde_json::from_str(text).expect("env");
+        let details: Vec<Value> = env["data"].as_array().cloned().unwrap_or_default();
         assert!(
             details.is_empty(),
             "retracted statement must leave the conflict list, got {details:?}"
@@ -4201,7 +4269,8 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let details: Value = serde_json::from_str(text).expect("parse");
+        let env: Value = serde_json::from_str(text).expect("parse");
+        let details = env["data"].clone();
         assert_eq!(details.as_array().unwrap().len(), 2, "got: {text}");
         let target = details
             .as_array()
@@ -4243,7 +4312,8 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let details: Value = serde_json::from_str(text).expect("parse");
+        let env: Value = serde_json::from_str(text).expect("parse");
+        let details = env["data"].clone();
         assert_eq!(details.as_array().unwrap().len(), 0, "got: {text}");
     }
 

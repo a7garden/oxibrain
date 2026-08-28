@@ -184,6 +184,13 @@ impl Brain {
         self.embedder.as_ref()
     }
 
+    /// Tokenizer identity (e.g. `"qwen2.5"` or `"char-fallback"`) — the
+    /// CLI/MCP envelope reports this in `meta.tokens.counted_by` so the
+    /// caller knows whether the budget is exact or estimated (§7.5).
+    pub fn tokenizer_id(&self) -> &str {
+        self.tokenizer.id()
+    }
+
     /// Returns the configured LLM port, or an error if none.
     fn require_llm(&self) -> Result<&Arc<dyn LlmPort>, BrainError> {
         self.llm

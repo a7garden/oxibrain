@@ -382,10 +382,20 @@ impl BrainClient {
         extract_text(result)
     }
 
-    /// Like `call_tool` but returns the parsed JSON value.
+    /// Like `call_tool` but returns the parsed JSON value (the whole
+    /// `{data, meta}` envelope).
     pub async fn call_tool_json(&mut self, name: &str, args: Value) -> Result<Value> {
         let text = self.call_tool(name, args).await?;
         serde_json::from_str(&text).context("parse tool result JSON")
+    }
+
+    /// Like [`call_tool_json`] but returns only the `data` field of the
+    /// envelope — the typed payload without `meta`.
+    pub async fn call_tool_data(&mut self, name: &str, args: Value) -> Result<Value> {
+        let env = self.call_tool_json(name, args).await?;
+        env.get("data")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing 'data' in {name} envelope"))
     }
 
     // ── Convenience methods (MCP tool surface, DESIGN §12.2) ─────────────
@@ -434,7 +444,7 @@ impl BrainClient {
         if let Some(planes) = planes {
             args["planes"] = json!(planes);
         }
-        let value = self.call_tool_json("search", args).await?;
+        let value = self.call_tool_data("search", args).await?;
         serde_json::from_value(value).context("parse search response")
     }
 
@@ -506,12 +516,12 @@ impl BrainClient {
         if let Some(to) = to {
             args["to"] = json!(to);
         }
-        self.call_tool_json("timeline", args).await
+        self.call_tool_data("timeline", args).await
     }
 
     /// `stats` — aggregate counts for a space (Read cap).
     pub async fn stats(&mut self, space: &str) -> Result<Value> {
-        self.call_tool_json("stats", json!({ "space": space }))
+        self.call_tool_data("stats", json!({ "space": space }))
             .await
     }
 
@@ -526,7 +536,7 @@ impl BrainClient {
 
     /// `contradictions` — list contradicted statements (Read cap).
     pub async fn contradictions(&mut self, space: &str) -> Result<Value> {
-        self.call_tool_json("contradictions", json!({ "space": space }))
+        self.call_tool_data("contradictions", json!({ "space": space }))
             .await
     }
 
