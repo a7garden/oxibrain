@@ -14,7 +14,8 @@ members = [
     "crates/oxibrain-connectors",
     "crates/oxibrain-embed-local",
     "crates/oxibrain-views",
-]
+    "crates/oxibrain-ops",
+ ]
 
 [workspace.package]
 edition = "2024"
@@ -36,6 +37,7 @@ oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.9.0" }
 oxibrain-store = { path = "crates/oxibrain-store", version = "0.9.0" }
 oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.9.0" }
 oxibrain-views = { path = "crates/oxibrain-views", version = "0.9.0" }
+oxibrain-ops = { path = "crates/oxibrain-ops", version = "0.9.0" }
 blake3 = "1.5"
 hex = "0.4"
 unicode-normalization = "0.1"

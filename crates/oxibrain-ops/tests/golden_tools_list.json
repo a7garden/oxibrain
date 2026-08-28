@@ -1,0 +1,494 @@
+{
+  "tools": [
+    {
+      "description": "Search the brain across two planes and return the envelope {memory, documents, freshness}. Memory-plane hits are entity targets: entity_id, entity_surface, entity_type, score, snippet. Documents-plane hits carry verbatim text slices with their doc:// provenance (root, locator, revision, ordinal). as_of (valid time) and min_confidence filter beliefs; a belief that is retracted or contradicted at as_of is excluded.",
+      "inputSchema": {
+        "properties": {
+          "as_of": {
+            "description": "Valid-time instant (millis since epoch). Only beliefs true at this instant are returned (default: now).",
+            "type": "integer"
+          },
+          "known_at": {
+            "description": "Transaction-time instant (millis since epoch). Only beliefs recorded by this instant are returned (default: now).",
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Maximum results per plane (default: 20).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_confidence": {
+            "description": "Confidence floor (default: 0).",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "mode": {
+            "description": "Retrieval mode (default: hybrid).",
+            "enum": [
+              "hybrid",
+              "lexical",
+              "lexical-vector",
+              "graph",
+              "community"
+            ],
+            "type": "string"
+          },
+          "planes": {
+            "description": "Planes to search (default: both).",
+            "items": {
+              "enum": [
+                "memory",
+                "documents"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "query": {
+            "description": "The search query text.",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "search"
+    },
+    {
+      "description": "Assemble context for a query within a token budget — the per-turn call for agents. Returns layered context: profile, high-salience beliefs (with subjects, validity, support), query neighborhood, summaries with their sources, and recent episodes.",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "description": "What information to assemble.",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "token_budget": {
+            "description": "Maximum tokens for the assembled context (default: 3000).",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "recall"
+    },
+    {
+      "description": "Render a page as Markdown with followable links. Three target kinds: `entity` (an entity page: identity, aliases, current beliefs, contradictions, neighbours, timeline, sources — the M9 §9.2 brief); `space` (counts + top entities); `topic` (keyword search over entity surfaces). The target_kind discriminator is purely additive; existing callers using only `entity_id` keep working.",
+      "inputSchema": {
+        "properties": {
+          "entity_id": {
+            "description": "Required when target_kind=entity. The entity's content-derived ID.",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "target_kind": {
+            "description": "Which brief to render. Default: entity.",
+            "enum": [
+              "entity",
+              "space",
+              "topic"
+            ],
+            "type": "string"
+          },
+          "topic": {
+            "description": "Required when target_kind=topic. A keyword to match against entity surface forms (case-insensitive substring).",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "brief"
+    },
+    {
+      "description": "Follow a followable link from a rendered page to another entity page. Returns the target's brief.",
+      "inputSchema": {
+        "properties": {
+          "from": {
+            "description": "The view/page the link came from (e.g. an entity:// id).",
+            "type": "string"
+          },
+          "link": {
+            "description": "The link to follow (entity://<id> or a raw entity id).",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "link"
+        ],
+        "type": "object"
+      },
+      "name": "navigate"
+    },
+    {
+      "description": "Ingest text content as a new Primary episode. Set extract:true to trigger realtime extraction via client sampling (§12.3) — the server asks the client's model to extract claims. Requires the Sample capability on authenticated sessions.",
+      "inputSchema": {
+        "properties": {
+          "content": {
+            "description": "The text to ingest.",
+            "type": "string"
+          },
+          "extract": {
+            "description": "If true, extract claims via client sampling immediately (default: false).",
+            "type": "boolean"
+          },
+          "source_path": {
+            "description": "Optional source label, e.g. a file path (default: mcp).",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "trust": {
+            "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands).",
+            "enum": [
+              "trusted",
+              "semi_trusted",
+              "untrusted"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "ingest"
+    },
+    {
+      "description": "Declare a statement deterministically (no LLM). Takes a declaration JSON: {op, subject, predicate, object, polarity, valid_from, valid_to}. Writes a Declaration episode.",
+      "inputSchema": {
+        "properties": {
+          "declaration_json": {
+            "description": "Canonical declaration JSON (op = add_statement | merge | retract).",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "declaration_json"
+        ],
+        "type": "object"
+      },
+      "name": "declare"
+    },
+    {
+      "description": "Get provenance for a statement — supporting/denying assertions with confidence breakdown, extractors, and source episodes.",
+      "inputSchema": {
+        "properties": {
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "statement_id": {
+            "description": "The statement ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "statement_id"
+        ],
+        "type": "object"
+      },
+      "name": "why"
+    },
+    {
+      "description": "List all contradicted statements in a space — statements with both affirming and denying support.",
+      "inputSchema": {
+        "properties": {
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "contradictions"
+    },
+    {
+      "description": "Aggregate counts for a space: episodes, entities, statements, and contradicted statements.",
+      "inputSchema": {
+        "properties": {
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "stats"
+    },
+    {
+      "description": "Bounded subgraph traversal from a set of start entities. Returns nodes and edges within the depth/node budget. The graph is belief-filtered: retracted and contradicted edges are excluded (valid_at filters valid time). Useful for multi-hop recall (ToG driver).",
+      "inputSchema": {
+        "properties": {
+          "depth": {
+            "description": "Max traversal depth (default: 3).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "direction": {
+            "description": "Edge direction (default: both).",
+            "enum": [
+              "out",
+              "in",
+              "both"
+            ],
+            "type": "string"
+          },
+          "max_nodes": {
+            "description": "Max nodes to return (default: 256).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_confidence": {
+            "description": "Confidence floor for edges (default: 0).",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "start": {
+            "description": "Entity IDs to start from (at least one required).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "valid_at": {
+            "description": "Valid-time instant (millis since epoch). Walk the graph as believed at this instant (default: now).",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start"
+        ],
+        "type": "object"
+      },
+      "name": "traverse"
+    },
+    {
+      "description": "Console data tool. `section` selects what to list: `merges` (default) — entity merge records, by whom (rule/user/import), and when; `failures` — extraction failures (episode, extractor, raw response, errors); `sources` — registered sources (name, kind, mode, claims). All sections return JSON arrays.",
+      "inputSchema": {
+        "properties": {
+          "section": {
+            "description": "What to list (default: merges).",
+            "enum": [
+              "merges",
+              "failures",
+              "sources"
+            ],
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "review_merges"
+    },
+    {
+      "description": "One-shot ingest + sync extraction for short user facts. Ingests text as a Primary episode and immediately extracts claims via client sampling. Requires the Sample capability on authenticated sessions.",
+      "inputSchema": {
+        "properties": {
+          "content": {
+            "description": "The fact or note to remember.",
+            "type": "string"
+          },
+          "source_path": {
+            "description": "Optional source label (default: remember).",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "trust": {
+            "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands).",
+            "enum": [
+              "trusted",
+              "semi_trusted",
+              "untrusted"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "remember"
+    },
+    {
+      "description": "Retract a statement. Prefer the statement_id form — the declaration is rebuilt from the stored statement (no surfaces/types needed); this retracts ALL assertions of the statement. The subject/predicate/object form is the legacy resubmission path. Creates a Declaration episode.",
+      "inputSchema": {
+        "properties": {
+          "episode": {
+            "description": "Originating episode id (audit context).",
+            "type": "string"
+          },
+          "object": {
+            "description": "Entity or literal object (legacy path).",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "entity",
+                  "literal"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "predicate": {
+            "description": "Predicate name (legacy path).",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "statement_id": {
+            "description": "Statement to retract — takes precedence over subject/predicate/object.",
+            "type": "string"
+          },
+          "subject": {
+            "description": "Entity ref: {\"surface\":\"...\",\"type\":\"...\"} (legacy path).",
+            "properties": {
+              "surface": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "retract"
+    },
+    {
+      "description": "Merge two entities: the loser is redirected to the winner. Creates a Declaration episode. Both refs use surface form + type.",
+      "inputSchema": {
+        "properties": {
+          "loser": {
+            "description": "Entity to merge away: {\"surface\":\"...\",\"type\":\"...\"}",
+            "properties": {
+              "surface": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "surface",
+              "type"
+            ],
+            "type": "object"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "winner": {
+            "description": "Entity to keep: {\"surface\":\"...\",\"type\":\"...\"}",
+            "properties": {
+              "surface": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "surface",
+              "type"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "loser",
+          "winner"
+        ],
+        "type": "object"
+      },
+      "name": "merge_entities"
+    },
+    {
+      "description": "Destructive: remove episodes, entities, or predicates from the brain. Writes audit first, then tombstones. Use dry_run to preview the closure first.",
+      "inputSchema": {
+        "properties": {
+          "dry_run": {
+            "description": "Preview the closure without modifying anything (default: false).",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Audit reason (default: 'mcp redact').",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (default: the configured default space).",
+            "type": "string"
+          },
+          "target_id": {
+            "description": "Episode ID, entity ID, or 'entity_id/predicate' for predicate kind.",
+            "type": "string"
+          },
+          "target_kind": {
+            "description": "What to redact.",
+            "enum": [
+              "episode",
+              "entity",
+              "predicate"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id"
+        ],
+        "type": "object"
+      },
+      "name": "redact"
+    }
+  ]
+}

@@ -2582,12 +2582,20 @@ dependencies = [
  "oxibrain-client",
  "oxibrain-connectors",
  "oxibrain-core",
+ "oxibrain-ops",
  "oxibrain-ports",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "oxibrain-ops"
+version = "0.9.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

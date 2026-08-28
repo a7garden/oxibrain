@@ -13,6 +13,7 @@ categories = ["development-tools"]
 [dependencies]
 async-trait.workspace = true
 oxibrain-client.workspace = true
+oxibrain-ops.workspace = true
 oxibrain.workspace = true
 oxibrain-connectors.workspace = true
 oxibrain-core.workspace = true
