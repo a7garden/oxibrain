@@ -1,5 +1,20 @@
 # oxibrain — Architecture
-> **Version:** v2.12 · **Date:** 2026-08-28 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.13 · **Date:** 2026-08-28 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.13 — Agent-first CLI (spec `doc/spec/agent-first-cli-v1.md`; ADR-012, ADR-013).**
+> The CLI and MCP surfaces become two transports over **one op registry** (new crate
+> `oxibrain-ops`): MCP `tools/list`, the CLI `oxibrain <op>` dispatch, `oxibrain schema`,
+> and the generated SKILL.md all derive from it; hand-written schema duplicates are
+> deleted. The MCP tool count moves 15 → 14 at the P3 cutover: `stats` and
+> `review_merges` leave (→ `describe` resource / `admin review`), `resolve` enters;
+> discriminator unions inside agent-facing ops are banned. `space` becomes **required**
+> on every space-scoped op — `default_space`, `space default`, and the `--space` >
+> config > builtin chain are deleted. Op input is a JSON payload (stdin-first on the
+> CLI), byte-identical to MCP `tools/call` arguments; stdout is a stable envelope
+> (`api`, `ok`, `data`, `meta.tokens`/`meta.dropped`) with contiguous exit codes.
+> Mutating ops gain `dry_run` plans and plan tokens; listings become
+> capability-filtered; `idempotency_key` and caller identity are ledger-visible.
+> Landing sequence P1–P7 in the spec §12; §15.7/§16.2/§16.4/§18 below state the target
+> contract with phase gates.
 > **v2.12 — Space lifecycle (spec 2026-08-27).** Spaces are a managed unit:
 > `oxibrain space add|remove|default`, `~/.oxi/config.toml` (`default_space`,
 > strict parse, first §18 key implemented), per-space vault provisioning at
@@ -2144,8 +2159,9 @@ produced it.
   (or when the `BrainClient` is dropped). There is no ambient endpoint: a test, a CI
   runner, and a host process all pass an explicit `--dir`, never discover a default.
   External MCP hosts use the same stdio command.
-- **Auth-first-message and scope semantics are preserved.** The MCP tool surface stays
-  at fifteen. The `handshake` native JSON-RPC method still rides stdio as the
+- **Auth-first-message and scope semantics are preserved.** The MCP tool surface is
+ fourteen (v2.13, ADR-012; fifteen through v2.12). The `handshake` native JSON-RPC method
+ still rides stdio as the
   capability-negotiation channel (used by `oxibrain-mcp` for its v1.0 `ClientHello` /
   `ServerInfo` exchange with the daemon-free `serve` child) and the existing `Scope` /
   `Capability` model from §15.1–§15.2 is unchanged. Capability metadata never replaces
@@ -2182,31 +2198,36 @@ boundary by construction.
 
 | Tool | Caps | Notes |
 |---|---|---|
-| `search | Read | channels/fusion/rerank presets; `as_of`, `known_at`, `min_confidence`; v2.11 gains optional `planes` (`Memory` / `Documents` / both, default both) and returns `{memory, documents, freshness}` |
-| `recall | Read | context assembly — the per-turn call for agents; gains a `Documents` layer between query neighborhood and recent episodes |
-| `brief | Read | rendered entity/topic page with followable links |
-| `navigate | Read | follow a link from a page |
-| `get_entity | Read | entity + current beliefs + aliases + neighbours |
-| `traverse | Read | bounded subgraph; belief-filtered; `as_of` supported |
-| `timeline | Read | belief intervals over a range |
-| `why | Read | provenance, confidence breakdown, and drops |
-| `contradictions` / `review_merges` | Read | inboxes |
-| `stats | Read | counts (v2.11 gains pending extraction count/oldest seq + per-root document counts) |
-| `ingest | Ingest | long-running task |
-| `remember | Write | one-shot ingest + inline extraction; returns `Captured` or `CapturedPending` |
-| `declare` / `retract | Write | deterministic writes, no model |
-| `merge_entities | Write | resolution maintenance |
-| `redact | Redact | destructive; separate capability on purpose |
+| `search` | Read | two planes (`planes`, default both) → `{memory, documents, freshness}`; `as_of`, `known_at`, `min_confidence` |
+| `recall` | Read | context assembly within a token budget — the per-turn call for agents |
+| `brief` | Read | entity page as **structure** (identity, aliases, beliefs, contradictions, neighbours, sources); Markdown rendering is the GUI's job (v2.13 P4) |
+| `navigate` | Read | follow a link that exists on the source page — restriction to real edges is the anti-hallucination guard, not rendering convenience |
+| `resolve` | Read | surface + type → id; the legal id path (v2.13 P3 in; replaces guessing ids or surfaces in id slots) |
+| `why` | Read | provenance, confidence breakdown, and drops |
+| `contradictions` | Read | contradicted statements |
+| `traverse` | Read | bounded belief-filtered subgraph; `as_of` supported |
+| `ingest` | Ingest | `extract:true` requires ClientSampling; CLI one-shot degrades to local LLM or `pending` (ADR-013 §8) |
+| `remember` | Write | one-shot capture + extraction; same sampling axis; returns `Captured` or `CapturedPending` |
+| `declare` / `retract` | Write | deterministic, no model; `predicate` is a registry-generated enum (v2.13 P3) |
+| `merge_entities` | Write | resolution maintenance |
+| `redact` | Redact | destructive; separate capability on purpose; plan-token guarded (v2.13 P6) |
 
-**Fifteen. That is the cap.** Adding a sixteenth requires removing one.
+**Fourteen (v2.13, ADR-012; fifteen through v2.12).** The cap rule is unchanged: adding
+one requires removing one. The P3 cutover moves `stats` → the `describe` orientation
+resource (+ `admin stats`) and `review_merges` → `admin review`, and adds `resolve`.
+**Discriminator unions (`kind`/`section` switches) are banned inside agent-facing ops** —
+a switch is evidence of two ops; the cap is fed by slot accounting, not union mega-tools.
+The catalogue is **generated from the `oxibrain-ops` registry** (ADR-012); from P6,
+`tools/list` is capability-filtered — a session sees only the ops its token permits, so
+unadvertised calls are never hallucinated.
 
-**Default-space resolution (v2.12).** A tool call that omits `space` resolves
-the configured default — `~/.oxi/config.toml`'s `default_space` (§18), falling
-back to `"personal"` when no config exists — the same `--space` > config >
-builtin chain as the CLI (§16.4). `serve --stdio`/`serve --http` load the
-config once at startup and hand the value to the session. No tool or verb
-implicitly creates a space: unknown names fail fast with a `space add` hint
-(creation is `init`, `space add`, or archive import only).
+**Space resolution (v2.13, ADR-013; lands P3).** Every space-scoped op **requires**
+`space`; an omitted `space` is `invalid_input` listing available spaces. The v2.12 chain
+(`--space` > `~/.oxi/config.toml` `default_space` > `"personal"`), the `space default`
+verb, and `serve`'s config load are deleted — resolution that depends on machine-local
+config makes the same call mean different things per machine. Creation defaults survive in
+`init`/`space add` only: creation is not resolution and reads no config. No tool or verb
+implicitly creates a space: unknown names fail fast with a `space add` hint.
 
 Resources: `spaces://` (list), `space://`, `entity://{id}`, `episode://{id}`, `graph://{entity}?depth=n`, `doc://<alias>/<locator>?rev=<rev>` (v2.11).
 
@@ -2253,41 +2274,51 @@ removed (semantic occurrence history is replaced by gix-backed document history)
 ### 16.4 CLI
 
 ```
-oxibrain init [--space] [--dir D]              # provisions ~/.oxi/vault/<space>/ + its root when no --dir and $HOME resolves (§15.1)
-oxibrain spaces                                # list spaces with episode + document counts; * marks the config.toml default (v2.12)
-oxibrain space add <name>                      # create (idempotent) + provision ~/.oxi/vault/<name>/ + its documents.toml root (default dir only; §15.1)
-oxibrain space remove <name> [--purge]         # empty-only removal; --purge = audited RedactTarget::Space + documents cache sweep; vault files never deleted
-oxibrain space default [<name>]                # print or set ~/.oxi/config.toml default_space (§18)
-oxibrain doctor [--dir D]                      # freshness, skipped roots/files, dangling doc:// refs, legacy pull sources, pending stats, model digest
-oxibrain stats [--dir D]                       # counts (memory + per-root documents + pending extraction)
-oxibrain ingest <path|-> [--source kind] [--space s]   # trust is server-evaluated
-oxibrain remember "<text>" [--space s]         # one-shot ingest + inline extraction; returns Captured or CapturedPending
-oxibrain index [--documents] [--embed] [--dir D]        # §4.2.1 — reconciles + (optionally) embeds
-oxibrain extract --pending [--limit N] [--dir D]        # queue-less; walks uncached_memory_episodes
-oxibrain ask "<question>" [--as-of DATE] [--global] [--explain]
-oxibrain page <entity>
-oxibrain entity show|merge|split|alias|retract          # §4.2.2 — merge/split are inverse (D34); alias +retract are Declarations
-oxibrain declare <subject> <predicate> <object>
-oxibrain source policy <source-name> --trust <tier>     # §4.2.2 — server-evaluated trust via Declaration
-oxibrain document-history <alias> <locator> [--space s] [--limit N]   # §4.2.1 — gix read history
-oxibrain timeline <entity> [--from --to]
-oxibrain why <statement-id> | why --dropped "<query>"
-oxibrain contradictions | review
-oxibrain model list|pull|verify|use           # C2
-oxibrain reextract [--extractor X] [--since] | reproject | regenerate-summaries
-oxibrain redact <target> [--dry-run] --reason "..."
-oxibrain export [--format jsonl|md] | import
-oxibrain serve --stdio [--dir D]                # caller-owned child; dies with stdin
-oxibrain serve --http <addr> [--dir D]          # foreground loopback console; no `--daemon`, no `--socket`
-oxibrain token issue|list|revoke
-oxibrain predicate add|list | eval [--suite fast|full|bench|parity]
-# removed: sync, sync/run, watcher flags, --daemon, --socket, default-socket discovery
+oxibrain describe [--dir D]                # orientation: spaces(+counts), roots+freshness, registry/model digests, session caps, api version — the first call; the `space` enum source
+oxibrain schema [op] [--dir D]             # registry introspection: per-op input/output schemas, caps, mutating, transport availability
+oxibrain <op> --dir D [--format json|ndjson] (--json P | --json @f | --json -) [< payload]
+    # the 14 ops, 1:1 with tools/list (ADR-012): search recall brief navigate resolve
+    # ingest declare why contradictions traverse remember retract merge_entities redact
+    # payload == MCP tools/call arguments, byte-identical; prose bodies via stdin only
+
+oxibrain admin init [--space] [--dir D]            # provisions ~/.oxi/vault/<space>/ + its root (§15.1)
+oxibrain admin space add|remove <name> [--purge]  # lifecycle; --purge = audited RedactTarget::Space (vault files never deleted)
+oxibrain admin index [--documents] [--embed]      # §4.2.1 — reconciles + (optionally) embeds
+oxibrain admin extract --pending [--limit N]      # queue-less; walks uncached_memory_episodes
+oxibrain admin model list|pull|verify|use         # C2
+oxibrain admin token issue|list|revoke
+oxibrain admin serve --stdio [--dir D]            # caller-owned child; dies with stdin
+oxibrain admin serve --http <addr> [--dir D]      # foreground loopback console; no `--daemon`, no `--socket`
+oxibrain admin doctor | stats | review [section]  # stats/review_merges moved here from tools (P3)
+oxibrain admin entity split                       # merge undo (D34) — console workflow
+oxibrain admin document-history <alias> <locator> # §4.2.1 — gix read history
+oxibrain admin predicate add|list | eval [--suite fast|full|bench|parity]
+oxibrain admin source policy <name> --trust <tier>
+oxibrain admin export | import | reproject | reextract | regenerate-summaries
+oxibrain admin skill install [--target omp]       # generates SKILL.md from the registry (P7)
+# removed in v2.13: ask, page, entity show|merge|alias|retract, timeline, spaces, bare
+#   stats/doctor (→ ops/describe/admin), space default, default_space resolution,
+#   sync, sync/run, watcher flags, --daemon, --socket, default-socket discovery
 ```
 
-Every `--space`-carrying verb resolves its target as `--space` >
-`~/.oxi/config.toml` (`default_space`, §18) > `"personal"` — the same chain on
-CLI and MCP (§16.2). Unknown spaces fail fast with a `space add` hint; nothing
-implicitly creates a space — only `init`, `space add`, and archive imports do.
+**Output contract (v2.13).** stdout is exactly one JSON object per op call (NDJSON for
+streamed pages) — `{api, ok, op, space, data, meta}` with `meta.tokens` (TokenizerPort
+counted), `meta.dropped` (always present; the rank conservation ledger surfaced per call),
+`meta.freshness`, `meta.cursor`, `meta.elapsed_ms`. Errors are
+`{api, ok:false, op, error:{code, message, hint, retryable, details}}` with contiguous
+exit codes: 0 ok · 2 invalid_input · 3 not_found · 4 unauthorized · 5 locked_or_busy ·
+6 conflict · 7 budget · 8 model · 9 internal. `locked` (P8 contention, daemonless-normal)
+is retryable and carries the holder; payloads accept `wait_lock_ms`. **Reads are
+lock-free** (`open_ro`); `locked` can only occur on mutating ops. Content-bearing values
+are typed `untrusted_content` objects with provenance + trust — never bare strings, never
+assembled into instruction-shaped Markdown (P4). `idempotency_key` on writes is
+ledger-visible (the caller-declared occurrence); caller identity (token label) is a
+ledger field on every write episode (ADR-013).
+
+Every space-scoped op requires `space` in its payload — no chain, no config default
+(ADR-013; the v2.12 `--space` > config > `"personal"` resolution is deleted). Unknown
+spaces fail fast with a `space add` hint; nothing implicitly creates a space — only
+`admin init`, `admin space add`, and archive imports do.
 
 `index [--documents] [--embed]` is the document-plane maintenance verb. It loads
 `documents.toml`, opens `documents.db` for a short locked apply, runs
@@ -2346,8 +2377,9 @@ exploration. The seven routes that ship:
 | Operations | `reproject`, `doctor`, store-size readout, and model-digest verification |
 
 Each route reads through the same MCP/JSON-RPC surface (§16.2). The Merge/Failures/Sources
-tables all dispatch into the `review_merges` tool's `section ∈ {merges, failures, sources}`
-switch, which keeps the MCP tool surface at the fifteen-tool cap. The Operations route's
+tables all dispatch into one `section ∈ {merges, failures, sources}` switch — through
+v2.12 the `review_merges` tool; from v2.13 (P3) the `admin review` verb, since the union
+shape is console-facing, not agent knowledge work (ADR-012). The Operations route's
 `reproject` is served as a bare JSON-RPC method (not an MCP tool — too destructive for agent
 access); it returns before/after space stats so the console confirms what changed.
 
@@ -2488,7 +2520,7 @@ directly; they reach the brain through a caller-owned stdio child (or in-process
 
 ```
 ~/.oxi/
-├── config.toml                 # default_space (v2.12; dir/provider reserved) — strict parse
+├── config.toml                 # (v2.13: `default_space` deleted — space is a required op argument; other keys reserved) — strict parse
 ├── foundation/v1/              # Foundation v1 contract (ADR-007) — non-secret
 │   ├── profiles.json           # provider profiles (Keychain locator only — never a secret)
 │   └── packages.lock           # resolved Foundation packages (name/version/digest/source/trust)
@@ -2552,9 +2584,11 @@ JSON-RPC method still rides stdio for capability negotiation between the daemon-
 
 - Semver on the `oxibrain` facade. The public surface is `oxibrain::*`.
 - MCP tool schemas versioned; **additive changes only within a major** (§16.2).
-  The fifteen-tool MCP surface is unchanged; the v2.11 `search.planes` and
-  `StatsCounts` additions are additive-only. The `document_history` native JSON-RPC
-  method joins `handshake`, `reproject`, and `spaces/list` and does not count.
+  Through v2.12 the fifteen-tool surface was additive-only (`search.planes`,
+  `StatsCounts`). The v2.13 P3 cutover is the first deliberate surface break
+  (fifteen → fourteen: −`stats`, −`review_merges`, +`resolve`; required `space`;
+  ADR-012/013) and rides a Consumption Contract bump. The `document_history` native
+  JSON-RPC method joins `handshake`, `reproject`, and `spaces/list` and does not count.
 - Stability tiers per API: `stable`, `unstable` (feature-gated), `internal`.
 - A compatibility test suite consumers run against their pinned version
   (`crates/oxibrain/src/compat.rs`).
