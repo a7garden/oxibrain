@@ -106,7 +106,11 @@ fn search_op_returns_envelope_with_entity_hit() {
     let env: serde_json::Value = serde_json::from_str(&out).expect("envelope JSON");
     assert_eq!(env["ok"], serde_json::json!(true), "envelope: {out}");
     assert_eq!(env["op"], "search");
-    let hits = env["data"]["memory"].as_array().expect("memory hits");
+    // v2.13 P5: read-op tool results carry `{data, meta}`; the op envelope's
+    // `data` IS that result, so the search DTO sits at data.data.
+    let hits = env["data"]["data"]["memory"]
+        .as_array()
+        .expect("memory hits");
     assert!(!hits.is_empty(), "expected at least one hit: {out}");
 }
 

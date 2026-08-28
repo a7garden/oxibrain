@@ -121,7 +121,9 @@ fn declare_schema() -> Value {
         "type": "object",
         "properties": {
             "declaration_json": { "type": "string", "description": "Canonical declaration JSON (op = add_statement | merge | retract)." },
-            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
+            "dry_run": { "type": "boolean", "description": "Preview the plan (resolved vs would-create entities, closure hash) without committing; the plan token must be presented on the committing call (default: false)." },
+            "plan_token": { "type": "string", "description": "Plan token from a prior `dry_run: true` call. Required when the ledger may have moved; stale plans are refused with plan_stale." }
         },
         "required": ["declaration_json", "space"]
     })
@@ -186,6 +188,8 @@ fn retract_schema() -> Value {
             "predicate": { "type": "string", "description": "Predicate name (legacy path)." },
             "object": { "type": "object", "description": "Entity or literal object (legacy path).", "properties": { "kind": {"type":"string","enum":["entity","literal"]} } },
             "episode": { "type": "string", "description": "Originating episode id (audit context)." },
+            "dry_run": { "type": "boolean", "description": "Preview the plan without committing; the plan token must be presented on the committing call (default: false)." },
+            "plan_token": { "type": "string", "description": "Plan token from a prior `dry_run: true` call. Required when the ledger may have moved; stale plans are refused with plan_stale." },
             "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
         "required": ["space"]
@@ -198,6 +202,8 @@ fn merge_entities_schema() -> Value {
         "properties": {
             "loser": { "type": "object", "description": "Entity to merge away: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
             "winner": { "type": "object", "description": "Entity to keep: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
+            "dry_run": { "type": "boolean", "description": "Preview the plan without committing; the plan token must be presented on the committing call (default: false)." },
+            "plan_token": { "type": "string", "description": "Plan token from a prior `dry_run: true` call. Required when the ledger may have moved; stale plans are refused with plan_stale." },
             "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
         "required": ["loser", "winner", "space"]
@@ -211,7 +217,8 @@ fn redact_schema() -> Value {
             "target_kind": { "type": "string", "enum": ["episode","entity","predicate"], "description": "What to redact." },
             "target_id": { "type": "string", "description": "Episode ID, entity ID, or 'entity_id/predicate' for predicate kind." },
             "reason": { "type": "string", "description": "Audit reason (default: 'mcp redact')." },
-            "dry_run": { "type": "boolean", "description": "Preview the closure without modifying anything (default: false)." },
+            "dry_run": { "type": "boolean", "description": "Preview the closure and issue a plan without modifying anything. A committing (non-dry-run) call MUST present the plan_token (default: false)." },
+            "plan_token": { "type": "string", "description": "Plan token from a prior `dry_run: true` call. Required on the committing call; stale plans are refused with plan_stale." },
             "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
         "required": ["target_kind", "target_id", "space"]

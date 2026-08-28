@@ -12,7 +12,8 @@ use crate::protocol::{
 use include_dir::{Dir, include_dir};
 use oxibrain::{
     Brain, BrainConfig, BrainError, BriefTarget, Capability, DeclObject, Declaration, EntityRef,
-    IngestAttachment, RedactTarget, Scope, SourceRef, SpaceInfo, Timestamp, TrustTier,
+    IngestAttachment, RedactTarget, RedactionClosure, Scope, SourceRef, SpaceInfo, Timestamp,
+    TrustTier,
 };
 use oxibrain_client::protocol::{ClientHello, ClientOperation};
 use oxibrain_core::context::LayerKind;
@@ -21,7 +22,8 @@ use oxibrain_core::retrieval::{
 };
 use oxibrain_ports::{ClockPort, SystemClock};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
 };
@@ -53,9 +55,32 @@ const HANDSHAKE_PROTOCOL_MAX: u32 = 1;
 /// rejected with `StoreTooOld`.
 const HANDSHAKE_STORE_FORMAT_VERSION: u32 = 1;
 
-/// Foundation operations the daemon actually supports. Frozen at v1; widen
-/// here (and on the client) when a new client/server capability lands.
 const SUPPORTED_OPERATIONS: &[ClientOperation] = ClientOperation::ALL;
+
+/// Plan lifetime for destructive-op dry-runs (v2.13 P6). 60s is generous for
+/// an agent round-trip (read plan → decide → commit) while bounding the
+/// window in which a forgotten plan lingers.
+const PLAN_TTL_MS: i64 = 60_000;
+
+/// Result of resolving a declaration's entities for a dry-run plan.
+struct DeclareClosure {
+    /// blake3 over (space, declaration bytes, resolved entity ids /
+    /// would_create markers). Binds the plan to the ledger state it was
+    /// computed against.
+    hash: String,
+    /// Per-entity resolution: `resolved` (with entity_id) or `would_create`.
+    affected: Vec<Value>,
+}
+
+/// A dry-run plan awaiting its committing call.
+struct PendingPlan {
+    /// Which op the plan was issued for (`declare`|`retract`|`merge_entities`|`redact`).
+    op: String,
+    /// Server-computed hash of the closure at issue time.
+    closure_hash: String,
+    /// Millis since epoch after which the plan is stale.
+    expires_at: i64,
+}
 
 #[derive(Clone)]
 pub struct BrainServer {
@@ -63,6 +88,12 @@ pub struct BrainServer {
     /// When set (authenticated transport), tool calls are gated by capability +
     /// space membership (DESIGN §11.2). `None` = trusted local channel.
     scope: Option<Scope>,
+    /// Plan-token table for destructive ops (v2.13 P6, ADR-013 §3).
+    /// `dry_run: true` issues a plan here; the committing call presents the
+    /// token and the server compares closure hashes — TOCTOU-safe, and stale
+    /// plans surface as `plan_stale`. In-process because `serve --stdio` is
+    /// one-shot per agent invocation: the plan's lifetime is the session.
+    plans: Arc<Mutex<HashMap<String, PendingPlan>>>,
 }
 
 impl BrainServer {
@@ -72,6 +103,7 @@ impl BrainServer {
         Ok(Self {
             brain: Arc::new(brain),
             scope: None,
+            plans: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -80,6 +112,7 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: None,
+            plans: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -90,6 +123,7 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: Some(scope),
+            plans: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -98,7 +132,11 @@ impl BrainServer {
     /// Used by authenticated transports that share one brain across many
     /// connections, each resolved to its own scope.
     pub fn from_arc(brain: Arc<Brain>) -> Self {
-        Self { brain, scope: None }
+        Self {
+            brain,
+            scope: None,
+            plans: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Wrap a shared `Arc<Brain>` with an authorization scope.
@@ -106,6 +144,7 @@ impl BrainServer {
         Self {
             brain,
             scope: Some(scope),
+            plans: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -340,7 +379,7 @@ impl BrainServer {
                 .map(|id| success(id, self.initialize(msg.params.as_ref()))),
             "notifications/initialized" | "initialized" => None,
             "ping" => msg.id.map(|id| success(id, json!({}))),
-            "tools/list" => msg.id.map(|id| success(id, tool_list())),
+            "tools/list" => msg.id.map(|id| success(id, tool_list(self))),
             "resources/list" => msg
                 .id
                 .map(|id| success(id, self.resources_list(msg.params.as_ref()))),
@@ -863,12 +902,106 @@ impl BrainServer {
         let space_id = self.resolve_space_arg(args).await?;
         let decl: Declaration = serde_json::from_str(decl_json)
             .map_err(|e| ToolErr::Params(format!("declaration parse: {e}")))?;
+        // v2.13 P6: `dry_run: true` returns a plan (token + closure hash +
+        // affected entities) without committing; the committing call presents
+        // the token and the server re-checks the closure against the current
+        // ledger — TOCTOU-safe (ADR-013 §3).
+        let dry_run = bool_arg_or(args, "dry_run", false);
+        let closure = self.declare_closure(&space_id, &decl).await?;
+        if dry_run {
+            let affected = json!({
+                "entities": closure.affected,
+                "op": "declare",
+            });
+            let plan = self.issue_plan("declare", &closure.hash, affected);
+            return to_json(&plan);
+        }
+        let plan_token = args.get("plan_token").and_then(|v| v.as_str());
+        if plan_token.is_some() {
+            self.consume_plan("declare", plan_token, &closure.hash)?;
+        }
         let id = self
             .brain
             .declare(&space_id, decl)
             .await
             .map_err(ToolErr::run)?;
         Ok(format!("Declared as episode: {id}"))
+    }
+
+    /// Resolve the entities a declaration touches and hash the closure — the
+    /// dry-run plan's fingerprint. `affected` lists each entity as
+    /// `resolved` (already in the ledger) or `would_create`; the hash binds
+    /// the plan to the state it was computed against, so a commit after the
+    /// ledger moved is refused.
+    async fn declare_closure(
+        &self,
+        space_id: &str,
+        decl: &Declaration,
+    ) -> Result<DeclareClosure, ToolErr> {
+        let mut refs: Vec<EntityRef> = Vec::new();
+        match decl {
+            Declaration::AddStatement {
+                subject, object, ..
+            } => {
+                refs.push(subject.clone());
+                if let DeclObject::Entity { surface, ty } = object {
+                    refs.push(EntityRef {
+                        surface: surface.clone(),
+                        ty: ty.clone(),
+                    });
+                }
+            }
+            Declaration::Merge { loser, winner } => {
+                refs.push(loser.clone());
+                refs.push(winner.clone());
+            }
+            Declaration::Retract {
+                subject, object, ..
+            } => {
+                refs.push(subject.clone());
+                if let DeclObject::Entity { surface, ty } = object {
+                    refs.push(EntityRef {
+                        surface: surface.clone(),
+                        ty: ty.clone(),
+                    });
+                }
+            }
+            _ => {}
+        }
+        let mut affected: Vec<Value> = Vec::new();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(space_id.as_bytes());
+        hasher.update(serde_json::to_string(decl).unwrap_or_default().as_bytes());
+        for r in &refs {
+            match self
+                .brain
+                .resolve_entity_id(space_id, &r.ty, &r.surface)
+                .await
+                .map_err(ToolErr::run)?
+            {
+                Some(id) => {
+                    hasher.update(id.as_bytes());
+                    affected.push(json!({
+                        "surface": r.surface,
+                        "type": r.ty,
+                        "status": "resolved",
+                        "entity_id": id,
+                    }));
+                }
+                None => {
+                    hasher.update(b"would_create");
+                    affected.push(json!({
+                        "surface": r.surface,
+                        "type": r.ty,
+                        "status": "would_create",
+                    }));
+                }
+            }
+        }
+        Ok(DeclareClosure {
+            hash: hex::encode(hasher.finalize().as_bytes()),
+            affected,
+        })
     }
 
     async fn tool_why(&self, args: &Value) -> Result<String, ToolErr> {
@@ -1253,6 +1386,20 @@ impl BrainServer {
             object,
             episode: episode.to_string(),
         };
+        let dry_run = bool_arg_or(args, "dry_run", false);
+        let closure = self.declare_closure(&space_id, &decl).await?;
+        if dry_run {
+            let plan = self.issue_plan(
+                "retract",
+                &closure.hash,
+                json!({ "entities": closure.affected }),
+            );
+            return to_json(&plan);
+        }
+        let plan_token = args.get("plan_token").and_then(|v| v.as_str());
+        if plan_token.is_some() {
+            self.consume_plan("retract", plan_token, &closure.hash)?;
+        }
         let id = self
             .brain
             .declare(&space_id, decl)
@@ -1270,6 +1417,20 @@ impl BrainServer {
             serde_json::from_value(args.get("winner").cloned().unwrap_or_default())
                 .map_err(|e| ToolErr::Params(format!("parse winner: {e}")))?;
         let decl = Declaration::Merge { loser, winner };
+        let dry_run = bool_arg_or(args, "dry_run", false);
+        let closure = self.declare_closure(&space_id, &decl).await?;
+        if dry_run {
+            let plan = self.issue_plan(
+                "merge_entities",
+                &closure.hash,
+                json!({ "entities": closure.affected }),
+            );
+            return to_json(&plan);
+        }
+        let plan_token = args.get("plan_token").and_then(|v| v.as_str());
+        if plan_token.is_some() {
+            self.consume_plan("merge_entities", plan_token, &closure.hash)?;
+        }
         let id = self
             .brain
             .declare(&space_id, decl)
@@ -1294,10 +1455,7 @@ impl BrainServer {
             _ => {}
         }
         let reason = str_arg_or(args, "reason", "mcp redact");
-        let dry_run = args
-            .get("dry_run")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let dry_run = bool_arg_or(args, "dry_run", false);
         let target = match kind {
             "episode" => RedactTarget::Episode {
                 id: target_id.to_string(),
@@ -1328,8 +1486,32 @@ impl BrainServer {
                 .redact_dry_run(&target)
                 .await
                 .map_err(ToolErr::run)?;
-            to_json(&closure)
+            let hash = redact_closure_hash(&closure);
+            // `affected` lists the episodes/statements the redaction would
+            // remove — the dry-run plan the agent reads before committing.
+            let affected = json!({
+                "op": "redact",
+                "target_kind": kind,
+                "target_id": target_id,
+                "closure": closure,
+            });
+            let plan = self.issue_plan("redact", &hash, affected);
+            to_json(&plan)
         } else {
+            // v2.13 P6 (ADR-013 §3): redact always requires a plan token —
+            // a raw commit is refused. Recompute the closure so a plan
+            // issued against stale state is caught (TOCTOU-safe).
+            let closure = self
+                .brain
+                .redact_dry_run(&target)
+                .await
+                .map_err(ToolErr::run)?;
+            let fresh_hash = redact_closure_hash(&closure);
+            self.consume_plan(
+                "redact",
+                args.get("plan_token").and_then(|v| v.as_str()),
+                &fresh_hash,
+            )?;
             let result = self
                 .brain
                 .redact(&target, &reason, "mcp")
@@ -1654,13 +1836,141 @@ fn to_json<T: serde::Serialize>(value: &T) -> Result<String, ToolErr> {
     serde_json::to_string_pretty(value).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
 }
 
-// ── Tool catalogue ─────────────────────────────────────────────────────────
+fn bool_arg_or(args: &Value, name: &str, default: bool) -> bool {
+    args.get(name).and_then(|v| v.as_bool()).unwrap_or(default)
+}
 
-/// The advertised tool list, generated from the `oxibrain-ops` registry
-/// (ADR-012). Byte-identical to the v2.12 hand-written catalogue — guarded
-/// by `oxibrain-ops`' golden fixture test.
-fn tool_list() -> Value {
-    oxibrain_ops::tools_list()
+/// Deterministic fingerprint of a redaction closure — the plan token's
+/// binding to the ledger state it was computed against. Any episode,
+/// statement, or mention added/removed between dry-run and commit changes
+/// the hash, so a stale plan is refused at commit time.
+fn redact_closure_hash(closure: &RedactionClosure) -> String {
+    let canonical = serde_json::to_string(closure).unwrap_or_default();
+    hex::encode(blake3::hash(canonical.as_bytes()).as_bytes())
+}
+
+impl BrainServer {
+    /// Capability names a session may invoke. Untrusted local → all four
+    /// declared caps; scoped → only those in the token's `Scope.caps`.
+    fn scope_capability_names(&self) -> Vec<&'static str> {
+        use Capability::*;
+        const ALL: &[Capability] = &[Read, Ingest, Write, Redact];
+        let map = |c: &Capability| match c {
+            Read => "Read",
+            Ingest => "Ingest",
+            Write => "Write",
+            Redact => "Redact",
+            Capability::Sample => "Sample",
+            Capability::Admin => "Admin",
+            Capability::TrustedIngest => "TrustedIngest",
+        };
+        match &self.scope {
+            Some(s) => ALL
+                .iter()
+                .filter(|c| s.caps.contains(*c))
+                .map(map)
+                .collect(),
+            None => ALL.iter().map(map).collect(),
+        }
+    }
+
+    // ── Plan tokens (v2.13 P6, ADR-013 §3) ───────────────────────────────
+
+    /// Issue a plan for a destructive op. Returns the token the committing
+    /// call must present. The closure hash is server-computed from the
+    /// *current* ledger state, so a plan issued against stale state is
+    /// rejected at commit time — TOCTOU-safe, and the hash is never echoed
+    /// in an error (the LLM cannot satisfy a stale plan by copying numbers
+    /// back, F7).
+    fn issue_plan(&self, op: &str, closure_hash: &str, affected: Value) -> Value {
+        let now_ms = SystemClock.now().millis();
+        let token = {
+            // Unpredictable per-issuance token: blake3 over time + closure.
+            // Not guessable from error text; collision odds are negligible
+            // for a per-session table.
+            let mut h = blake3::Hasher::new();
+            h.update(closure_hash.as_bytes());
+            h.update(&now_ms.to_le_bytes());
+            h.update(op.as_bytes());
+            hex::encode(h.finalize().as_bytes())
+        };
+        let expires_at = now_ms + PLAN_TTL_MS;
+        let plan = PendingPlan {
+            op: op.to_string(),
+            closure_hash: closure_hash.to_string(),
+            expires_at,
+        };
+        self.plans
+            .lock()
+            .expect("plan table poisoned")
+            .insert(token.clone(), plan);
+        json!({
+            "plan": {
+                "token": token,
+                "closure_hash": closure_hash,
+                "expires_at": expires_at,
+                "affected": affected,
+            }
+        })
+    }
+
+    /// Validate and consume a plan token for the given op. The caller passes
+    /// the *freshly recomputed* closure hash; the stored plan must match it
+    /// (state did not change since the dry-run) and must not be expired.
+    /// On any mismatch the plan is dropped and `plan_stale` returned — the
+    /// agent re-runs `dry_run: true` and reads the new plan.
+    fn consume_plan(
+        &self,
+        op: &str,
+        token: Option<&str>,
+        fresh_closure_hash: &str,
+    ) -> Result<(), ToolErr> {
+        let token = token.ok_or_else(|| {
+            ToolErr::Run("plan_stale: this op requires a plan token from `dry_run: true`".into())
+        })?;
+        let mut table = self.plans.lock().expect("plan table poisoned");
+        let now_ms = SystemClock.now().millis();
+        let plan = table.remove(token).ok_or_else(|| {
+            ToolErr::Run("plan_stale: no plan for this token — run `dry_run: true` first".into())
+        })?;
+        if plan.op != op {
+            return Err(ToolErr::Run(format!(
+                "plan_stale: plan issued for `{}`, not `{op}` — re-run dry-run",
+                plan.op
+            )));
+        }
+        if plan.expires_at < now_ms {
+            return Err(ToolErr::Run(
+                "plan_stale: plan expired — re-run `dry_run: true`".into(),
+            ));
+        }
+        if plan.closure_hash != fresh_closure_hash {
+            return Err(ToolErr::Run(
+                "plan_stale: ledger state changed since the plan — re-run `dry_run: true`".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The advertised tool list, filtered by the per-server session capabilities
+/// (v2.13 P6). Untrusted local sessions see every op the registry
+/// advertises; a scoped session sees only ops its capabilities permit —
+/// unadvertised calls are never hallucinated.
+fn tool_list(server: &BrainServer) -> Value {
+    let allow = server.scope_capability_names();
+    let tools: Vec<Value> = oxibrain_ops::ops()
+        .iter()
+        .filter(|op| allow.iter().any(|c| op.caps.contains(c)))
+        .map(|op| {
+            json!({
+                "name": op.name,
+                "description": op.summary,
+                "inputSchema": (op.schema)(),
+            })
+        })
+        .collect();
+    json!({ "tools": tools })
 }
 
 // ── transports ─────────────────────────────────────────────────────────────
@@ -1740,18 +2050,19 @@ where
         }
 
         // Is this a response to a server-initiated request?
-        if let Ok(value) = serde_json::from_str::<Value>(&line) {
-            if value.get("method").is_none() && value.get("id").is_some() {
-                let id = value["id"].as_i64().unwrap_or(-1);
-                if let Ok(mut guard) = session.pending.lock() {
-                    if let Some(sender) = guard.remove(&id) {
-                        let _ = sender.send(value);
-                        continue;
-                    }
-                }
-                // Unsolicited response — ignore, fall through to request parsing.
+        if let Ok(value) = serde_json::from_str::<Value>(&line)
+            && value.get("method").is_none()
+            && value.get("id").is_some()
+        {
+            let id = value["id"].as_i64().unwrap_or(-1);
+            if let Ok(mut guard) = session.pending.lock()
+                && let Some(sender) = guard.remove(&id)
+            {
+                let _ = sender.send(value);
                 continue;
             }
+            // Unsolicited response — ignore, fall through to request parsing.
+            continue;
         }
 
         // Client request or notification: dispatch in a task.
@@ -2320,6 +2631,55 @@ mod tests {
             "MCP tool count must remain exactly 14; got {}: {:?}",
             names.len(),
             names
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_list_is_filtered_by_scope_capabilities() {
+        // v2.13 P6: a scoped token must not even see the tools it cannot
+        // invoke — the listing is the first line of defense against
+        // hallucinated calls, so `redact`/`declare`/`remember`/`retract`/
+        // `merge_entities`/`ingest` disappear from a Read-only session.
+        let (_dir, server) = fresh_scoped(&[Capability::Read], &["t"]).await;
+        let resp = server.handle(msg(1, "tools/list", None)).await.unwrap();
+        let names: Vec<&str> = resp["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        for present in [
+            "search",
+            "recall",
+            "brief",
+            "navigate",
+            "resolve",
+            "traverse",
+            "why",
+            "contradictions",
+        ] {
+            assert!(
+                names.contains(&present),
+                "read op must be visible: {present}"
+            );
+        }
+        for hidden in [
+            "ingest",
+            "remember",
+            "declare",
+            "retract",
+            "merge_entities",
+            "redact",
+        ] {
+            assert!(
+                !names.contains(&hidden),
+                "write/redact op must be hidden from Read-only scope: {hidden}"
+            );
+        }
+        assert_eq!(
+            names.len(),
+            8,
+            "Read-only surface is exactly 8 ops: {names:?}"
         );
     }
 
@@ -4339,12 +4699,154 @@ mod tests {
             .await
             .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let closure: Value = serde_json::from_str(text).expect("closure parse");
+        let plan: Value = serde_json::from_str(text).expect("plan parse");
+        // v2.13 P6: dry_run returns `plan { token, closure_hash, expires_at, affected }`.
+        let token = plan["plan"]["token"].as_str().expect("plan token");
+        assert_eq!(token.len(), 64, "token is 64 hex");
         assert!(
-            closure["episodes"]
+            plan["plan"]["closure_hash"].as_str().unwrap().len() == 64,
+            "closure_hash is 64 hex"
+        );
+        assert!(plan["plan"]["expires_at"].as_i64().unwrap() > 0);
+        assert!(
+            plan["plan"]["affected"]["closure"]["episodes"]
                 .as_array()
                 .unwrap()
-                .contains(&json!(ep_id))
+                .contains(&json!(ep_id)),
+            "closure episode listed in affected: {plan}"
+        );
+
+        // The committing call MUST present the token — a raw commit is
+        // refused as plan_stale (ADR-013 §3).
+        let resp = server
+            .handle(msg(
+                3,
+                "tools/call",
+                Some(json!({
+                    "name": "redact",
+                    "arguments": {
+                        "space": "t",
+                        "target_kind": "episode",
+                        "target_id": ep_id,
+                        "reason": "test"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("plan_stale"),
+            "redact without plan token must be plan_stale: {text}"
+        );
+
+        // Presenting the token commits.
+        let resp = server
+            .handle(msg(
+                4,
+                "tools/call",
+                Some(json!({
+                    "name": "redact",
+                    "arguments": {
+                        "space": "t",
+                        "target_kind": "episode",
+                        "target_id": ep_id,
+                        "reason": "test",
+                        "plan_token": token
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            resp.get("error").is_none(),
+            "commit with plan token must succeed: {resp:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn declare_dry_run_issues_plan_and_commit_requires_token() {
+        let (_dir, server) = fresh_server().await;
+        let _ = server.brain.ensure_space("t").await.unwrap();
+        let decl = json!({
+            "op": "add_statement",
+            "subject": { "surface": "Alice", "type": "Person" },
+            "predicate": "employed_by",
+            "object": { "kind": "entity", "surface": "Acme", "type": "Organization" },
+            "polarity": "affirm",
+            "valid_from": 1_000,
+            "valid_to": TIME_MAX.0
+        });
+
+        // dry_run: no episode created, plan returned with would_create status.
+        let resp = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "declare",
+                    "arguments": { "space": "t", "declaration_json": decl.to_string(), "dry_run": true }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let plan: Value = serde_json::from_str(text).expect("plan parse");
+        let token = plan["plan"]["token"].as_str().unwrap().to_string();
+        let statuses: Vec<&str> = plan["plan"]["affected"]["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["status"].as_str().unwrap())
+            .collect();
+        assert!(
+            statuses.iter().all(|s| *s == "would_create"),
+            "fresh space: everything would_create, got {statuses:?}"
+        );
+        assert_eq!(
+            server.brain.episode_count().await.unwrap(),
+            0,
+            "dry_run must not write"
+        );
+
+        // Commit without token is still allowed (legacy direct path) and works.
+        let resp = server
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "declare",
+                    "arguments": { "space": "t", "declaration_json": decl.to_string() }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            resp.get("error").is_none(),
+            "direct declare (no dry-run) stays legal: {resp:?}"
+        );
+
+        // A plan issued against the empty ledger is now stale: a second
+        // declaration would resolve Alice instead of creating her.
+        let resp = server
+            .handle(msg(
+                3,
+                "tools/call",
+                Some(json!({
+                    "name": "declare",
+                    "arguments": {
+                        "space": "t",
+                        "declaration_json": decl.to_string(),
+                        "plan_token": token
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("plan_stale"),
+            "stale plan (ledger moved) must be refused: {text}"
         );
     }
 

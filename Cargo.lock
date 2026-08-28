@@ -2578,6 +2578,8 @@ version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blake3",
+ "hex",
  "include_dir",
  "oxibrain",
  "oxibrain-client",

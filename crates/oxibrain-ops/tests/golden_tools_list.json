@@ -219,6 +219,14 @@
             "description": "Canonical declaration JSON (op = add_statement | merge | retract).",
             "type": "string"
           },
+          "dry_run": {
+            "description": "Preview the plan (resolved vs would-create entities, closure hash) without committing; the plan token must be presented on the committing call (default: false).",
+            "type": "boolean"
+          },
+          "plan_token": {
+            "description": "Plan token from a prior `dry_run: true` call. Required when the ledger may have moved; stale plans are refused with plan_stale.",
+            "type": "string"
+          },
           "space": {
             "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
@@ -360,6 +368,10 @@
       "description": "Retract a statement. Prefer the statement_id form — the declaration is rebuilt from the stored statement (no surfaces/types needed); this retracts ALL assertions of the statement. The subject/predicate/object form is the legacy resubmission path. Creates a Declaration episode.",
       "inputSchema": {
         "properties": {
+          "dry_run": {
+            "description": "Preview the plan without committing; the plan token must be presented on the committing call (default: false).",
+            "type": "boolean"
+          },
           "episode": {
             "description": "Originating episode id (audit context).",
             "type": "string"
@@ -376,6 +388,10 @@
               }
             },
             "type": "object"
+          },
+          "plan_token": {
+            "description": "Plan token from a prior `dry_run: true` call. Required when the ledger may have moved; stale plans are refused with plan_stale.",
+            "type": "string"
           },
           "predicate": {
             "description": "Predicate name (legacy path).",
@@ -413,6 +429,10 @@
       "description": "Merge two entities: the loser is redirected to the winner. Creates a Declaration episode. Both refs use surface form + type.",
       "inputSchema": {
         "properties": {
+          "dry_run": {
+            "description": "Preview the plan without committing; the plan token must be presented on the committing call (default: false).",
+            "type": "boolean"
+          },
           "loser": {
             "description": "Entity to merge away: {\"surface\":\"...\",\"type\":\"...\"}",
             "properties": {
@@ -428,6 +448,10 @@
               "type"
             ],
             "type": "object"
+          },
+          "plan_token": {
+            "description": "Plan token from a prior `dry_run: true` call. Required when the ledger may have moved; stale plans are refused with plan_stale.",
+            "type": "string"
           },
           "space": {
             "description": "Space name (required; enumerate with oxibrain describe).",
@@ -464,8 +488,12 @@
       "inputSchema": {
         "properties": {
           "dry_run": {
-            "description": "Preview the closure without modifying anything (default: false).",
+            "description": "Preview the closure and issue a plan without modifying anything. A committing (non-dry-run) call MUST present the plan_token (default: false).",
             "type": "boolean"
+          },
+          "plan_token": {
+            "description": "Plan token from a prior `dry_run: true` call. Required on the committing call; stale plans are refused with plan_stale.",
+            "type": "string"
           },
           "reason": {
             "description": "Audit reason (default: 'mcp redact').",
