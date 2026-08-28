@@ -77,7 +77,6 @@ fn open_creates_schema_v1() {
         cache.user_version().unwrap(),
         oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION
     );
-    assert_eq!(oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION, 1);
     assert!(dir.path().join("documents.db").exists());
 }
 
@@ -87,7 +86,10 @@ fn open_is_idempotent() {
     let _first = open(dir.path());
     drop(_first);
     let second = open(dir.path());
-    assert_eq!(second.user_version().unwrap(), 1);
+    assert_eq!(
+        second.user_version().unwrap(),
+        oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION
+    );
 }
 
 #[test]
@@ -113,7 +115,10 @@ fn open_ro_succeeds_when_db_exists() {
         // Drop releases the lock; the db file persists.
     }
     let ro = DocumentCache::open_ro(dir.path()).unwrap();
-    assert_eq!(ro.user_version().unwrap(), 1);
+    assert_eq!(
+        ro.user_version().unwrap(),
+        oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION
+    );
 }
 
 #[test]

@@ -32,7 +32,7 @@ use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 /// `documents.db` schema version. Independent of `brain.db`'s ledger version.
-pub const DOCUMENTS_SCHEMA_VERSION: i64 = 1;
+pub const DOCUMENTS_SCHEMA_VERSION: i64 = 2;
 
 /// Default embedding dimension for `doc_vectors` (BGE-M3 / multilingual).
 /// Mirrors `crate::vectors::EMBEDDING_DIM`.
@@ -250,7 +250,14 @@ impl DocumentCache {
         }
         if current < 1 {
             conn.execute_batch(V1_SCHEMA_SQL).map_err(sql_err)?;
-            conn.pragma_update(None, "user_version", DOCUMENTS_SCHEMA_VERSION)
+            conn.pragma_update(None, "user_version", 1i64)
+                .map_err(sql_err)?;
+        }
+        if current < 2 {
+            // v2: doc_texts single body copy + external-content FTS + plain
+            // int8 doc_vectors (see documents_v2.sql).
+            conn.execute_batch(V2_SCHEMA_SQL).map_err(sql_err)?;
+            conn.pragma_update(None, "user_version", 2i64)
                 .map_err(sql_err)?;
         }
         Ok(())
@@ -516,8 +523,10 @@ impl DocumentCache {
         Ok(out)
     }
 
-    /// vec0 KNN over `doc_vectors`. Returns `(chunk_id, distance asc)`.
-    /// Mirrors `crate::vectors::knn_search`.
+    /// KNN over `doc_vectors` (int8, v2). Returns `(chunk_id, distance asc)`.
+    /// Rust-side exact integer L2 over the quantized rows — mirrors
+    /// `crate::vectors::knn_search` (sqlite-vec 0.1.x KNN is a full scan
+    /// anyway, and its int8 columns reject byte blobs).
     pub fn knn(
         &self,
         query_vector: &[f32],
@@ -529,28 +538,33 @@ impl DocumentCache {
                 query_vector.len()
             )));
         }
-        let bytes = f32_slice_as_bytes(query_vector);
+        let q = oxibrain_index::quantize_i8_fixed(query_vector);
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT chunk_id, distance
-                 FROM doc_vectors
-                 WHERE embedding MATCH ?1
-                 ORDER BY distance
-                 LIMIT ?2",
-            )
+            .prepare("SELECT chunk_id, embedding FROM doc_vectors")
             .map_err(sql_err)?;
         let rows = stmt
-            .query_map(params![bytes, limit as i64], |r| {
+            .query_map([], |r| {
                 let chunk_id: String = r.get(0)?;
-                let distance: f64 = r.get(1)?;
-                Ok((chunk_id, distance))
+                let blob: Vec<u8> = r.get(1)?;
+                Ok((chunk_id, blob))
             })
             .map_err(sql_err)?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(sql_err)?);
+            let (chunk_id, blob) = row.map_err(sql_err)?;
+            let sum_sq: u64 = blob
+                .iter()
+                .zip(&q)
+                .map(|(&a, &b)| {
+                    let d = i32::from(a as i8) - i32::from(b as i8);
+                    (d * d) as u64
+                })
+                .sum();
+            out.push((chunk_id, (sum_sq as f64).sqrt() / 127.0));
         }
+        out.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("finite distances"));
+        out.truncate(limit);
         Ok(out)
     }
 
@@ -665,8 +679,9 @@ impl DocumentCache {
     /// disposable cache — no episode semantics involved). Spec §4.5 step 3.
     pub fn purge_space(&self, space: &str) -> Result<(), BrainError> {
         for sql in [
-            "DELETE FROM doc_fts_word WHERE space = ?1",
-            "DELETE FROM doc_fts_ngram WHERE space = ?1",
+            "DELETE FROM doc_fts_word WHERE rowid IN (SELECT t.rowid FROM doc_texts t WHERE t.space = ?1)",
+            "DELETE FROM doc_fts_ngram WHERE rowid IN (SELECT t.rowid FROM doc_texts t WHERE t.space = ?1)",
+            "DELETE FROM doc_texts WHERE space = ?1",
             "DELETE FROM doc_vectors WHERE chunk_id IN (SELECT id FROM doc_chunks WHERE space = ?1)",
             "DELETE FROM doc_chunks WHERE space = ?1",
             "DELETE FROM doc_manifest WHERE root_alias IN (SELECT alias FROM doc_roots WHERE space = ?1)",
@@ -679,22 +694,19 @@ impl DocumentCache {
     }
 
     /// Chunks in `space` without a vector row yet. Returns `(chunk_id, text)`
-    /// where `text` is recovered from `doc_fts_word.body` (the canonical
-    /// decoded-text store; `doc_chunks` deliberately does not duplicate it).
+    /// where `text` comes from `doc_texts` — the single decoded-text copy
+    /// (v2); `doc_chunks` deliberately does not duplicate it.
     pub fn pending_vector_chunks(
         &self,
         space: &str,
         limit: usize,
     ) -> Result<Vec<(String, String)>, BrainError> {
-        // body is identical across both FTS tables; word index is canonical
-        // because unicode61 normalizes cleanly while trigram returns the
-        // raw 3-gram indexing. We pick word for stable text recovery.
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT c.id, f.body
+                "SELECT c.id, t.body
                  FROM doc_chunks c
-                 JOIN doc_fts_word f ON f.chunk_id = c.id
+                 JOIN doc_texts t ON t.chunk_id = c.id
                  WHERE c.space = ?1
                    AND NOT EXISTS (
                      SELECT 1 FROM doc_vectors v WHERE v.chunk_id = c.id
@@ -729,15 +741,11 @@ impl DocumentCache {
                     embedding.len()
                 )));
             }
-            // vec0 doesn't support INSERT OR REPLACE — DELETE then INSERT.
+            // int8 storage (v2): fixed-scale symmetric quantization, L2
+            // ordering preserved for L2-normalized encoder output.
             tx.execute(
-                "DELETE FROM doc_vectors WHERE chunk_id = ?1",
-                params![chunk_id],
-            )
-            .map_err(sql_err)?;
-            tx.execute(
-                "INSERT INTO doc_vectors(chunk_id, embedding) VALUES (?1, ?2)",
-                params![chunk_id, f32_slice_as_bytes(embedding)],
+                "INSERT OR REPLACE INTO doc_vectors(chunk_id, embedding) VALUES (?1, ?2)",
+                params![chunk_id, oxibrain_index::quantize_i8_fixed(embedding)],
             )
             .map_err(sql_err)?;
         }
@@ -787,6 +795,11 @@ impl DocumentCache {
 /// `PRAGMA user_version` is below 1.
 const V1_SCHEMA_SQL: &str = include_str!("documents_v1.sql");
 
+/// `documents.db` v2 migration: doc_texts + external-content FTS + plain
+/// int8 doc_vectors. Applied by `DocumentCache::migrate` when
+/// `PRAGMA user_version` is 1.
+const V2_SCHEMA_SQL: &str = include_str!("documents_v2.sql");
+
 /// Monotonic timestamp used for `doc_roots.scanned_at`. Seconds since the
 /// Unix epoch; the column has no sub-second precision.
 fn now_secs() -> i64 {
@@ -794,15 +807,6 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
-}
-
-/// Reinterpret an `f32` slice as bytes for sqlite-vec. Caller MUST ensure
-/// `v.len() == EMBEDDING_DIM`. Mirrors `crate::vectors::f32_slice_as_bytes`.
-fn f32_slice_as_bytes(v: &[f32]) -> &[u8] {
-    let len = std::mem::size_of_val(v);
-    // SAFETY: any bit pattern is valid for `[u8]`. Caller has guaranteed
-    // `len` matches the column width.
-    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len) }
 }
 
 /// Hash the fingerprint fields deterministically. Output is blake3 hex;
@@ -871,16 +875,30 @@ fn cascade_delete_root(tx: &rusqlite::Transaction<'_>, alias: &str) -> Result<()
     // 2. FTS rows for the same chunks.
     tx.execute(
         "DELETE FROM doc_fts_word
-         WHERE chunk_id IN (
+         WHERE rowid IN (
+            SELECT t.rowid FROM doc_texts t WHERE t.chunk_id IN (
            SELECT c.id FROM doc_chunks c
            JOIN documents d ON d.id = c.document_id
            WHERE d.root_alias = ?1
-         )",
+         ))",
         params![alias],
     )
     .map_err(sql_err)?;
     tx.execute(
         "DELETE FROM doc_fts_ngram
+         WHERE rowid IN (
+            SELECT t.rowid FROM doc_texts t WHERE t.chunk_id IN (
+           SELECT c.id FROM doc_chunks c
+           JOIN documents d ON d.id = c.document_id
+           WHERE d.root_alias = ?1
+         ))",
+        params![alias],
+    )
+    .map_err(sql_err)?;
+    // 2b. text rows for the same chunks (after the FTS deletes — the
+    // external-content tables read the old values from doc_texts).
+    tx.execute(
+        "DELETE FROM doc_texts
          WHERE chunk_id IN (
            SELECT c.id FROM doc_chunks c
            JOIN documents d ON d.id = c.document_id
@@ -970,19 +988,32 @@ fn delete_document(
         params![alias, locator],
     )
     .map_err(sql_err)?;
+    // 2b. text rows (after the FTS deletes — external content reads them).
     // 2. FTS rows for the same chunks.
     tx.execute(
         "DELETE FROM doc_fts_word
-         WHERE chunk_id IN (
+         WHERE rowid IN (
+            SELECT t.rowid FROM doc_texts t WHERE t.chunk_id IN (
            SELECT c.id FROM doc_chunks c
            JOIN documents d ON d.id = c.document_id
            WHERE d.root_alias = ?1 AND d.locator = ?2
-         )",
+         ))",
         params![alias, locator],
     )
     .map_err(sql_err)?;
     tx.execute(
         "DELETE FROM doc_fts_ngram
+         WHERE rowid IN (
+            SELECT t.rowid FROM doc_texts t WHERE t.chunk_id IN (
+           SELECT c.id FROM doc_chunks c
+           JOIN documents d ON d.id = c.document_id
+           WHERE d.root_alias = ?1 AND d.locator = ?2
+         ))",
+        params![alias, locator],
+    )
+    .map_err(sql_err)?;
+    tx.execute(
+        "DELETE FROM doc_texts
          WHERE chunk_id IN (
            SELECT c.id FROM doc_chunks c
            JOIN documents d ON d.id = c.document_id
@@ -1029,14 +1060,24 @@ fn upsert_document(
     .map_err(sql_err)?;
     tx.execute(
         "DELETE FROM doc_fts_word
-         WHERE chunk_id IN (
+         WHERE rowid IN (
+            SELECT t.rowid FROM doc_texts t WHERE t.chunk_id IN (
            SELECT id FROM doc_chunks WHERE document_id = ?1
-         )",
+         ))",
         params![&document_id],
     )
     .map_err(sql_err)?;
     tx.execute(
         "DELETE FROM doc_fts_ngram
+         WHERE rowid IN (
+            SELECT t.rowid FROM doc_texts t WHERE t.chunk_id IN (
+           SELECT id FROM doc_chunks WHERE document_id = ?1
+         ))",
+        params![&document_id],
+    )
+    .map_err(sql_err)?;
+    tx.execute(
+        "DELETE FROM doc_texts
          WHERE chunk_id IN (
            SELECT id FROM doc_chunks WHERE document_id = ?1
          )",
@@ -1097,14 +1138,22 @@ fn upsert_document(
             ],
         )
         .map_err(sql_err)?;
+        // doc_texts is the single body copy; the external-content FTS
+        // tables index it without storing a second copy.
         tx.execute(
-            "INSERT INTO doc_fts_word(body, space, chunk_id) VALUES (?1, ?2, ?3)",
+            "INSERT INTO doc_texts(body, space, chunk_id) VALUES (?1, ?2, ?3)",
             params![&chunk.text, space, &chunk_id],
         )
         .map_err(sql_err)?;
+        let fts_rowid = tx.last_insert_rowid();
         tx.execute(
-            "INSERT INTO doc_fts_ngram(body, space, chunk_id) VALUES (?1, ?2, ?3)",
-            params![&chunk.text, space, &chunk_id],
+            "INSERT INTO doc_fts_word(rowid, body, space, chunk_id) VALUES (?1, ?2, ?3, ?4)",
+            params![fts_rowid, &chunk.text, space, &chunk_id],
+        )
+        .map_err(sql_err)?;
+        tx.execute(
+            "INSERT INTO doc_fts_ngram(rowid, body, space, chunk_id) VALUES (?1, ?2, ?3, ?4)",
+            params![fts_rowid, &chunk.text, space, &chunk_id],
         )
         .map_err(sql_err)?;
     }
@@ -1128,6 +1177,139 @@ fn upsert_document(
 
 #[cfg(test)]
 mod tests {
+    fn v1_db_with_one_document(dir: &std::path::Path) {
+        crate::migration::ensure_vec_extension(); // v1 schema declares a vec0 table
+        let db = dir.join("documents.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(V1_SCHEMA_SQL).unwrap();
+        conn.pragma_update(None, "user_version", 1i64).unwrap();
+        conn.execute(
+            "INSERT INTO doc_roots (alias, space, config_hash, generation, head_revision, scanned_at)
+             VALUES ('vault', 'sp', 'h', 1, NULL, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO documents (id, root_alias, space, locator, revision, media_type, bytes, modified_at, indexed_at)
+             VALUES ('d1', 'vault', 'sp', 'a.md', 'r1', 'text/markdown', 10, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO doc_chunks (id, document_id, space, ordinal, span_start, span_end, context)
+             VALUES ('c1', 'd1', 'sp', 0, 0, 11, 'ctx')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO doc_fts_word(body, space, chunk_id) VALUES ('hello uniqueterm', 'sp', 'c1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO doc_fts_ngram(body, space, chunk_id) VALUES ('hello uniqueterm', 'sp', 'c1')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migrate_v1_to_v2_moves_bodies_to_doc_texts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        v1_db_with_one_document(dir.path());
+        // Opening through the cache runs the v2 migration.
+        let cache = DocumentCache::open_rw(dir.path()).unwrap();
+        assert_eq!(cache.user_version().unwrap(), DOCUMENTS_SCHEMA_VERSION);
+        assert_eq!(cache.user_version().unwrap(), 2);
+
+        // Body moved exactly once into doc_texts.
+        let (n, body): (i64, String) = cache
+            .conn
+            .query_row("SELECT COUNT(*), MIN(body) FROM doc_texts", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(n, 1, "one text row, not two");
+        assert_eq!(body, "hello uniqueterm");
+
+        // FTS indexes were rebuilt as external content on doc_texts.
+        for tbl in ["doc_fts_word", "doc_fts_ngram"] {
+            let sql_text: String = cache
+                .conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name = ?1",
+                    rusqlite::params![tbl],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                sql_text.contains("content='doc_texts'"),
+                "{tbl}: {sql_text}"
+            );
+        }
+
+        // Search still finds the chunk through both indexes.
+        for table in [FtsTable::Word, FtsTable::Ngram] {
+            let hits = cache.search_fts("sp", table, "uniqueterm", 5).unwrap();
+            assert_eq!(hits.len(), 1, "one hit via {table:?}");
+            assert_eq!(hits[0].0, "c1");
+        }
+
+        // pending_vector_chunks reads bodies from doc_texts.
+        let pending = cache.pending_vector_chunks("sp", 10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].1, "hello uniqueterm");
+
+        // doc_vectors is a plain int8-BLOB table now.
+        let sql_text: String = cache
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'doc_vectors'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            sql_text
+                .to_lowercase()
+                .starts_with("create table doc_vectors")
+        );
+
+        // Upsert + KNN roundtrip through the int8 path.
+        let v: Vec<f32> = (0..crate::vectors::EMBEDDING_DIM)
+            .map(|i| ((i % 7) as f32 - 3.0) * 0.1)
+            .collect();
+        cache.upsert_vectors(&[("c1".into(), v.clone())]).unwrap();
+        let hits = cache.knn(&v, 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, "c1");
+        let len: i64 = cache
+            .conn
+            .query_row("SELECT LENGTH(embedding) FROM doc_vectors", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(len as usize, crate::vectors::EMBEDDING_DIM);
+
+        // Deleting the document clears doc_texts too (external-content
+        // ordering: FTS first, then texts).
+        {
+            let tx = cache.conn.unchecked_transaction().unwrap();
+            delete_document(&tx, "vault", "a.md").unwrap();
+            tx.commit().unwrap();
+        }
+        let texts: i64 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM doc_texts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(texts, 0, "no stale body copies after delete");
+        let fts_rows: i64 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM doc_fts_word", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fts_rows, 0, "FTS row gone");
+    }
+
     use super::*;
     use oxibrain_core::documents::FileObservation;
 
