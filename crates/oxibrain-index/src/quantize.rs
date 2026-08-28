@@ -133,7 +133,19 @@ pub fn quantize_i8(vec: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-/// Inverse of [`quantize_i8`] up to quantization error (`b / 127`).
+/// Fixed-scale symmetric int8 quantization for L2-normalized vectors.
+///
+/// Unlike [`quantize_i8`] (per-vector max-abs, cosine-safe), this keeps the
+/// TRUE scale: `clamp(v, -1, 1) * 127`. Use it when the distance metric is
+/// L2 (sqlite-vec vec0 default) — a per-vector rescale would distort L2
+/// ordering across rows. Requires `|v_i| <= 1` (L2-normalized embeddings).
+pub fn quantize_i8_fixed(vec: &[f32]) -> Vec<u8> {
+    vec.iter()
+        .map(|&v| (v.clamp(-1.0, 1.0) * 127.0).round() as i8 as u8)
+        .collect()
+}
+
+/// Inverse of [`quantize_i8`] and [`quantize_i8_fixed`] (`b / 127`).
 pub fn dequantize_i8(bytes: &[u8]) -> Vec<f32> {
     bytes.iter().map(|&b| b as i8 as f32 / 127.0).collect()
 }
@@ -203,6 +215,21 @@ mod tests {
             .abs()
                 < 1e-6
         );
+    }
+
+    #[test]
+    fn i8_fixed_keeps_true_scale() {
+        let v = vec![0.5f32, -0.25, 1.0, -1.0, 0.0];
+        let q = quantize_i8_fixed(&v);
+        assert_eq!(q, vec![64u8, (-32i8) as u8, 127, 129, 0]);
+        assert_eq!(dequantize_i8(&q)[0], 64.0 / 127.0);
+    }
+
+    #[test]
+    fn i8_fixed_clamps_out_of_range() {
+        // Defensive: an unnormalized vector clamps instead of wrapping.
+        let q = quantize_i8_fixed(&[2.0, -3.5]);
+        assert_eq!(q, vec![127u8, 129]);
     }
 
     #[test]

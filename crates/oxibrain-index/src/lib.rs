@@ -19,6 +19,7 @@ pub use knn::KnnIndex;
 pub use ngram::{jaccard, lsh_bands, minhash, shingle_entropy, shingles};
 pub use quantize::{
     cosine_approx, dequantize_i8, dequantize_signs, hamming, max_abs, quantize, quantize_i8,
+    quantize_i8_fixed,
 };
 pub use rrf::{FusedItem, fuse};
 pub use spec::{Direction, PredicateFilter};

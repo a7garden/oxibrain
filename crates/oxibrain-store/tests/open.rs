@@ -1,11 +1,12 @@
 use oxibrain_store::Store;
+use oxibrain_store::schema::LEDGER_SCHEMA_VERSION;
 use tempfile::tempdir;
 
 #[test]
 fn open_creates_and_migrates() {
     let dir = tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open");
-    assert_eq!(store.user_version().unwrap(), 11);
+    assert_eq!(store.user_version().unwrap(), LEDGER_SCHEMA_VERSION);
     assert!(store.db_path().exists());
 }
 

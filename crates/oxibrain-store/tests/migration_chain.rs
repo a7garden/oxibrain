@@ -226,6 +226,85 @@ fn migrates_from_v7_with_data() {
     assert_eq!(chunk_count, 0, "migration creates the table, not data");
 }
 
+// ── v11 → current (v12 int8 entity vectors) ─────────────────────────────────
+
+#[test]
+fn migrates_from_v11_converting_float_vectors() {
+    migration::ensure_vec_extension();
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(V1_SQL).unwrap();
+    conn.execute_batch(V2_SQL).unwrap();
+    registry::seed_core_v1(&conn).unwrap();
+    conn.pragma_update(None, "user_version", 2i64).unwrap();
+    for sql in [
+        include_str!("../src/migrations/v3.sql"),
+        include_str!("../src/migrations/v4.sql"),
+        include_str!("../src/migrations/v5.sql"),
+        include_str!("../src/migrations/v6.sql"),
+        include_str!("../src/migrations/v7.sql"),
+        include_str!("../src/migrations/v8.sql"),
+        include_str!("../src/migrations/v9.sql"),
+        include_str!("../src/migrations/v10.sql"),
+        include_str!("../src/migrations/v11.sql"),
+    ] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 11i64).unwrap();
+    insert_test_data(&conn);
+
+    // One FLOAT[1024] vector row (v11 shape: 4096 f32 bytes).
+    let f32_blob: Vec<u8> = vec![0.25f32; 1024]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    conn.execute(
+        "INSERT INTO entity_vectors(entity_id, embedding) VALUES ('e1', ?1)",
+        rusqlite::params![f32_blob],
+    )
+    .unwrap();
+
+    let v = migration::run(&conn).unwrap();
+    assert_eq!(v, LEDGER_SCHEMA_VERSION);
+
+    // v12 effect: plain int8-BLOB table (vec0 dropped — see v12.sql).
+    let sql_text: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'entity_vectors'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        sql_text
+            .to_lowercase()
+            .starts_with("create table entity_vectors"),
+        "recreated as a plain table: {sql_text}"
+    );
+
+    // The float row survives, converted: 1024 bytes, ~0.25*127 ≈ 32 per dim.
+    let (n, blob_len, first): (i64, i64, String) = conn
+        .query_row(
+            "SELECT COUNT(*), LENGTH(embedding), hex(SUBSTR(embedding, 1, 1)) FROM entity_vectors",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(n, 1, "converted row survives");
+    assert_eq!(blob_len, 1024, "one byte per dimension");
+    assert_eq!(first, "20", "0.25 * 127 = 31.75 rounds to 32 = 0x20");
+
+    // The store API decodes it back to ~0.25.
+    let fetched =
+        oxibrain_store::vectors::fetch_vectors_for_entities(&conn, &["e1".into()]).unwrap();
+    let v = fetched.get("e1").unwrap();
+    assert_eq!(v.len(), 1024);
+    assert!(
+        (v[0] - 0.25).abs() < 0.005,
+        "dequantized first dim: {}",
+        v[0]
+    );
+}
+
 // ── Idempotency ──────────────────────────────────────────────────────────────
 
 #[test]

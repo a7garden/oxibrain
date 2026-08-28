@@ -57,7 +57,7 @@ fn tfidf_rows_are_int8_sized() {
 fn lexical_search_ranks_matching_episode_first() {
     let (conn, space_id) = setup();
     let a = episode(&conn, &space_id, "alpha xylophone quasarone marker");
-    let b = episode(&conn, &space_id, "beta zephyr quasartwo marker");
+    episode(&conn, &space_id, "beta zephyr quasartwo marker");
     oxibrain_store::index_ops::rebuild_tfidf(&conn, &space_id, 1024).unwrap();
 
     let hits = query::lexical_vector_search(&conn, &space_id, "xylophone", 5).unwrap();

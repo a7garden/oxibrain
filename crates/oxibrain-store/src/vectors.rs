@@ -1,11 +1,16 @@
-//! Dense embedding vector storage (sqlite-vec).
+//! Dense embedding vector storage (int8 in a plain table).
 //!
-//! Wraps the `entity_vectors` vec0 virtual table. Vectors are 1024-dim f32
-//! (BGE-M3, the default multilingual embedder). Vectors are projection
-//! (derived) — reproject() rebuilds them. See ARCHITECTURE.md §9.1.
+//! Wraps the `entity_vectors` table. Vectors are 1024-dim, stored as
+//! symmetric int8 with fixed scale 1 (`clamp(v, -1, 1) * 127`): one byte per
+//! dimension, 4x smaller than f32. BGE-M3 (the default multilingual
+//! embedder) L2-normalizes its output, so `|v_i| <= 1` holds and the clamp
+//! is loss-free; out-of-range inputs clamp defensively. KNN is computed
+//! Rust-side (sqlite-vec 0.1.x vec0 KNN is a full scan anyway, and its
+//! int8 columns reject byte blobs). Vectors are projection (derived) --
+//! reproject() rebuilds them. See ARCHITECTURE.md §9.1.
 //!
-//! The sqlite-vec extension must be loaded via `migration::ensure_vec_extension()`
-//! before opening any connection.
+//! The sqlite-vec extension is still loaded via
+//! `migration::ensure_vec_extension()` for the documents-plane cache.
 
 use crate::sql_err;
 use oxibrain_ports::BrainError;
@@ -15,11 +20,9 @@ use rusqlite::{Connection, params};
 /// Migrated from 384 (all-MiniLM-L6-v2) at schema v7.
 pub const EMBEDDING_DIM: usize = 1024;
 
-/// Unsafe view: reinterpret an `f32` slice as bytes for sqlite-vec.
-/// Caller MUST ensure the slice length matches `EMBEDDING_DIM`.
-fn f32_slice_as_bytes(v: &[f32]) -> &[u8] {
-    let len = std::mem::size_of_val(v);
-    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len) }
+/// Decode an int8 storage blob to f32.
+fn decode_blob(blob: &[u8]) -> Vec<f32> {
+    oxibrain_index::dequantize_i8(blob)
 }
 
 /// Upsert a dense embedding vector for an entity. Overwrites any existing vector.
@@ -34,15 +37,9 @@ pub fn upsert_vector(
         "embedding dimension mismatch: expected {EMBEDDING_DIM}, got {}",
         embedding.len()
     );
-    // vec0 doesn't support INSERT OR REPLACE — DELETE then INSERT.
     conn.execute(
-        "DELETE FROM entity_vectors WHERE entity_id = ?1",
-        params![entity_id],
-    )
-    .map_err(sql_err)?;
-    conn.execute(
-        "INSERT INTO entity_vectors(entity_id, embedding) VALUES (?1, ?2)",
-        params![entity_id, f32_slice_as_bytes(embedding)],
+        "INSERT OR REPLACE INTO entity_vectors(entity_id, embedding) VALUES (?1, ?2)",
+        params![entity_id, oxibrain_index::quantize_i8_fixed(embedding)],
     )
     .map_err(sql_err)?;
     Ok(())
@@ -50,7 +47,7 @@ pub fn upsert_vector(
 
 /// Batch-fetch dense vectors for a set of entity IDs (§11.4, 10.3 — MMR).
 /// Entities without a vector are silently skipped. Returns at most one
-/// vector per ID. The vec0 table supports point lookups via primary key.
+/// vector per ID.
 pub fn fetch_vectors_for_entities(
     conn: &Connection,
     entity_ids: &[String],
@@ -62,18 +59,7 @@ pub fn fetch_vectors_for_entities(
             params![id],
             |r| {
                 let blob: Vec<u8> = r.get(0)?;
-                let n = blob.len() / 4;
-                let mut v = Vec::with_capacity(n);
-                for i in 0..n {
-                    let chunk = [
-                        blob[i * 4],
-                        blob[i * 4 + 1],
-                        blob[i * 4 + 2],
-                        blob[i * 4 + 3],
-                    ];
-                    v.push(f32::from_ne_bytes(chunk));
-                }
-                Ok(v)
+                Ok(decode_blob(&blob))
             },
         );
         if let Ok(vec) = row {
@@ -97,12 +83,16 @@ pub fn delete_vector(conn: &Connection, entity_id: &str) -> Result<(), BrainErro
 #[derive(Debug, Clone)]
 pub struct VectorHit {
     pub entity_id: String,
-    /// Distance metric from sqlite-vec (L2 by default; lower = closer).
+    /// L2 distance on the dequantized scale (lower = closer).
     pub distance: f64,
 }
 
 /// Top-k semantic nearest neighbors for a query vector.
 /// Returns hits sorted by distance ascending (closest first).
+///
+/// Rust-side full scan: the table holds one row per entity (thousands, not
+/// millions), so a scan over 1 KB int8 rows is cache-friendly and matches
+/// the sqlite-vec 0.1.x brute-force behavior it replaces.
 pub fn knn_search(
     conn: &Connection,
     query: &[f32],
@@ -114,27 +104,40 @@ pub fn knn_search(
         "query dimension mismatch: expected {EMBEDDING_DIM}, got {}",
         query.len()
     );
+    let q = oxibrain_index::quantize_i8_fixed(query);
     let mut stmt = conn
-        .prepare(
-            "SELECT entity_id, distance
-             FROM entity_vectors
-             WHERE embedding MATCH ?1
-             ORDER BY distance
-             LIMIT ?2",
-        )
+        .prepare("SELECT entity_id, embedding FROM entity_vectors")
         .map_err(sql_err)?;
     let rows = stmt
-        .query_map(params![f32_slice_as_bytes(query), k as i64], |r| {
-            Ok(VectorHit {
-                entity_id: r.get(0)?,
-                distance: r.get(1)?,
-            })
+        .query_map([], |r| {
+            let id: String = r.get(0)?;
+            let blob: Vec<u8> = r.get(1)?;
+            Ok((id, blob))
         })
         .map_err(sql_err)?;
     let mut hits = Vec::new();
     for row in rows {
-        hits.push(row.map_err(sql_err)?);
+        let (id, blob) = row.map_err(sql_err)?;
+        // Exact integer-domain L2, rescaled to the dequantized scale.
+        let sum_sq: u64 = blob
+            .iter()
+            .zip(&q)
+            .map(|(&a, &b)| {
+                let d = i32::from(a as i8) - i32::from(b as i8);
+                (d * d) as u64
+            })
+            .sum();
+        hits.push(VectorHit {
+            entity_id: id,
+            distance: (sum_sq as f64).sqrt() / 127.0,
+        });
     }
+    hits.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .expect("finite distances")
+    });
+    hits.truncate(k);
     Ok(hits)
 }
 
@@ -147,51 +150,70 @@ pub fn count_vectors(conn: &Connection) -> Result<i64, BrainError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration;
 
-    #[test]
-    fn round_trip_vector_insert_and_knn() {
-        migration::ensure_vec_extension();
+    fn fresh() -> Connection {
+        crate::migration::ensure_vec_extension();
         let conn = Connection::open_in_memory().unwrap();
-        migration::run(&conn).unwrap();
+        crate::migration::run(&conn).unwrap();
+        conn
+    }
 
-        // Insert two vectors.
-        let v1: Vec<f32> = (0..EMBEDDING_DIM).map(|i| i as f32 * 0.01).collect();
-        let v2: Vec<f32> = (0..EMBEDDING_DIM).map(|i| i as f32 * 0.01 + 0.5).collect();
-        upsert_vector(&conn, "e1", &v1).unwrap();
-        upsert_vector(&conn, "e2", &v2).unwrap();
-        assert_eq!(count_vectors(&conn).unwrap(), 2);
-
-        // KNN search: v1 should be closest to itself.
-        let hits = knn_search(&conn, &v1, 2).unwrap();
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].entity_id, "e1");
-        assert_eq!(hits[0].distance, 0.0);
+    fn test_vec(seed: f32) -> Vec<f32> {
+        (0..EMBEDDING_DIM)
+            .map(|i| (seed * (i as f32 + 1.0) * 0.001) - 0.4)
+            .collect::<Vec<f32>>()
+            .into_iter()
+            .map(|v| v.clamp(-1.0, 1.0))
+            .collect()
     }
 
     #[test]
-    fn upsert_overwrites_existing() {
-        migration::ensure_vec_extension();
-        let conn = Connection::open_in_memory().unwrap();
-        migration::run(&conn).unwrap();
-
-        let v: Vec<f32> = vec![0.0; EMBEDDING_DIM];
+    fn upsert_fetch_roundtrip() {
+        let conn = fresh();
+        let v = test_vec(0.3);
         upsert_vector(&conn, "e1", &v).unwrap();
-        let v2: Vec<f32> = vec![1.0; EMBEDDING_DIM];
-        upsert_vector(&conn, "e1", &v2).unwrap();
-        assert_eq!(count_vectors(&conn).unwrap(), 1);
+        let got = fetch_vectors_for_entities(&conn, &["e1".into()]).unwrap();
+        let rt = got.get("e1").unwrap();
+        // int8 quantization error bound: 0.5/127 per dimension.
+        for (a, b) in v.iter().zip(rt) {
+            assert!((a - b).abs() < 0.005, "per-dim drift {a} vs {b}");
+        }
     }
 
     #[test]
-    fn delete_removes_vector() {
-        migration::ensure_vec_extension();
-        let conn = Connection::open_in_memory().unwrap();
-        migration::run(&conn).unwrap();
+    fn knn_orders_by_distance() {
+        let conn = fresh();
+        let base = test_vec(0.0);
+        let near = test_vec(0.02);
+        let far = test_vec(2.0);
+        upsert_vector(&conn, "base", &base).unwrap();
+        upsert_vector(&conn, "near", &near).unwrap();
+        upsert_vector(&conn, "far", &far).unwrap();
 
-        let v: Vec<f32> = vec![0.0; EMBEDDING_DIM];
-        upsert_vector(&conn, "e1", &v).unwrap();
-        assert_eq!(count_vectors(&conn).unwrap(), 1);
-        delete_vector(&conn, "e1").unwrap();
+        let hits = knn_search(&conn, &base, 3).unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].entity_id, "base");
+        assert_eq!(hits[1].entity_id, "near", "near beats far");
+        assert_eq!(hits[2].entity_id, "far");
+        assert!(hits[0].distance <= hits[1].distance && hits[1].distance <= hits[2].distance);
+    }
+
+    #[test]
+    fn storage_is_one_byte_per_dim() {
+        let conn = fresh();
+        upsert_vector(&conn, "e1", &test_vec(0.5)).unwrap();
+        let len: i64 = conn
+            .query_row("SELECT LENGTH(embedding) FROM entity_vectors", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(len as usize, EMBEDDING_DIM);
+    }
+
+    #[test]
+    fn delete_is_noop_when_absent() {
+        let conn = fresh();
+        delete_vector(&conn, "ghost").unwrap();
         assert_eq!(count_vectors(&conn).unwrap(), 0);
     }
 }

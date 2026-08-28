@@ -99,10 +99,52 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.pragma_update(None, "user_version", 11i64)
             .map_err(sql_err)?;
     }
+    if current < 12 {
+        // Read FLOAT[1024] rows before v12.sql drops the table, reinsert
+        // them quantized after. Ranking-half state: rows are recoverable by
+        // re-embedding, but converting them is one query cheaper.
+        let floats = read_entity_vectors_float(conn)?;
+        let sql = include_str!("migrations/v12.sql");
+        conn.execute_batch(sql).map_err(sql_err)?;
+        for (id, vec) in &floats {
+            conn.execute(
+                "INSERT INTO entity_vectors(entity_id, embedding) VALUES (?1, ?2)",
+                rusqlite::params![id, oxibrain_index::quantize_i8_fixed(vec)],
+            )
+            .map_err(sql_err)?;
+        }
+        conn.pragma_update(None, "user_version", 12i64)
+            .map_err(sql_err)?;
+    }
     let now: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sql_err)?;
     Ok(now)
+}
+
+/// Read all `entity_vectors` rows as f32 (pre-v12 FLOAT[1024] shape).
+/// Called by the v12 step while the float table still exists.
+fn read_entity_vectors_float(conn: &Connection) -> Result<Vec<(String, Vec<f32>)>, BrainError> {
+    let mut stmt = conn
+        .prepare("SELECT entity_id, embedding FROM entity_vectors")
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map([], |r| {
+            let id: String = r.get(0)?;
+            let blob: Vec<u8> = r.get(1)?;
+            Ok((id, blob))
+        })
+        .map_err(sql_err)?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, blob) = row.map_err(sql_err)?;
+        let vec: Vec<f32> = blob
+            .chunks_exact(4)
+            .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        out.push((id, vec));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
