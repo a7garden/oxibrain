@@ -1,3 +1,78 @@
+
+## [0.10.0] — 2026-08-28
+
+Storage footprint: contentless FTS, int8 vectors, junk-path elimination
+(ADR-014, plan `doc/plans/2026-08-28-storage-footprint.md`).
+
+### Storage (brain.db)
+
+- **v12 — entity embeddings as int8 in a plain BLOB table.**
+  `entity_vectors` drops vec0 (sqlite-vec 0.1.x classifies every INSERT
+  blob as float32) for a plain table with fixed-scale symmetric int8
+  (`quantize_i8_fixed`, `clamp(v, -1, 1) * 127`) and Rust-side exact
+  integer L2 KNN. 4 KB → 1 KB per entity. Migration converts existing
+  float rows in place.
+
+- **v13 — contentless FTS5 + `fts_map`.** The FTS layer previously stored
+  the full body twice (fts_word_content + fts_ngram_content shadow
+  tables) on top of `episodes.content`: ~3× the text bytes. Both indexes
+  are now `content='', contentless_delete=1` with a small rowid map;
+  `episodes.content` is the single text copy. SQLite ≥ 3.43 required
+  (rusqlite 0.32 bundles 3.46).
+
+- **Compacted episodes stay searchable.** Pre-v13, `compact_episodes`
+  cleared `episodes.content` and the rebuild indexed empty text;
+  compacted episodes silently left search. Rebuild paths now use the
+  effective content (`effective_episode_content(content, content_compacted)`),
+  mirroring `ledger::get_episode`'s transparent decompression.
+
+- **Orphan sources deleted at migration.** A source row no episode
+  references (e.g. a tempdir root from a test run) is removed:
+  `DELETE FROM sources WHERE id NOT IN (SELECT source_id FROM episodes WHERE source_id IS NOT NULL)`.
+  Rows still referenced stay (provenance, P2). `doctor` reports the
+  count since.
+
+- **`extraction_failures` cleared on success.** A successful
+  `cache_response` now `DELETE FROM extraction_failures WHERE episode_id=?1
+  AND extractor_id=?2`. The quarantine is a retry queue, not an archive.
+  Redaction is still the only other deleter.
+
+### Storage (documents.db)
+
+- **v2 — `doc_texts` + external-content FTS + plain int8 vectors.**
+  `doc_texts` is the single decoded-text copy; both `doc_fts_word` /
+  `doc_fts_ngram` are external-content on it (search SQL unchanged).
+  `doc_vectors` drops vec0 for a plain int8 BLOB table; embeddings are
+  recomputed on the next `index --embed`. FTS deletes are rowid-mediated
+  through `doc_texts` — external-content tables leave orphan postings on
+  column-predicate DELETE.
+
+### Index (oxibrain-index)
+
+- **Symmetric int8 quantization.** New `quantize_i8` /
+  `dequantize_i8` (cosine-safe, per-vector max-abs rescale) and
+  `quantize_i8_fixed` (L2-safe, scale 1.0) helpers.
+- **TFIDF stored as int8.** `rebuild_tfidf` writes
+  `quantize_i8(vector)`; `load_knn_index` decodes with
+  `dequantize_i8`. 4 KB → 1 KB per row at dim 1024; old f32 rows are
+  replaced on the next rebuild.
+
+### Measured on the reference store (303 episodes)
+
+| | Before | After |
+|---|---|---|
+| `fts_word_content` | 368 KB | gone |
+| `fts_ngram_content` | 368 KB | gone |
+| Orphan sources | 978 rows | 0 |
+| TFIDF row size | 4 KB | 1 KB |
+| `brain.db` | 4.9 MB | 4.9 MB |
+| Directory (with cleanup) | 13 MB | **7.6 MB** |
+
+The `brain.db` size is dominated by the FTS inverted indexes
+(`fts_ngram_data` 808 KB, irreducible; the §7.4 chunk-level-only
+mitigation is still in the toolbox), `episodes` table, and the int8
+vectors. Per-episode marginal cost ≈ 5× + 1 KB (down from ≈ 5× + 4 KB).
+
 # Changelog
 
 All notable changes to oxibrain are documented here. Conventional commits;
