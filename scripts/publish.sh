@@ -119,3 +119,7 @@ while read -r crate version; do
   fi
   publish "$crate" "$version" "${flags[@]}"
 done < <(order)
+# `cargo publish` leaves packaged crate trees under target/package; the
+# rust-cache post step walks them and ENOENTs on trybuild/target subdirs the
+# packaging deliberately omits (observed red v0.9.0 run despite full success).
+rm -rf target/package
