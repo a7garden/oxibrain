@@ -560,10 +560,7 @@ impl DocumentCache {
             return Ok(Vec::new());
         }
         // Build "?, ?, ?" placeholders for the IN list.
-        let placeholders = std::iter::repeat("?")
-            .take(ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders = vec!["?"; ids.len()].join(", ");
         let sql = format!(
             "SELECT c.id, c.document_id, d.root_alias, c.space, d.locator,
                     d.revision, d.media_type, c.ordinal,

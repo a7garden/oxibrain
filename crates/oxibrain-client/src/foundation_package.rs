@@ -204,18 +204,16 @@ impl fmt::Display for AbstractRequirement {
 
 impl From<AbstractRequirement> for String {
     fn from(r: AbstractRequirement) -> Self {
-        let owned = match &r {
+        match &r {
             AbstractRequirement::Unknown(s) => s.clone(),
             _ => r.as_str().to_owned(),
-        };
-        owned
+        }
     }
 }
 
-impl TryFrom<String> for AbstractRequirement {
-    type Error = std::convert::Infallible;
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        Ok(Self::parse(s))
+impl From<String> for AbstractRequirement {
+    fn from(s: String) -> Self {
+        Self::parse(s)
     }
 }
 

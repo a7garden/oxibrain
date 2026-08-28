@@ -346,7 +346,7 @@ impl Brain {
             .map_err(|e| BrainError::Config(format!("embedding failed: {e}")))?;
         let rows: Vec<(String, Vec<f32>)> = pending
             .into_iter()
-            .zip(vectors.into_iter())
+            .zip(vectors)
             .map(|((id, _), v)| (id, v))
             .collect();
         let count = rows.len();
@@ -626,29 +626,29 @@ impl Brain {
         let mut observed: Vec<FileObservation> = Vec::with_capacity(scan.observations.len());
         let mut skipped_files = scan.skipped.len();
         for mut o in scan.observations {
-            if let Some(reader) = &git_reader {
-                if let Some(snap) = &snapshot {
-                    if reader.is_ignored(&o.locator)? {
-                        skipped_files += 1;
-                        continue;
-                    }
-                    // Revision: reuse the cached `git:` revision when the
-                    // stat is unchanged (bytes are read ONLY for changed
-                    // candidates — clean tracked files keep their hint).
-                    let cached_rev = cached_manifest
-                        .iter()
-                        .find(|c| c.locator == o.locator)
-                        .filter(|c| c.bytes == o.bytes && c.modified_ns == o.modified_ns)
-                        .map(|c| c.revision.clone());
-                    let rev = match cached_rev {
-                        Some(r) if r.starts_with("git:") => r,
-                        _ => {
-                            let bytes = read_worktree_bytes(&canonical, &o.locator)?;
-                            reader.current_revision(snap, &o.locator, &bytes)?
-                        }
-                    };
-                    o.revision_hint = Some(rev);
+            if let Some(reader) = &git_reader
+                && let Some(snap) = &snapshot
+            {
+                if reader.is_ignored(&o.locator)? {
+                    skipped_files += 1;
+                    continue;
                 }
+                // Revision: reuse the cached `git:` revision when the
+                // stat is unchanged (bytes are read ONLY for changed
+                // candidates — clean tracked files keep their hint).
+                let cached_rev = cached_manifest
+                    .iter()
+                    .find(|c| c.locator == o.locator)
+                    .filter(|c| c.bytes == o.bytes && c.modified_ns == o.modified_ns)
+                    .map(|c| c.revision.clone());
+                let rev = match cached_rev {
+                    Some(r) if r.starts_with("git:") => r,
+                    _ => {
+                        let bytes = read_worktree_bytes(&canonical, &o.locator)?;
+                        reader.current_revision(snap, &o.locator, &bytes)?
+                    }
+                };
+                o.revision_hint = Some(rev);
             }
             observed.push(o);
         }

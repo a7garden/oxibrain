@@ -73,10 +73,10 @@ pub fn build_context_input(
     };
     let ranking = query::hybrid_query(conn, &q, None)?;
     for item in &ranking.items {
-        if let oxibrain_core::TargetId::Statement { id } = &item.target {
-            if let Some(entry) = render_belief(conn, space, id)? {
-                input.beliefs.push(entry);
-            }
+        if let oxibrain_core::TargetId::Statement { id } = &item.target
+            && let Some(entry) = render_belief(conn, space, id)?
+        {
+            input.beliefs.push(entry);
         }
     }
 

@@ -454,10 +454,8 @@ impl GitDocumentReader {
                 EntryKind::Tree => {
                     self.collect_matching_blobs(entry.oid.to_owned(), &locator, target, out)?;
                 }
-                EntryKind::Blob | EntryKind::BlobExecutable => {
-                    if entry.oid == target {
-                        out.push(locator);
-                    }
+                EntryKind::Blob | EntryKind::BlobExecutable if entry.oid == target => {
+                    out.push(locator);
                 }
                 _ => {}
             }

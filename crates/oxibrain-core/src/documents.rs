@@ -141,7 +141,7 @@ pub enum FileAction {
 /// Compatibility rule:
 ///   - same `(bytes, modified_ns)` AND
 ///     (`observed.revision_hint == Some(cached.revision)` OR
-///      `observed.revision_hint == None`)  ⇒ Unchanged
+///     `observed.revision_hint == None`)  ⇒ Unchanged
 ///   - same `(bytes, modified_ns)` AND `observed.revision_hint` differs
 ///     from cached revision  ⇒ Replace
 ///   - `(bytes, modified_ns)` differs  ⇒ Replace

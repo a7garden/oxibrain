@@ -22,7 +22,7 @@ edition = "2024"
 version = "0.9.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/a7garden/oxibrain"
-rust-version = "1.85"
+rust-version = "1.96"
 
 [workspace.dependencies]
 oxibrain = { path = "crates/oxibrain", version = "0.9.0" }
@@ -65,10 +65,10 @@ glob = "0.3"
 toml = "0.8"
 gix = "0.83"
 # Transitive via prodash → gix-features → gix. prodash requires `^1.0.3`;
-# human_format 1.2.x uses `if let … && …` let-chains, which are unstable on
-# our MSRV rustc 1.85 (E0658) and break registry re-resolution of published
-# oxibrain crates (the consumer smoke). Pin 1.1.0 so both the lock and the
-# published manifests force the MSRV-compatible version.
+# human_format 1.2.x uses `if let … && …` let-chains. Those are stable since
+# rustc 1.88, so at our MSRV 1.96 the 1.2.x line now compiles; the 1.1.0 pin
+# is retained for lock/published-manifest determinism (unpinning is a separate
+# dependency-relief change).
 human_format = "=1.1.0"
 
 [profile.release]

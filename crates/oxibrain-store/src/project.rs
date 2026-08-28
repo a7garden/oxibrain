@@ -549,7 +549,7 @@ pub fn project_declaration(
                 &ep_id,
                 100,
                 now,
-                &[subj_id.clone()],
+                std::slice::from_ref(&subj_id),
                 cache,
             )?;
             if let Some((obj_id, _)) = &obj_resolved.entity {
@@ -641,7 +641,7 @@ pub fn project_declaration(
                 &ep_id,
                 200,
                 now,
-                &[loser_id.clone()],
+                std::slice::from_ref(&loser_id),
                 cache,
             )?;
 
@@ -678,7 +678,7 @@ pub fn project_declaration(
                 &ep_id,
                 100,
                 now,
-                &[subj_id.clone()],
+                std::slice::from_ref(&subj_id),
                 cache,
             )?;
             touched.push(subj_id.clone());

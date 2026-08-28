@@ -121,17 +121,16 @@ impl Brain {
                 Some(g) => llm.generate_constrained(repair_req, g).await,
                 None => llm.complete(repair_req).await,
             };
-            if let Ok(repair_response) = repair_response {
-                if let Ok(repair_parsed) = serde_json::from_str::<
+            if let Ok(repair_response) = repair_response
+                && let Ok(repair_parsed) = serde_json::from_str::<
                     oxibrain_core::extraction::ExtractionResponse,
                 >(&repair_response.text)
-                {
-                    result = oxibrain_core::extraction::validate_claims(
-                        &repair_parsed.claims,
-                        &episode.content,
-                        predicates,
-                    );
-                }
+            {
+                result = oxibrain_core::extraction::validate_claims(
+                    &repair_parsed.claims,
+                    &episode.content,
+                    predicates,
+                );
             }
         }
 

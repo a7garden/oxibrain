@@ -224,10 +224,7 @@ pub fn episodes_for_entities(
     // the subject_id / object_entity halves) so the SQL row shape
     // never disagrees between the two helpers. The output is
     // deduplicated and sorted by id for determinism.
-    let placeholders = std::iter::repeat("?")
-        .take(entity_ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
+    let placeholders = vec!["?"; entity_ids.len()].join(",");
     let sql = format!(
         "SELECT DISTINCT a.episode_id
            FROM assertions a
@@ -282,11 +279,11 @@ pub fn load_community_entities(
 
     let mut groups: Vec<CommunityGroup> = Vec::new();
     for (label, entity_id) in rows {
-        if let Some(g) = groups.last_mut() {
-            if g.label == label as u64 {
-                g.entity_ids.push(entity_id);
-                continue;
-            }
+        if let Some(g) = groups.last_mut()
+            && g.label == label as u64
+        {
+            g.entity_ids.push(entity_id);
+            continue;
         }
         groups.push(CommunityGroup {
             label: label as u64,
@@ -380,10 +377,7 @@ pub fn entities_for_episodes(
     if episode_ids.len() < 2 {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(episode_ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
+    let placeholders = vec!["?"; episode_ids.len()].join(",");
     // An entity is shared iff it appears in ≥ 2 distinct primary episodes of
     // this space via the assertion → statement → entity_id (subject or object)
     // path. Statements are the canonical "what the episode believes about the

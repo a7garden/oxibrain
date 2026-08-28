@@ -176,10 +176,10 @@ fn json_to_sql(val: &serde_json::Value) -> SqlValue {
             }
         }
         serde_json::Value::String(s) => {
-            if let Some(hex_part) = s.strip_prefix("hex:") {
-                if let Ok(bytes) = hex::decode(hex_part) {
-                    return SqlValue::Blob(bytes);
-                }
+            if let Some(hex_part) = s.strip_prefix("hex:")
+                && let Ok(bytes) = hex::decode(hex_part)
+            {
+                return SqlValue::Blob(bytes);
             }
             SqlValue::Text(s.clone())
         }

@@ -341,10 +341,11 @@ fn fold_supersede(
             }
             Some(cur) => {
                 if iv.start == cur.start {
-                    if let Some(last) = beliefs.last_mut() {
-                        if last.statement == cur.stmt && last.status == BeliefStatus::Active {
-                            last.status = BeliefStatus::Contradicted;
-                        }
+                    if let Some(last) = beliefs.last_mut()
+                        && last.statement == cur.stmt
+                        && last.status == BeliefStatus::Active
+                    {
+                        last.status = BeliefStatus::Contradicted;
                     }
                     beliefs.push(Belief {
                         statement: stmt_id.clone(),
@@ -355,14 +356,13 @@ fn fold_supersede(
                         status: BeliefStatus::Contradicted,
                     });
                 } else {
-                    if let Some(last) = beliefs.last_mut() {
-                        if last.statement == cur.stmt
-                            && last.status == BeliefStatus::Active
-                            && last.valid_to >= iv.start
-                        {
-                            last.valid_to = Timestamp(iv.start.millis() - 1);
-                            last.status = BeliefStatus::Superseded;
-                        }
+                    if let Some(last) = beliefs.last_mut()
+                        && last.statement == cur.stmt
+                        && last.status == BeliefStatus::Active
+                        && last.valid_to >= iv.start
+                    {
+                        last.valid_to = Timestamp(iv.start.millis() - 1);
+                        last.status = BeliefStatus::Superseded;
                     }
                     beliefs.push(Belief {
                         statement: stmt_id.clone(),

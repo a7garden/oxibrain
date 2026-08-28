@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.96
 
       - name: Install llama.cpp build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential libcurl4-openssl-dev
@@ -57,8 +57,8 @@ jobs:
 
       # Published crates re-resolve dependencies fresh from the registry (no
       # lock file ships), so they must also compile on a recent toolchain —
-      # not just our MSRV 1.85. human_format 1.2.x (via prodash → gix) uses
-      # let-chains that need >1.85, so the smoke runs on stable.
+      # not just our MSRV 1.96. The smoke runs on stable (currently ≥1.96),
+      # which also catches versions the pinned CI toolchain has not seen.
       - name: Consumer smoke (published crates resolve from the registry)
         run: |
           rustup toolchain install stable --profile minimal

@@ -1,6 +1,8 @@
 [toolchain]
-# Exact patch version: the cargo-deny action's Docker image preinstalls
-# "1.85.0-x86_64-unknown-linux-musl"; a bare "1.85" makes rustup look for
-# a toolchain under that literal name and fail the override check.
-channel = "1.85.0"
+# Exact patch version, aligned with the oxi ecosystem floor (oxios, oxiline,
+# oxicode run 1.96; this pins the 1.96 line's latest patch, 1.96.1). The
+# cargo-deny action's Docker image preinstalls "1.85.0-x86_64-unknown-linux-musl"
+# and rustup fetches this channel on demand; a bare "1.96" makes rustup look
+# for a toolchain under that literal name and fail the override check.
+channel = "1.96.1"
 components = ["rustfmt", "clippy"]

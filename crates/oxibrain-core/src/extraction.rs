@@ -342,14 +342,14 @@ pub fn validate_claims(
                 found: String::new(),
             });
         }
-        if let ClaimObject::Entity { mention } = &mut repaired.object {
-            if !resolve_mention(mention, content) {
-                errors.push(ValidationError::SurfaceNotVerbatim {
-                    surface: mention.surface.clone(),
-                    span: mention.span,
-                    found: String::new(),
-                });
-            }
+        if let ClaimObject::Entity { mention } = &mut repaired.object
+            && !resolve_mention(mention, content)
+        {
+            errors.push(ValidationError::SurfaceNotVerbatim {
+                surface: mention.surface.clone(),
+                span: mention.span,
+                found: String::new(),
+            });
         }
         if let ClaimObject::Literal {
             quote, value, span, ..
@@ -428,18 +428,18 @@ fn resolve_mention(m: &mut MentionRef, content: &str) -> bool {
         return true;
     }
     // 2. Char-index span.
-    if let Some(range) = char_span_to_bytes(content, a, b) {
-        if content.get(range.clone()) == Some(m.surface.as_str()) {
-            m.span = (range.start as u32, range.end as u32);
-            return true;
-        }
+    if let Some(range) = char_span_to_bytes(content, a, b)
+        && content.get(range.clone()) == Some(m.surface.as_str())
+    {
+        m.span = (range.start as u32, range.end as u32);
+        return true;
     }
     // 3. Casing drift at the same span: the content is the source of truth.
-    if let Some(found) = content.get(a..b) {
-        if found.eq_ignore_ascii_case(m.surface.as_str()) {
-            m.surface = found.to_string();
-            return true;
-        }
+    if let Some(found) = content.get(a..b)
+        && found.eq_ignore_ascii_case(m.surface.as_str())
+    {
+        m.surface = found.to_string();
+        return true;
     }
     false
 }

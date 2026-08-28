@@ -209,10 +209,10 @@ mod tests {
                 "content":{"type":"text","text":"{\"claims\":[]}"},
                 "model":"test-model"
             }});
-            if let Ok(mut guard) = mock.handle.pending.lock() {
-                if let Some(sender) = guard.remove(&id) {
-                    let _ = sender.send(response);
-                }
+            if let Ok(mut guard) = mock.handle.pending.lock()
+                && let Some(sender) = guard.remove(&id)
+            {
+                let _ = sender.send(response);
             }
         });
 
@@ -238,10 +238,10 @@ mod tests {
             let id = req["id"].as_i64().unwrap();
             let response = json!({"jsonrpc":"2.0","id":id,
                                    "error":{"code":-32603,"message":"policy denied"}});
-            if let Ok(mut guard) = mock.handle.pending.lock() {
-                if let Some(sender) = guard.remove(&id) {
-                    let _ = sender.send(response);
-                }
+            if let Ok(mut guard) = mock.handle.pending.lock()
+                && let Some(sender) = guard.remove(&id)
+            {
+                let _ = sender.send(response);
             }
         });
 

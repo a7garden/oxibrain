@@ -188,12 +188,11 @@ pub async fn from_env_for_role(role: ProfileRole) -> anyhow::Result<ProviderLlm>
     // is the production default unless the caller passes its own.
     let resolved_profiles =
         foundation::load_profiles(&foundation::foundation_home()).map_err(anyhow::Error::msg)?;
-    if let Some(profiles) = resolved_profiles {
-        if let Some(provider) =
+    if let Some(profiles) = resolved_profiles
+        && let Some(provider) =
             try_foundation_profile(&profiles, role, default_secret_resolver().as_ref()).await?
-        {
-            return Ok(provider);
-        }
+    {
+        return Ok(provider);
     }
 
     // Step 3 — ANTHROPIC_* / OPENAI_* compat env.

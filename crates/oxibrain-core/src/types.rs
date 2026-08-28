@@ -26,9 +26,10 @@ impl std::fmt::Debug for ContentHash {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustTier {
+    #[default]
     Trusted,
     SemiTrusted,
     Untrusted,
@@ -57,12 +58,6 @@ impl TrustTier {
             Self::SemiTrusted => 1,
             Self::Untrusted => 2,
         }
-    }
-}
-
-impl Default for TrustTier {
-    fn default() -> Self {
-        Self::Trusted
     }
 }
 

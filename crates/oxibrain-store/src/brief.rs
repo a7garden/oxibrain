@@ -235,15 +235,15 @@ fn build_neighbours(
                     direction: "out".to_string(),
                 });
             }
-        } else if let Object::Entity(eid) = &s.object {
-            if eid == entity_id {
-                out.push(NeighbourData {
-                    surface: surface_of(conn, &s.subject)?,
-                    entity: s.subject.clone(),
-                    predicate: s.predicate.clone(),
-                    direction: "in".to_string(),
-                });
-            }
+        } else if let Object::Entity(eid) = &s.object
+            && eid == entity_id
+        {
+            out.push(NeighbourData {
+                surface: surface_of(conn, &s.subject)?,
+                entity: s.subject.clone(),
+                predicate: s.predicate.clone(),
+                direction: "in".to_string(),
+            });
         }
     }
     out.sort_by(|a, b| {

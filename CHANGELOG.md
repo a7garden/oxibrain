@@ -4,6 +4,18 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [Unreleased]
+
+### Toolchain
+
+- **Rust 1.96.1, aligned with the oxi ecosystem** — `rust-toolchain.toml`
+  pins 1.96.1 (oxios/oxiline/oxicode run the 1.96 line); workspace
+  `rust-version` and `clippy.toml` MSRV move to 1.96; CI installs
+  `dtolnay/rust-toolchain@1.96`. Comments that cited the old 1.85 floor
+  (MCP hand-rolled JSON-RPC rationale, `human_format` pin, consumer-smoke
+  note) updated to match.
+
+
 ## [0.8.0] — 2026-08-27
 
 The daemon is gone. The vault becomes a rebuildable document cache; the

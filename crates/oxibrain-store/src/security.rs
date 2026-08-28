@@ -91,10 +91,10 @@ pub fn verify_token(
             }
             let scope: Scope = serde_json::from_str(&scope_json)
                 .map_err(|e| BrainError::Storage(format!("scope parse: {e}")))?;
-            if let Some(exp) = scope.expires_at {
-                if now >= exp {
-                    return Ok(None);
-                }
+            if let Some(exp) = scope.expires_at
+                && now >= exp
+            {
+                return Ok(None);
             }
             Ok(Some(scope))
         }

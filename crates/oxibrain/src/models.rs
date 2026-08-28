@@ -256,7 +256,7 @@ pub async fn pull_entry(
 /// Progress reporter for the CLI: prints `downloaded/total MiB` every 1 MiB.
 pub fn cli_progress(downloaded: u64, total: u64) {
     const CHUNK: u64 = 1 << 20; // 1 MiB
-    if downloaded % CHUNK == 0 || downloaded == total {
+    if downloaded.is_multiple_of(CHUNK) || downloaded == total {
         let dl = downloaded as f64 / (1 << 20) as f64;
         let tot = total as f64 / (1 << 20) as f64;
         eprintln!("  {dl:6.0} / {tot:6.0} MiB");

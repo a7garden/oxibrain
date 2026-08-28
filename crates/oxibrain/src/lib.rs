@@ -451,7 +451,7 @@ impl Brain {
                     .map_err(|e| BrainError::Config(format!("entity embedding: {e}")))?;
                 let with_vectors: Vec<(String, Vec<f32>)> = items
                     .into_iter()
-                    .zip(vectors.into_iter())
+                    .zip(vectors)
                     .map(|((id, _), v)| (id, v))
                     .collect();
                 // Phase 3: upsert via one short write op.

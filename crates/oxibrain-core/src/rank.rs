@@ -463,10 +463,10 @@ pub fn rank(input: &RetrievalInput, spec: &Retrieval) -> RankingResult {
                     }
                 }
                 std::collections::hash_map::Entry::Occupied(mut o) => {
-                    if let Some(newer) = input.facts.get(target) {
-                        if newer.confidence > o.get().confidence {
-                            o.insert(newer.clone());
-                        }
+                    if let Some(newer) = input.facts.get(target)
+                        && newer.confidence > o.get().confidence
+                    {
+                        o.insert(newer.clone());
                     }
                 }
             }
@@ -614,10 +614,10 @@ fn target_type_rank(t: &TargetId) -> u8 {
 /// `None` to keep.
 fn check_filters(facts: &TargetFacts, filters: &Filters) -> Option<DropReason> {
     // `as_of` (valid time): drop if outside [valid_from, valid_to].
-    if let Some(t) = filters.as_of {
-        if t < facts.valid_from || t > facts.valid_to {
-            return Some(DropReason::OutsideValidWindow { valid_at: t });
-        }
+    if let Some(t) = filters.as_of
+        && (t < facts.valid_from || t > facts.valid_to)
+    {
+        return Some(DropReason::OutsideValidWindow { valid_at: t });
     }
     // `known_at` (transaction time): drop if recorded after known_at, or
     // retracted before known_at.
@@ -628,13 +628,13 @@ fn check_filters(facts: &TargetFacts, filters: &Filters) -> Option<DropReason> {
                 recorded_at: facts.recorded_at,
             });
         }
-        if let Some(retracted_at) = facts.retracted_at {
-            if retracted_at <= t {
-                return Some(DropReason::BeforeKnownAt {
-                    known_at: t,
-                    recorded_at: retracted_at,
-                });
-            }
+        if let Some(retracted_at) = facts.retracted_at
+            && retracted_at <= t
+        {
+            return Some(DropReason::BeforeKnownAt {
+                known_at: t,
+                recorded_at: retracted_at,
+            });
         }
     }
     // `min_confidence`: simple floor. Believed status gates higher floors
@@ -646,10 +646,10 @@ fn check_filters(facts: &TargetFacts, filters: &Filters) -> Option<DropReason> {
         });
     }
     // `trust`: explicit exclusion list.
-    if let TrustPolicy::Exclude(excluded) = &filters.trust {
-        if excluded.contains(&facts.trust) {
-            return Some(DropReason::TrustExcluded { tier: facts.trust });
-        }
+    if let TrustPolicy::Exclude(excluded) = &filters.trust
+        && excluded.contains(&facts.trust)
+    {
+        return Some(DropReason::TrustExcluded { tier: facts.trust });
     }
     // `predicates`: AllowAll | Allow(list) | Deny(list).
     if !filters.predicates.allows(&facts.predicate) {
@@ -660,12 +660,13 @@ fn check_filters(facts: &TargetFacts, filters: &Filters) -> Option<DropReason> {
     // `entity_types`: store applies this at fetch time as a cheap SQL
     // pushdown, but we re-check here so the conservation guarantee holds
     // even if the store skips it.
-    if let Some(expected) = &filters.entity_types {
-        if !expected.is_empty() && !expected.iter().any(|t| t == &facts.predicate) {
-            return Some(DropReason::EntityTypeMismatch {
-                expected: expected.clone(),
-            });
-        }
+    if let Some(expected) = &filters.entity_types
+        && !expected.is_empty()
+        && !expected.iter().any(|t| t == &facts.predicate)
+    {
+        return Some(DropReason::EntityTypeMismatch {
+            expected: expected.clone(),
+        });
     }
     None
 }
@@ -840,10 +841,11 @@ fn apply_rerank(
                         (last - cand.fused_score).abs()
                     };
                     // Ceiling check: defer near-duplicates.
-                    if let Some(c) = ceiling {
-                        if used_cosine && max_sim > c {
-                            continue;
-                        }
+                    if let Some(c) = ceiling
+                        && used_cosine
+                        && max_sim > c
+                    {
+                        continue;
                     }
                     let mmr = lambda * cand.fused_score - (1.0 - lambda) * sim;
                     if mmr > best_score {

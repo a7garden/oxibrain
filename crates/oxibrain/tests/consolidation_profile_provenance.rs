@@ -757,12 +757,10 @@ async fn summarize_communities_attaches_sources_and_uncertainty() {
         let mut stmt = conn
             .prepare("SELECT to_episode FROM episode_links WHERE rel = 'summarizes'")
             .unwrap();
-        let rows = stmt
-            .query_map([], |r| r.get::<_, String>(0))
+        stmt.query_map([], |r| r.get::<_, String>(0))
             .unwrap()
             .filter_map(|r| r.ok())
-            .collect();
-        rows
+            .collect()
     };
     for link in &link_targets {
         assert!(

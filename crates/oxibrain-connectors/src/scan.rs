@@ -85,10 +85,10 @@ pub fn scan_root(root: &RootEntry) -> Result<ScanResult, BrainError> {
         if !entry.file_type().is_file() {
             // Symlinks surface here with `is_file=false`; explicit symlink
             // entries are also visited as the dirent but never followed.
-            if let Ok(locator) = relative_locator(&canonical, entry.path()) {
-                if entry.path_is_symlink() {
-                    result.rejected(locator, "symlink");
-                }
+            if let Ok(locator) = relative_locator(&canonical, entry.path())
+                && entry.path_is_symlink()
+            {
+                result.rejected(locator, "symlink");
             }
             continue;
         }
