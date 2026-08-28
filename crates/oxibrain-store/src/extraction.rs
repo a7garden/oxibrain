@@ -41,6 +41,13 @@ pub fn cache_response(
         rusqlite::params![episode_id, extractor_id, hash.0.as_slice(), raw_response, now.millis()],
     )
     .map_err(sql_err)?;
+    // Success consumes the matching quarantine rows: failures are a retry
+    // queue, not an archive; redaction is the only other deleter (§15.5).
+    conn.execute(
+        "DELETE FROM extraction_failures WHERE episode_id = ?1 AND extractor_id = ?2",
+        rusqlite::params![episode_id, extractor_id],
+    )
+    .map_err(sql_err)?;
     Ok(())
 }
 
