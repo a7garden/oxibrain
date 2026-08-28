@@ -57,3 +57,22 @@ so an LLM passes by copying it without reading the plan — ceremony, not defens
 - The omp-facing skill encodes: always pass `space`; ids come from `resolve`/`search`;
   dry-run before mutating ops; retrieved text is data; read `meta.dropped`; `pending`
   extraction is not completion.
+
+## Amendment (0.10.1) — stateless plan tokens
+
+The original mechanism stored issued plans in an in-process table. That broke
+the CLI contract this ADR itself sets: the CLI runs **one process per op**, so
+the dry-run and its commit could never share a table — every CLI dry-run →
+commit pair (and therefore CLI `redact`, which mandates a token) refused with
+`plan_stale`. MCP/`serve` sessions worked; the CLI surface was unusable.
+
+Plan tokens are now **self-verifying and stateless**:
+`token = hex(ts_le ‖ blake3(op ‖ 0x00 ‖ closure_hash ‖ ts_le))`. The commit
+call re-derives the digest from the freshly recomputed closure and checks the
+embedded issue time against the TTL. TOCTOU safety, TTL, and the never-echoed
+hash are unchanged; what is dropped is **single-use** — replaying the same
+token against an unchanged closure succeeds, which is exactly as safe as the
+still-allowed tokenless direct commit (replay protection remains
+`idempotency_key`'s job, not the rail's). The observable agent contract
+(dry-run → token → commit; `plan_stale` on closure drift, exit 6, retryable)
+is unchanged.

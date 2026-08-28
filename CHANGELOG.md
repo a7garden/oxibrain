@@ -4,6 +4,24 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [0.10.1] — 2026-08-28
+
+### Fixed
+
+- **Plan tokens are stateless** — the in-process plan table made every CLI
+  dry-run → commit pair refuse with `plan_stale` (each `oxibrain <op>` is a
+  new process, so the commit never saw the dry-run's plan; CLI `redact`,
+  which mandates a token, was uncommittable). Tokens now self-verify:
+  `hex(ts ‖ blake3(op ‖ closure_hash ‖ ts))`, re-derived against the fresh
+  closure at commit. TOCTOU safety, TTL, and the agent contract unchanged;
+  single-use dropped (replay protection stays with `idempotency_key`).
+  (ADR-013 amendment.)
+- **`plan_stale` is a first-class CLI outcome** — it was misclassified as
+  `internal` (exit 9, `retryable: false`); now `error.code = "plan_stale"`,
+  exit 6 (conflict slot, exits stay contiguous 1–9), `retryable: true`.
+- `oxibrain-client` inherits the workspace version again (the one hand-pinned
+  member; the 0.10.0 bump caught it).
+
 ## [0.10.0] — 2026-08-28
 
 The agent-first CLI contract (ARCHITECTURE.md v2.13, ADR-012/013, spec

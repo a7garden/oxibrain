@@ -221,10 +221,19 @@ pub async fn run(dir: &Path, args: &[String]) -> i32 {
             .get("message")
             .and_then(|v| v.as_str())
             .unwrap_or("protocol error");
-        let (exit, code, retry) = match code_num {
-            c if c == INVALID_PARAMS => (EXIT_INVALID_INPUT, "invalid_input", false),
-            c if c == UNAUTHORIZED => (EXIT_UNAUTHORIZED, "unauthorized", false),
-            _ => (EXIT_INTERNAL, "internal", false),
+        let (exit, code, retry) = if message.starts_with("plan_stale:") {
+            // Rail outcome: the dry-run's ledger state moved. `ToolErr::Run`
+            // maps to the JSON-RPC internal code on the wire, so this class
+            // must be recovered from the message. Exit shares the conflict
+            // slot (exits stay contiguous 1–9, F12); recovery is a fresh
+            // dry-run, so retryable.
+            (6, "plan_stale", true)
+        } else {
+            match code_num {
+                c if c == INVALID_PARAMS => (EXIT_INVALID_INPUT, "invalid_input", false),
+                c if c == UNAUTHORIZED => (EXIT_UNAUTHORIZED, "unauthorized", false),
+                _ => (EXIT_INTERNAL, "internal", false),
+            }
         };
         print_envelope(&err_envelope(&op_name, code, message, retry));
         return exit;
@@ -259,6 +268,11 @@ pub async fn run(dir: &Path, args: &[String]) -> i32 {
                 ("model", 8, false)
             } else if text.starts_with("conflict:") {
                 ("conflict", 6, false)
+            } else if text.starts_with("plan_stale:") {
+                // Rail outcome: the dry-run's ledger state moved. Exit code
+                // shares the conflict slot (spec keeps exits contiguous
+                // 1–9, F12); the recovery is a fresh dry-run, so retryable.
+                ("plan_stale", 6, true)
             } else {
                 ("internal", EXIT_INTERNAL, false)
             };

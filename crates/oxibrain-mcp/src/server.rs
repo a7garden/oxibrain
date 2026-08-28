@@ -22,8 +22,7 @@ use oxibrain_core::retrieval::{
 };
 use oxibrain_ports::{ClockPort, SystemClock};
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
 };
@@ -58,8 +57,8 @@ const HANDSHAKE_STORE_FORMAT_VERSION: u32 = 1;
 const SUPPORTED_OPERATIONS: &[ClientOperation] = ClientOperation::ALL;
 
 /// Plan lifetime for destructive-op dry-runs (v2.13 P6). 60s is generous for
-/// an agent round-trip (read plan → decide → commit) while bounding the
-/// window in which a forgotten plan lingers.
+/// an agent round-trip (read plan → decide → commit) while bounding how long
+/// an issued plan stays committable.
 const PLAN_TTL_MS: i64 = 60_000;
 
 /// Result of resolving a declaration's entities for a dry-run plan.
@@ -72,28 +71,12 @@ struct DeclareClosure {
     affected: Vec<Value>,
 }
 
-/// A dry-run plan awaiting its committing call.
-struct PendingPlan {
-    /// Which op the plan was issued for (`declare`|`retract`|`merge_entities`|`redact`).
-    op: String,
-    /// Server-computed hash of the closure at issue time.
-    closure_hash: String,
-    /// Millis since epoch after which the plan is stale.
-    expires_at: i64,
-}
-
 #[derive(Clone)]
 pub struct BrainServer {
     brain: Arc<Brain>,
     /// When set (authenticated transport), tool calls are gated by capability +
     /// space membership (DESIGN §11.2). `None` = trusted local channel.
     scope: Option<Scope>,
-    /// Plan-token table for destructive ops (v2.13 P6, ADR-013 §3).
-    /// `dry_run: true` issues a plan here; the committing call presents the
-    /// token and the server compares closure hashes — TOCTOU-safe, and stale
-    /// plans surface as `plan_stale`. In-process because `serve --stdio` is
-    /// one-shot per agent invocation: the plan's lifetime is the session.
-    plans: Arc<Mutex<HashMap<String, PendingPlan>>>,
 }
 
 impl BrainServer {
@@ -103,7 +86,6 @@ impl BrainServer {
         Ok(Self {
             brain: Arc::new(brain),
             scope: None,
-            plans: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -112,7 +94,6 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: None,
-            plans: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -123,7 +104,6 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: Some(scope),
-            plans: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -132,11 +112,7 @@ impl BrainServer {
     /// Used by authenticated transports that share one brain across many
     /// connections, each resolved to its own scope.
     pub fn from_arc(brain: Arc<Brain>) -> Self {
-        Self {
-            brain,
-            scope: None,
-            plans: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { brain, scope: None }
     }
 
     /// Wrap a shared `Arc<Brain>` with an authorization scope.
@@ -144,7 +120,6 @@ impl BrainServer {
         Self {
             brain,
             scope: Some(scope),
-            plans: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1733,6 +1708,7 @@ impl BrainServer {
 
 /// Tool-level error: `Params` (caller error → JSON-RPC -32602) or `Run`
 /// (execution failure → MCP `isError` text result).
+#[derive(Debug)]
 enum ToolErr {
     Params(String),
     Run(String),
@@ -1840,6 +1816,34 @@ fn bool_arg_or(args: &Value, name: &str, default: bool) -> bool {
     args.get(name).and_then(|v| v.as_bool()).unwrap_or(default)
 }
 
+/// Plan-token layout: 8-byte issue time (le) + 32-byte digest.
+const PLAN_TS_LEN: usize = 8;
+const PLAN_DIGEST_LEN: usize = 32;
+
+/// Self-verifying plan token: `hex(ts_le ‖ blake3(op ‖ 0x00 ‖ closure_hash ‖
+/// ts_le))`. Stateless (v2.13 P6, amended in 0.10.1): the CLI runs one
+/// process per op, so a server-side plan table cannot span a dry-run →
+/// commit pair. The token carries its issue time (expiry check) and a
+/// digest the server re-derives from the freshly recomputed closure at
+/// commit (TOCTOU check). Errors never echo tokens (F7).
+fn plan_token(op: &str, closure_hash: &str, issued_ms: i64) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(op.as_bytes());
+    h.update(&[0u8]);
+    h.update(closure_hash.as_bytes());
+    h.update(&issued_ms.to_le_bytes());
+    let mut bytes = Vec::with_capacity(PLAN_TS_LEN + PLAN_DIGEST_LEN);
+    bytes.extend_from_slice(&issued_ms.to_le_bytes());
+    bytes.extend_from_slice(h.finalize().as_bytes());
+    hex::encode(bytes)
+}
+
+/// Every plan failure funnels to the same first-class rail outcome: the
+/// agent re-runs `dry_run: true` and reads the new plan.
+fn stale_plan(why: &str) -> ToolErr {
+    ToolErr::Run(format!("plan_stale: {why} — re-run `dry_run: true`"))
+}
+
 /// Deterministic fingerprint of a redaction closure — the plan token's
 /// binding to the ledger state it was computed against. Any episode,
 /// statement, or mention added/removed between dry-run and commit changes
@@ -1884,26 +1888,8 @@ impl BrainServer {
     /// back, F7).
     fn issue_plan(&self, op: &str, closure_hash: &str, affected: Value) -> Value {
         let now_ms = SystemClock.now().millis();
-        let token = {
-            // Unpredictable per-issuance token: blake3 over time + closure.
-            // Not guessable from error text; collision odds are negligible
-            // for a per-session table.
-            let mut h = blake3::Hasher::new();
-            h.update(closure_hash.as_bytes());
-            h.update(&now_ms.to_le_bytes());
-            h.update(op.as_bytes());
-            hex::encode(h.finalize().as_bytes())
-        };
+        let token = plan_token(op, closure_hash, now_ms);
         let expires_at = now_ms + PLAN_TTL_MS;
-        let plan = PendingPlan {
-            op: op.to_string(),
-            closure_hash: closure_hash.to_string(),
-            expires_at,
-        };
-        self.plans
-            .lock()
-            .expect("plan table poisoned")
-            .insert(token.clone(), plan);
         json!({
             "plan": {
                 "token": token,
@@ -1914,39 +1900,33 @@ impl BrainServer {
         })
     }
 
-    /// Validate and consume a plan token for the given op. The caller passes
-    /// the *freshly recomputed* closure hash; the stored plan must match it
-    /// (state did not change since the dry-run) and must not be expired.
-    /// On any mismatch the plan is dropped and `plan_stale` returned — the
-    /// agent re-runs `dry_run: true` and reads the new plan.
+    /// Validate a plan token for the given op. The caller passes the
+    /// *freshly recomputed* closure hash; the token must be well-formed,
+    /// within `PLAN_TTL_MS` of its issue time, and re-derive exactly under
+    /// (`op`, `fresh_closure_hash`) — any drift means the ledger moved (or
+    /// the plan was issued for another op) since the dry-run. Every failure
+    /// is `plan_stale`.
     fn consume_plan(
         &self,
         op: &str,
         token: Option<&str>,
         fresh_closure_hash: &str,
     ) -> Result<(), ToolErr> {
-        let token = token.ok_or_else(|| {
-            ToolErr::Run("plan_stale: this op requires a plan token from `dry_run: true`".into())
-        })?;
-        let mut table = self.plans.lock().expect("plan table poisoned");
+        let token = token
+            .ok_or_else(|| stale_plan("this op requires a plan token from `dry_run: true`"))?;
+        let raw = hex::decode(token)
+            .ok()
+            .filter(|raw| raw.len() == PLAN_TS_LEN + PLAN_DIGEST_LEN)
+            .ok_or_else(|| stale_plan("not a plan token"))?;
+        let issued_ms = i64::from_le_bytes(raw[..PLAN_TS_LEN].try_into().expect("ts slice"));
         let now_ms = SystemClock.now().millis();
-        let plan = table.remove(token).ok_or_else(|| {
-            ToolErr::Run("plan_stale: no plan for this token — run `dry_run: true` first".into())
-        })?;
-        if plan.op != op {
-            return Err(ToolErr::Run(format!(
-                "plan_stale: plan issued for `{}`, not `{op}` — re-run dry-run",
-                plan.op
-            )));
+        if (now_ms - issued_ms).abs() > PLAN_TTL_MS {
+            return Err(stale_plan("plan expired"));
         }
-        if plan.expires_at < now_ms {
-            return Err(ToolErr::Run(
-                "plan_stale: plan expired — re-run `dry_run: true`".into(),
-            ));
-        }
-        if plan.closure_hash != fresh_closure_hash {
-            return Err(ToolErr::Run(
-                "plan_stale: ledger state changed since the plan — re-run `dry_run: true`".into(),
+        let expected = plan_token(op, fresh_closure_hash, issued_ms);
+        if expected != *token {
+            return Err(stale_plan(
+                "ledger state changed since the plan (or it was issued for a different op)",
             ));
         }
         Ok(())
@@ -4702,7 +4682,7 @@ mod tests {
         let plan: Value = serde_json::from_str(text).expect("plan parse");
         // v2.13 P6: dry_run returns `plan { token, closure_hash, expires_at, affected }`.
         let token = plan["plan"]["token"].as_str().expect("plan token");
-        assert_eq!(token.len(), 64, "token is 64 hex");
+        assert_eq!(token.len(), 80, "token is ts+digest, 40 bytes / 80 hex");
         assert!(
             plan["plan"]["closure_hash"].as_str().unwrap().len() == 64,
             "closure_hash is 64 hex"
@@ -4762,6 +4742,92 @@ mod tests {
             resp.get("error").is_none(),
             "commit with plan token must succeed: {resp:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn plan_token_survives_server_restart() {
+        // v2.13 P6 amended (0.10.1): the CLI runs one process per op, so the
+        // dry-run and the commit happen in DIFFERENT servers over the same
+        // brain dir. The stateless token must bridge them — the in-process
+        // table this test replaces made every CLI dry-run → commit pair (and
+        // therefore CLI redact) unconditionally plan_stale.
+        let dir = tempfile::TempDir::new().unwrap();
+        let decl = json!({
+            "op": "add_statement",
+            "subject": {"kind": "entity", "surface": "Ada", "type": "Person"},
+            "predicate": "employed_by",
+            "object": {"kind": "entity", "surface": "Acme", "type": "Organization"},
+            "polarity": "affirm",
+            "valid_from": 0,
+            "valid_to": 4102444800000i64
+        });
+        let token = {
+            let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+            let _ = brain.ensure_space("t").await.unwrap();
+            let server = BrainServer::from_brain(brain);
+            let resp = server
+                .handle(msg(
+                    1,
+                    "tools/call",
+                    Some(json!({
+                        "name": "declare",
+                        "arguments": {
+                            "space": "t",
+                            "declaration_json": decl.to_string(),
+                            "dry_run": true
+                        }
+                    })),
+                ))
+                .await
+                .unwrap();
+            assert!(resp.get("error").is_none(), "dry-run failed: {resp:?}");
+            let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+            let plan: Value = serde_json::from_str(text).expect("plan parse");
+            plan["plan"]["token"].as_str().unwrap().to_string()
+        }; // server + brain dropped: a fresh process would start here.
+
+        let brain2 = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let server2 = BrainServer::from_brain(brain2);
+        let resp = server2
+            .handle(msg(
+                2,
+                "tools/call",
+                Some(json!({
+                    "name": "declare",
+                    "arguments": {
+                        "space": "t",
+                        "declaration_json": decl.to_string(),
+                        "plan_token": token
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            resp.get("error").is_none(),
+            "commit across processes must succeed: {resp:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_or_foreign_plan_tokens_are_refused() {
+        let (_dir, server) = fresh_server().await;
+        // Expired: well-formed, correctly bound, but stamped outside TTL.
+        let old_ms = SystemClock.now().millis() - PLAN_TTL_MS - 1;
+        let expired = plan_token("declare", "cafe", old_ms);
+        let err = server
+            .consume_plan("declare", Some(&expired), "cafe")
+            .expect_err("expired token must be refused");
+        assert!(format!("{err:?}").contains("expired"), "got: {err:?}");
+
+        // Foreign op: the digest binds the op name, so a declare token can
+        // never authorize a redact.
+        let fresh_ms = SystemClock.now().millis();
+        let token = plan_token("declare", "cafe", fresh_ms);
+        let err = server
+            .consume_plan("redact", Some(&token), "cafe")
+            .expect_err("cross-op token must be refused");
+        assert!(format!("{err:?}").contains("plan_stale"), "got: {err:?}");
     }
 
     #[tokio::test]

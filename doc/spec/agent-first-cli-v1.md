@@ -155,9 +155,10 @@ is worse than nothing because `"flags": []` sells false assurance):
   registry semantics (cardinality, temporality, invalidation) apply; for `redact`, the full
   closure.
 - **Plan tokens.** `dry_run: true` returns `plan: { token, closure_hash, expires_at }`;
-  the committing call presents the token. The server compares against its own plan —
-  TOCTOU-safe, not guessable from error text. A stale plan is `plan_stale` (retryable via a
-  fresh dry-run). Rejected alternative: `confirm: { expect_closure: N }` echoes — the
+  the committing call presents the token. The server re-derives its own plan from the token
+  and the freshly recomputed closure — TOCTOU-safe, not guessable from error text. A stale
+  plan is `plan_stale` (retryable via a fresh dry-run; exit 6, the conflict slot). Stateless
+  by design: the CLI is one process per op (ADR-013 amendment, 0.10.1). Rejected alternative: `confirm: { expect_closure: N }` echoes — the
   mismatch error discloses the new number, so an LLM satisfies it by copying without reading
   the plan (F7).
 - **Capability-filtered listing.** A session scoped Read-only does not see `redact`,
