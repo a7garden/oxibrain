@@ -8,7 +8,6 @@
 //! Phase 2 keeps the v2.12 default-space fallback for omitted `space`; the
 //! P3 cutover makes `space` required and deletes the chain.
 
-use oxibrain::config::UserConfig;
 use oxibrain::{Brain, BrainConfig};
 use oxibrain_mcp::BrainServer;
 use oxibrain_mcp::protocol::{INVALID_PARAMS, Message, UNAUTHORIZED};
@@ -158,7 +157,7 @@ fn brain_error_parts(e: &BrainError) -> (i32, &'static str, bool) {
 }
 
 /// Run one op end to end; prints the envelope and returns the exit code.
-pub async fn run(dir: &Path, home: Option<&Path>, args: &[String]) -> i32 {
+pub async fn run(dir: &Path, args: &[String]) -> i32 {
     let started = Instant::now();
     let parsed = match parse_op_args(args) {
         Ok(p) => p,
@@ -193,22 +192,10 @@ pub async fn run(dir: &Path, home: Option<&Path>, args: &[String]) -> i32 {
         }
     };
 
-    // P2: omitted `space` still falls back to the configured default (the
-    // P3 cutover makes `space` required — spec §12).
-    let default_space = match UserConfig::load(home) {
-        Ok(cfg) => cfg.default_space,
-        Err(e) => {
-            print_envelope(&err_envelope(
-                &op_name,
-                "invalid_input",
-                &e.to_string(),
-                false,
-            ));
-            return EXIT_INVALID_INPUT;
-        }
-    };
-
-    let server = Arc::new(BrainServer::from_arc(Arc::new(brain)).with_default_space(default_space));
+    // v2.13 (ADR-013): no default-space fallback — the server enforces the
+    // required `space` argument and enumerates available spaces in the
+    // error.
+    let server = Arc::new(BrainServer::from_arc(Arc::new(brain)));
     let msg = Message {
         id: Some(json!(1)),
         method: "tools/call".into(),
@@ -409,8 +396,7 @@ mod tests {
         assert_eq!(parsed.name, "declare");
         let payload = load_payload(parsed.json.as_deref()).unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
-        let server =
-            Arc::new(BrainServer::from_arc(Arc::new(brain)).with_default_space("personal".into()));
+        let server = Arc::new(BrainServer::from_arc(Arc::new(brain)));
         let msg = Message {
             id: Some(json!(1)),
             method: "tools/call".into(),
@@ -420,11 +406,12 @@ mod tests {
         assert!(resp["error"].is_null(), "declare failed: {resp}");
         assert_ne!(resp["result"]["isError"], json!(true));
 
-        // unknown space → typed params error through the same hop.
+        // unknown space → typed params error through the same hop (stats
+        // left the tool list in v2.13; contradictions carries the contract).
         let msg = Message {
             id: Some(json!(2)),
             method: "tools/call".into(),
-            params: Some(json!({ "name": "stats", "arguments": { "space": "ghost" } })),
+            params: Some(json!({ "name": "contradictions", "arguments": { "space": "ghost" } })),
         };
         let resp = server.handle(msg).await.unwrap();
         // ToolErr::Params maps to a JSON-RPC error (INVALID_PARAMS), which

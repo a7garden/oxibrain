@@ -26,11 +26,7 @@ pub async fn run(
     dir: &Path,
     http: Option<String>,
     ui_dir: Option<std::path::PathBuf>,
-    home: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let default_space = oxibrain::config::UserConfig::load(home)
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .default_space;
     let brain = match Brain::open(BrainConfig::at(dir)).await {
         Ok(b) => b,
         Err(BrainError::Locked { holder }) => {
@@ -48,12 +44,12 @@ pub async fn run(
         let addr: std::net::SocketAddr = addr_str
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid --http address '{addr_str}': {e}"))?;
-        return oxibrain_mcp::serve_http(brain, addr, ui_dir, default_space).await;
+        return oxibrain_mcp::serve_http(brain, addr, ui_dir).await;
     }
 
     // Stdio: one session per process, optionally token-gated when the first
     // message on stdin is an `auth` request.
-    oxibrain_mcp::serve_stdio(brain, default_space)
+    oxibrain_mcp::serve_stdio(brain)
         .await
         .context("stdio session")
 }

@@ -14,10 +14,6 @@ fn default_dir() -> PathBuf {
     }
 }
 
-fn resolve_space(flag: Option<&str>, home: Option<&std::path::Path>) -> anyhow::Result<String> {
-    Ok(oxibrain::config::UserConfig::resolve_space(flag, home)?)
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // stdout is the protocol channel for the op surface and `serve --stdio`
@@ -48,18 +44,20 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(code);
         }
         Command::Op(args) => {
-            let code = op::run(&dir, home.as_deref(), &args).await;
+            let code = op::run(&dir, &args).await;
             std::process::exit(code);
         }
 
         // Machine/product lifecycle (spec §10) — not the agent surface.
         Command::Admin { command } => match command {
             AdminCmd::Init { space } => {
-                let space = resolve_space(space.as_deref(), home.as_deref())?;
+                // Creation default (deterministic, reads no config) — not
+                // resolution (ADR-013).
+                let space = space.unwrap_or_else(|| "personal".to_string());
                 cmd::init::run(&dir, &space, explicit_dir, home.as_deref()).await
             }
             AdminCmd::Stats => cmd::stats::run(&dir).await,
-            AdminCmd::Spaces => cmd::spaces::run(&dir, home.as_deref()).await,
+            AdminCmd::Spaces => cmd::spaces::run(&dir).await,
             AdminCmd::Doctor => cmd::doctor::run(&dir).await,
             AdminCmd::Backup {
                 no_projection,
@@ -68,19 +66,14 @@ async fn main() -> anyhow::Result<()> {
             } => cmd::backup::run_backup(&dir, no_projection, no_cache, out).await,
             AdminCmd::Restore { backup } => cmd::backup::run_restore(&dir, backup).await,
             AdminCmd::EntitySplit { surface, ty, space } => {
-                let space = resolve_space(space.as_deref(), home.as_deref())?;
                 cmd::entity_split::run(&dir, &surface, &ty, &space).await
             }
             AdminCmd::Reproject => cmd::reproject::run(&dir).await,
             AdminCmd::Export { out } => cmd::export_cmd::run(&dir, out).await,
             AdminCmd::Import { file } => cmd::import_cmd::run(&dir, &file).await,
-            AdminCmd::ImportOxios { db, space } => {
-                let space = resolve_space(space.as_deref(), home.as_deref())?;
-                cmd::import_oxios::run(&dir, &db, &space).await
-            }
+            AdminCmd::ImportOxios { db, space } => cmd::import_oxios::run(&dir, &db, &space).await,
             AdminCmd::Token { command } => match command {
                 cli::TokenCmd::Issue { space, caps, label } => {
-                    let space = resolve_space(space.as_deref(), home.as_deref())?;
                     cmd::token::run_issue(&dir, &space, &caps, label.as_deref()).await
                 }
                 cli::TokenCmd::List => cmd::token::run_list(&dir).await,
@@ -94,12 +87,11 @@ async fn main() -> anyhow::Result<()> {
                 // stdio is the default transport; the flag exists so the
                 // canonical `serve --stdio` spelling is explicit.
                 let _ = stdio;
-                cmd::serve::run(&dir, http, ui_dir, home.as_deref()).await
+                cmd::serve::run(&dir, http, ui_dir).await
             }
             AdminCmd::Predicate { command } => match command {
                 cli::PredicateCmd::List => cmd::predicate::run(),
                 cli::PredicateCmd::Add { json, space } => {
-                    let space = resolve_space(space.as_deref(), home.as_deref())?;
                     cmd::predicate::run_add(&dir, &json, &space).await
                 }
             },
@@ -111,7 +103,6 @@ async fn main() -> anyhow::Result<()> {
                     effective_to,
                     space,
                 } => {
-                    let space = resolve_space(space.as_deref(), home.as_deref())?;
                     cmd::source_policy::run(
                         &dir,
                         &name,
@@ -128,18 +119,12 @@ async fn main() -> anyhow::Result<()> {
                 cmd::extract::run(&dir, limit).await
             }
             AdminCmd::Index { documents, embed } => cmd::index::run(&dir, documents, embed).await,
-            AdminCmd::Reextract { space } => {
-                let space = resolve_space(space.as_deref(), home.as_deref())?;
-                cmd::reextract::run(&dir, &space).await
-            }
+            AdminCmd::Reextract { space } => cmd::reextract::run(&dir, &space).await,
             AdminCmd::Model { command } => cmd::model::run(&command).await,
             AdminCmd::Eval { suite } => cmd::eval::run(&suite).await,
             AdminCmd::Space { command } => match command {
                 cli::SpaceCmd::Add { name } => {
                     cmd::space_add::run(&dir, explicit_dir, home.as_deref(), &name).await
-                }
-                cli::SpaceCmd::Default { name } => {
-                    cmd::space_default::run(&dir, home.as_deref(), name.as_deref()).await
                 }
                 cli::SpaceCmd::Remove { name, purge } => {
                     cmd::space_remove::run(&dir, home.as_deref(), &name, purge).await

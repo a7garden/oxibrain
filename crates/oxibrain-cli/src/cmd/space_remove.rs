@@ -7,7 +7,6 @@
 //! transaction); then purges the documents cache. Vault directory files
 //! are NEVER deleted; the dir is rmdir'd only when empty.
 
-use oxibrain::config::UserConfig;
 use oxibrain::{Brain, BrainConfig, RedactTarget};
 use oxibrain_connectors::documents_config::{DocumentsConfig, RootEntry};
 use std::path::Path;
@@ -44,14 +43,8 @@ pub async fn run(dir: &Path, home: Option<&Path>, name: &str, purge: bool) -> an
         }
     };
 
-    let default = UserConfig::load(home)
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .default_space;
-    if name == default {
-        anyhow::bail!(
-            "space '{name}' is the default — change it first: oxibrain space default <other>"
-        );
-    }
+    // v2.13 (ADR-013): the default-space refusal is gone with the default —
+    // removal protection is the empty-only / --purge audit below.
     let mut cfg = DocumentsConfig::load(dir)?;
     // Scaffold detection (spec §4.5): the provisioning scaffold is
     // path-conditioned — alias == space == name AND path == the provisioned
@@ -149,25 +142,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn remove_default_space_refuses() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let home = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(home.path().join(".oxi")).unwrap();
-        std::fs::write(
-            home.path().join(".oxi").join("config.toml"),
-            "default_space = \"keep\"\n",
-        )
-        .unwrap();
-        let b = brain(dir.path()).await;
-        let _ = b.ensure_space("keep").await.unwrap();
-        drop(b);
-        let err = run(dir.path(), Some(home.path()), "keep", false)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("default"));
     }
 
     #[tokio::test]

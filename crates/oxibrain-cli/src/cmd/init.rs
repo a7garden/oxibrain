@@ -32,12 +32,9 @@ pub async fn run(
         if r.root_added {
             println!("documents root '{name}' added");
         }
-        let cfg_path = oxibrain::config::UserConfig::config_path(h);
-        if !cfg_path.exists() {
-            oxibrain::config::UserConfig::set_default_space(h, &name)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            println!("default space: {name} ({})", cfg_path.display());
-        }
+        // v2.13 (ADR-013): init no longer seeds `~/.oxi/config.toml`
+        // `default_space` — creation is not resolution, and resolution is
+        // gone: every space-scoped call passes `space` explicitly.
     }
 
     // ADR-005: init stays offline; say so instead of surprising the user later.
@@ -52,7 +49,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn init_provisions_per_space_vault_and_config() {
+    async fn init_provisions_per_space_vault() {
         let dir = tempfile::TempDir::new().unwrap();
         let home = tempfile::TempDir::new().unwrap();
         run(dir.path(), "personal", false, Some(home.path()))
@@ -60,8 +57,8 @@ mod tests {
             .unwrap();
         assert!(home.path().join(".oxi/vault/personal").is_dir());
         assert!(dir.path().join("documents.toml").exists());
-        let cfg = std::fs::read_to_string(home.path().join(".oxi/config.toml")).unwrap();
-        assert!(cfg.contains("default_space = \"personal\""));
+        // v2.13: no config.toml is written — default_space is gone (ADR-013).
+        assert!(!home.path().join(".oxi/config.toml").exists());
         // Idempotent: second init neither clobbers nor duplicates.
         run(dir.path(), "personal", false, Some(home.path()))
             .await
@@ -71,7 +68,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn init_explicit_dir_does_not_touch_foundation() {
+    async fn explicit_dir_stays_off_home() {
         let dir = tempfile::TempDir::new().unwrap();
         let home = tempfile::TempDir::new().unwrap();
         run(dir.path(), "work", true, Some(home.path()))

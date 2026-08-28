@@ -7,18 +7,15 @@ use anyhow::Result;
 use oxibrain::{Brain, BrainConfig};
 use std::path::Path;
 
-pub async fn run(dir: &Path, home: Option<&Path>) -> Result<()> {
+pub async fn run(dir: &Path) -> Result<()> {
     let brain = Brain::open_ro(BrainConfig::at(dir)).await?;
-    let default_space = oxibrain::config::UserConfig::load(home)
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .default_space;
     let spaces = brain.list_spaces().await?;
     println!(
         "{:<26} {:<16} {:<20} {:>9} {:>9} {:>6}",
         "NAME", "ID", "CREATED", "EPISODES", "ENTITIES", "DOCS"
     );
     for s in &spaces {
-        let marker = if s.name == default_space { "*" } else { "" };
+        let marker = "";
         let docs = brain.document_count_for_space(&s.name).await.unwrap_or(0);
         let id = s.id.chars().take(16).collect::<String>();
         println!(
@@ -69,7 +66,7 @@ mod tests {
         drop(brain);
 
         // Run the read-only listing; asserts no error.
-        run(dir.path(), None).await.unwrap();
+        run(dir.path()).await.unwrap();
     }
 
     #[tokio::test]
@@ -80,7 +77,7 @@ mod tests {
         drop(brain);
         // No documents.toml roots: DOCS column is 0; default (config absent) is
         // "personal", which is not in the store — no row is marked.
-        run(dir.path(), None).await.unwrap();
+        run(dir.path()).await.unwrap();
     }
 
     #[test]

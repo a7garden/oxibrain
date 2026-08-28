@@ -27,6 +27,9 @@ use rusqlite::Connection;
 
 /// Cache a raw LLM response for an episode + extractor.
 /// INSERT OR REPLACE: re-extraction with the same extractor overwrites.
+/// A successful write also consumes the quarantine rows for this
+/// (episode, extractor) pair — failures are a retry queue, not an
+/// archive; redaction is the only other deleter (§15.5).
 pub fn cache_response(
     conn: &Connection,
     episode_id: &str,
@@ -39,6 +42,13 @@ pub fn cache_response(
         "INSERT OR REPLACE INTO extractions (episode_id, extractor_id, response_hash, raw_response, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
         rusqlite::params![episode_id, extractor_id, hash.0.as_slice(), raw_response, now.millis()],
+    )
+    .map_err(sql_err)?;
+    // Success consumes the matching quarantine rows: failures are a retry
+    // queue, not an archive; redaction is the only other deleter (§15.5).
+    conn.execute(
+        "DELETE FROM extraction_failures WHERE episode_id = ?1 AND extractor_id = ?2",
+        rusqlite::params![episode_id, extractor_id],
     )
     .map_err(sql_err)?;
     Ok(())

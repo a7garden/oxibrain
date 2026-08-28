@@ -62,9 +62,6 @@ pub struct BrainServer {
     /// When set (authenticated transport), tool calls are gated by capability +
     /// space membership (DESIGN §11.2). `None` = trusted local channel.
     scope: Option<Scope>,
-    /// Default space for tool calls that omit `space` (spec §4.1/§4.6).
-    /// Set from `~/.oxi/config.toml` by `serve`; tests default to "personal".
-    default_space: String,
 }
 
 impl BrainServer {
@@ -74,7 +71,6 @@ impl BrainServer {
         Ok(Self {
             brain: Arc::new(brain),
             scope: None,
-            default_space: "personal".to_string(),
         })
     }
 
@@ -83,7 +79,6 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: None,
-            default_space: "personal".to_string(),
         }
     }
 
@@ -94,7 +89,6 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: Some(scope),
-            default_space: "personal".to_string(),
         }
     }
 
@@ -103,11 +97,7 @@ impl BrainServer {
     /// Used by authenticated transports that share one brain across many
     /// connections, each resolved to its own scope.
     pub fn from_arc(brain: Arc<Brain>) -> Self {
-        Self {
-            brain,
-            scope: None,
-            default_space: "personal".to_string(),
-        }
+        Self { brain, scope: None }
     }
 
     /// Wrap a shared `Arc<Brain>` with an authorization scope.
@@ -115,19 +105,11 @@ impl BrainServer {
         Self {
             brain,
             scope: Some(scope),
-            default_space: "personal".to_string(),
         }
     }
 
-    /// Override the default space applied when a tool omits `space`.
-    /// `serve` sets this from `~/.oxi/config.toml` (spec §4.6).
-    pub fn with_default_space(mut self, name: String) -> Self {
-        self.default_space = name;
-        self
-    }
-
     /// Resolve a space name to its content-derived ID without creating it
-    /// (spec §4.4). Unknown space ⇒ error carrying the `space add` hint.
+    /// (§4.4). Unknown space ⇒ error carrying the `space add` hint.
     async fn resolve_space_id(&self, name: &str) -> Result<String, ToolErr> {
         match self.brain.lookup_space(name).await {
             Ok(Some(id)) => Ok(id),
@@ -138,17 +120,29 @@ impl BrainServer {
         }
     }
 
-    /// The configured default space applied when a tool omits `space`.
-    fn default_space(&self) -> &str {
-        &self.default_space
-    }
-
-    /// The `space` tool argument, falling back to the configured default.
-    fn space_arg(&self, args: &Value) -> String {
-        args.get("space")
-            .and_then(|v| v.as_str())
-            .unwrap_or(self.default_space())
-            .to_string()
+    /// Resolve the **required** `space` argument to its content-derived ID
+    /// (v2.13, ADR-013). An absent or non-string `space` is a params error
+    /// listing the available spaces — the schema teaches, the error
+    /// enumerates; an unknown name keeps the `space add` hint.
+    async fn resolve_space_arg(&self, args: &Value) -> Result<String, ToolErr> {
+        let name = match args.get("space").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                let names: Vec<String> = self
+                    .brain
+                    .list_spaces()
+                    .await
+                    .map_err(ToolErr::run)?
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect();
+                return Err(ToolErr::Params(format!(
+                    "missing required argument 'space'; available: {}",
+                    names.join(", ")
+                )));
+            }
+        };
+        self.resolve_space_id(name).await
     }
 
     /// Map a ToolErr onto the JSON-RPC (code, message) pair for the native
@@ -164,8 +158,8 @@ impl BrainServer {
     /// `None` for unknown tools — dispatch then returns method-not-found.
     fn required_capability(tool: &str) -> Option<Capability> {
         match tool {
-            "search" | "recall" | "brief" | "navigate" | "why" | "contradictions" | "traverse"
-            | "review_merges" | "stats" => Some(Capability::Read),
+            "search" | "recall" | "brief" | "navigate" | "resolve" | "why" | "contradictions"
+            | "traverse" => Some(Capability::Read),
             "ingest" => Some(Capability::Ingest),
             "declare" | "remember" | "retract" | "merge_entities" => Some(Capability::Write),
             "redact" => Some(Capability::Redact),
@@ -199,10 +193,15 @@ impl BrainServer {
         // The space already exists by virtue of being in `scope.spaces`,
         // so a `None` here means the caller asked for a space the scope
         // does not authorize.
-        let space = args
-            .get("space")
-            .and_then(|v| v.as_str())
-            .unwrap_or(self.default_space());
+        let space = match args.get("space").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                return Err((
+                    INVALID_PARAMS,
+                    "missing required argument 'space'".to_string(),
+                ));
+            }
+        };
         let space_id = match self
             .brain
             .lookup_space(space)
@@ -379,6 +378,29 @@ impl BrainServer {
                 },
                 None => None,
             },
+            "stats" => match msg.id {
+                Some(id) => match self.rpc_stats(msg.params.as_ref()).await {
+                    Ok(v) => Some(success(id, v)),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
+            "review" => match msg.id {
+                Some(id) => match self.enforce_scope_capability(Capability::Read).await {
+                    Ok(()) => {
+                        let params = msg.params.clone().unwrap_or(json!({}));
+                        match self.rpc_review(&params).await {
+                            Ok(v) => Some(success(id, text_result(v))),
+                            Err(e) => {
+                                let (code, m) = Self::tool_err_code(e);
+                                Some(error(id, code, m))
+                            }
+                        }
+                    }
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
             "pending_stats" => match msg.id {
                 Some(id) => match self.rpc_pending_stats().await {
                     Ok(v) => Some(success(id, v)),
@@ -540,11 +562,10 @@ impl BrainServer {
             "recall" => self.tool_recall(&args).await,
             "brief" => self.tool_brief(&args).await,
             "navigate" => self.tool_navigate(&args).await,
+            "resolve" => self.tool_resolve(&args).await,
             "traverse" => self.tool_traverse(&args).await,
             "why" => self.tool_why(&args).await,
             "contradictions" => self.tool_contradictions(&args).await,
-            "stats" => self.tool_stats(&args).await,
-            "review_merges" => self.tool_review_merges(&args).await,
             "ingest" => self.tool_ingest(&args, session).await,
             "remember" => self.tool_remember(&args, session).await,
             "declare" => self.tool_declare(&args).await,
@@ -562,9 +583,26 @@ impl BrainServer {
 
     // ── Tools ──────────────────────────────────────────────────────────────
 
+    /// `resolve` (v2.13): surface + type → entity id. The legal path to ids
+    /// — ids are content-derived (§5.6) and must never be guessed; an id
+    /// slot elsewhere rejects surfaces instead of silently resolving them
+    /// (ADR-013 §5).
+    async fn tool_resolve(&self, args: &Value) -> Result<String, ToolErr> {
+        let surface = str_arg(args, "surface")?;
+        let ty = str_arg(args, "ty")?;
+        let space_id = self.resolve_space_arg(args).await?;
+        match self.brain.resolve_entity_id(&space_id, ty, surface).await {
+            Ok(Some(id)) => Ok(id),
+            Ok(None) => Err(ToolErr::Params(format!(
+                "no entity '{surface}' of type '{ty}' in this space — declare it first \
+                 or check the surface form"
+            ))),
+            Err(e) => Err(ToolErr::run(e)),
+        }
+    }
     async fn tool_search(&self, args: &Value) -> Result<String, ToolErr> {
         let query = str_arg(args, "query")?;
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let mode = parse_mode(&str_arg_or(args, "mode", "hybrid"));
         let limit = u_arg_or(args, "limit", 20);
         let q = Query {
@@ -581,7 +619,7 @@ impl BrainServer {
     }
     async fn tool_recall(&self, args: &Value) -> Result<String, ToolErr> {
         let query = str_arg(args, "query")?;
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let budget = u_arg_or(args, "token_budget", 3000);
         let ctx = self
             .brain
@@ -592,7 +630,7 @@ impl BrainServer {
     }
 
     async fn tool_brief(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         // Discriminator: `target_kind` is `entity` (default for back-compat),
         // `space`, or `topic`. Entity uses `entity_id`; topic uses `topic`.
         let kind = args
@@ -628,7 +666,7 @@ impl BrainServer {
     async fn tool_navigate(&self, args: &Value) -> Result<String, ToolErr> {
         let from = str_arg(args, "from")?;
         let link = str_arg(args, "link")?;
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         self.brain
             .navigate(&space_id, from, link)
             .await
@@ -686,7 +724,7 @@ impl BrainServer {
         session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
     ) -> Result<String, ToolErr> {
         let content = str_arg(args, "content")?;
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let path = str_arg_or(args, "source_path", "mcp");
         let extract = args
             .get("extract")
@@ -774,7 +812,7 @@ impl BrainServer {
 
     async fn tool_declare(&self, args: &Value) -> Result<String, ToolErr> {
         let decl_json = str_arg(args, "declaration_json")?;
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let decl: Declaration = serde_json::from_str(decl_json)
             .map_err(|e| ToolErr::Params(format!("declaration parse: {e}")))?;
         let id = self
@@ -787,7 +825,7 @@ impl BrainServer {
 
     async fn tool_why(&self, args: &Value) -> Result<String, ToolErr> {
         let statement_id = str_arg(args, "statement_id")?;
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let explain = self
             .brain
             .why(&space_id, statement_id)
@@ -827,7 +865,7 @@ impl BrainServer {
         serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
     }
     async fn tool_contradictions(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let details = self
             .brain
             .contradiction_details(&space_id)
@@ -836,16 +874,31 @@ impl BrainServer {
         to_json(&details)
     }
 
-    async fn tool_stats(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
-        let stats = self.brain.stats(&space_id).await.map_err(ToolErr::run)?;
-        to_json(&stats)
+    /// Native method `stats` (v2.13: left the tool list — orientation data
+    /// lives in `describe`/the console, ADR-012). Read-gated like resources.
+    async fn rpc_stats(&self, args: Option<&Value>) -> Result<Value, (i64, String)> {
+        let params = args.ok_or((INVALID_PARAMS, "missing 'params'".into()))?;
+        let space = params
+            .get("space")
+            .and_then(Value::as_str)
+            .ok_or((INVALID_PARAMS, "missing required argument 'space'".into()))?;
+        self.enforce_scope_capability(Capability::Read).await?;
+        let space_id = self
+            .resolve_space_id(space)
+            .await
+            .map_err(Self::tool_err_code)?;
+        let stats = self
+            .brain
+            .stats(&space_id)
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+        serde_json::to_value(&stats).map_err(|e| (INTERNAL_ERROR, e.to_string()))
     }
 
     // ── Read tools: traverse, timeline, review_merges ────────────────────
 
     async fn tool_traverse(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let start = args
             .get("start")
             .and_then(|v| v.as_array())
@@ -887,8 +940,10 @@ impl BrainServer {
         to_json(&result)
     }
 
-    async fn tool_review_merges(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+    /// Native method `review` (v2.13: the console data sections moved off the
+    /// tool list — ADR-012; the console and `admin review` call this).
+    async fn rpc_review(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.resolve_space_arg(args).await?;
         let section = str_arg_or(args, "section", "merges");
         match section.as_str() {
             "failures" => {
@@ -928,7 +983,7 @@ impl BrainServer {
         let space = args
             .and_then(|a| a.get("space"))
             .and_then(Value::as_str)
-            .unwrap_or(self.default_space());
+            .ok_or((INVALID_PARAMS, "missing required argument 'space'".into()))?;
         // Read-only resolution (§4.4): reproject must not create spaces.
         let space_id = self
             .resolve_space_id(space)
@@ -982,7 +1037,7 @@ impl BrainServer {
         let space = params
             .get("space")
             .and_then(Value::as_str)
-            .unwrap_or(self.default_space());
+            .ok_or((INVALID_PARAMS, "missing required argument 'space'".into()))?;
         let alias = params
             .get("alias")
             .and_then(Value::as_str)
@@ -1059,7 +1114,7 @@ impl BrainServer {
         session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
     ) -> Result<String, ToolErr> {
         let content = str_arg(args, "content")?;
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let path = str_arg_or(args, "source_path", "remember");
         let now = SystemClock.now();
         let trust = self.resolve_trust(args);
@@ -1083,7 +1138,7 @@ impl BrainServer {
     }
 
     async fn tool_retract(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         // Statement-first path: when `statement_id` is given, the declaration
         // inputs are rebuilt from the stored statement — callers that hold a
         // statement id (the conflicts inbox) don't have to resubmit resolvable
@@ -1120,7 +1175,7 @@ impl BrainServer {
     }
 
     async fn tool_merge_entities(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let loser: EntityRef =
             serde_json::from_value(args.get("loser").cloned().unwrap_or_default())
                 .map_err(|e| ToolErr::Params(format!("parse loser: {e}")))?;
@@ -1139,7 +1194,7 @@ impl BrainServer {
     // ── Redact tool ──────────────────────────────────────────────────────
 
     async fn tool_redact(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_id(&self.space_arg(args)).await?;
+        let space_id = self.resolve_space_arg(args).await?;
         let kind = str_arg(args, "target_kind")?;
         let target_id = str_arg(args, "target_id")?;
         let reason = str_arg_or(args, "reason", "mcp redact");
@@ -1191,14 +1246,8 @@ impl BrainServer {
     // ── Resources (DESIGN §12.2) ─────────────────────────────────────────
 
     fn resources_list(&self, _params: Option<&Value>) -> Value {
-        let default = self.default_space();
         json!({
             "resources": [{
-                "uri": format!("space://{default}"),
-                "name": format!("Space: {default}"),
-                "description": "Space overview: entity count, episode count, contradictions, recent entities.",
-                "mimeType": "application/json"
-            }, {
                 "uri": "spaces://",
                 "name": "All spaces",
                 "description": "Spaces this session may see: id, name, created_at, episode/entity counts.",
@@ -1249,14 +1298,27 @@ impl BrainServer {
             .filter(|s| !s.is_empty())
             .filter_map(|s| s.split_once('='))
             .collect();
-        // For space:// URIs the path IS the space name. For entity/episode/
-        // graph URIs, the space comes from the ?space= query param
-        // (default: the configured default space).
-
-        let space_name = if scheme == "space" {
-            path
-        } else {
-            qp.get("space").copied().unwrap_or(self.default_space())
+        // Unknown schemes report METHOD_NOT_FOUND before any space logic.
+        if !matches!(
+            scheme,
+            "space" | "spaces" | "entity" | "episode" | "graph" | "timeline"
+        ) {
+            return Err((
+                METHOD_NOT_FOUND,
+                format!("unknown resource scheme: {scheme}"),
+            ));
+        }
+        // For space:// URIs the path IS the space name; `spaces://`
+        // self-filters below. entity/episode/graph/timeline take the space
+        // from the mandatory ?space= query param (v2.13: no default
+        // fallback — ADR-013).
+        let space_name = match scheme {
+            "spaces" => "",
+            "space" => path,
+            _ => qp.get("space").copied().ok_or((
+                INVALID_PARAMS,
+                format!("'{scheme}://' requires a ?space= query param"),
+            ))?,
         };
         // Scope gate: spaces are hard boundaries (§15.1). The `spaces://`
         // scheme self-filters via visible_spaces below, so it is exempt.
@@ -1624,21 +1686,14 @@ where
 /// session is token-gated when (and only when) the first message on stdin is
 /// an `auth` request; any other first message proceeds as a trusted local
 /// session, which is what plain MCP clients send (`initialize`).
-pub async fn serve_stdio(brain: Brain, default_space: String) -> anyhow::Result<()> {
-    run_session_gated(
-        Arc::new(brain),
-        default_space,
-        tokio::io::stdin(),
-        tokio::io::stdout(),
-    )
-    .await
+pub async fn serve_stdio(brain: Brain) -> anyhow::Result<()> {
+    run_session_gated(Arc::new(brain), tokio::io::stdin(), tokio::io::stdout()).await
 }
 
-/// Open a Brain at `dir` and serve it over stdio. Tools omitting `space`
-/// resolve `default_space` (spec §4.6).
-pub async fn serve_stdio_at(dir: &std::path::Path, default_space: String) -> anyhow::Result<()> {
+/// Open a Brain at `dir` and serve it over stdio.
+pub async fn serve_stdio_at(dir: &std::path::Path) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    serve_stdio(brain, default_space).await
+    serve_stdio(brain).await
 }
 
 /// Run one token-gated MCP session over a read/write pair (the stdio shape).
@@ -1651,12 +1706,7 @@ pub async fn serve_stdio_at(dir: &std::path::Path, default_space: String) -> any
 ///   written and the session ends.
 /// - Anything else runs as a trusted local session (the parent process owns
 ///   the pipes, so the channel itself is the trust boundary).
-pub async fn run_session_gated<R, W>(
-    brain: Arc<Brain>,
-    default_space: String,
-    reader: R,
-    writer: W,
-) -> anyhow::Result<()>
+pub async fn run_session_gated<R, W>(brain: Arc<Brain>, reader: R, writer: W) -> anyhow::Result<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -1681,7 +1731,7 @@ where
             .is_some_and(|m| m == "auth")
     });
     if !is_auth {
-        let server = Arc::new(BrainServer::from_arc(brain).with_default_space(default_space));
+        let server = Arc::new(BrainServer::from_arc(brain));
         return session_loop(server, reader, Some(first), out).await;
     }
 
@@ -1701,9 +1751,7 @@ where
                     &success(id_for_response, json!({"authenticated": true})),
                 )
                 .await?;
-                Arc::new(
-                    BrainServer::from_arc_scoped(brain, scope).with_default_space(default_space),
-                )
+                Arc::new(BrainServer::from_arc_scoped(brain, scope))
             }
             Ok(None) => {
                 write_line(
@@ -1751,7 +1799,6 @@ pub async fn serve_http(
     brain: Brain,
     addr: std::net::SocketAddr,
     ui_dir: Option<std::path::PathBuf>,
-    default_space: String,
 ) -> anyhow::Result<()> {
     if !addr.ip().is_loopback() {
         anyhow::bail!(
@@ -1760,7 +1807,7 @@ pub async fn serve_http(
         );
     }
     use tokio::net::TcpListener;
-    let server = Arc::new(BrainServer::from_brain(brain).with_default_space(default_space));
+    let server = Arc::new(BrainServer::from_brain(brain));
     let ui_dir = ui_dir.map(std::sync::Arc::new);
     let listener = TcpListener::bind(addr)
         .await
@@ -2124,11 +2171,10 @@ mod tests {
             "recall",
             "brief",
             "navigate",
+            "resolve",
             "traverse",
             "why",
             "contradictions",
-            "stats",
-            "review_merges",
             "ingest",
             "remember",
             "declare",
@@ -2144,14 +2190,24 @@ mod tests {
                 .find(|t| t["name"] == expected)
                 .unwrap();
             assert_eq!(tool["inputSchema"]["type"], "object");
+            // v2.13 (ADR-013): space is required in every space-scoped schema.
+            assert!(
+                tool["inputSchema"]["required"]
+                    .as_array()
+                    .is_some_and(|r| r.iter().any(|v| v == "space")),
+                "{expected} schema must require space"
+            );
         }
         // Discovery/handshake MUST NOT change the MCP tool surface. The
-        // contract is "fifteen tools, transport-level handshake" — adding a
-        // sixteenth tool here would break that.
+        // contract is "fourteen tools" (v2.13 P3 cutover: −stats,
+        // −review_merges, +resolve; ADR-012).
+        for gone in ["stats", "review_merges"] {
+            assert!(!names.contains(&gone), "{gone} must be off the tool list");
+        }
         assert_eq!(
             names.len(),
-            15,
-            "MCP tool count must remain exactly 15; got {}: {:?}",
+            14,
+            "MCP tool count must remain exactly 14; got {}: {:?}",
             names.len(),
             names
         );
@@ -2430,7 +2486,7 @@ mod tests {
                 "tools/call",
                 Some(json!({
                     "name": "search",
-                    "arguments": { "query": "Alice" }
+                    "arguments": { "query": "Alice", "space": "personal" }
                 })),
             ))
             .await
@@ -2716,27 +2772,23 @@ mod tests {
             .unwrap();
         assert!(resp.get("result").is_some(), "ingest should succeed");
 
+        // v2.13: stats left the tool list — counts ride the native method
+        // and `describe` (ADR-012).
         let resp = server
-            .handle(msg(
-                2,
-                "tools/call",
-                Some(json!({
-                    "name": "stats", "arguments": { "space": "t" }
-                })),
-            ))
+            .handle(msg(2, "stats", Some(json!({ "space": "t" }))))
             .await
             .unwrap();
-        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-        let stats: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(stats["episodes"], 1, "one ingested episode: {text}");
+        assert!(resp["error"].is_null(), "native stats failed: {resp}");
+        let stats: serde_json::Value = resp["result"].clone();
+        assert_eq!(stats["episodes"], 1, "one ingested episode: {stats}");
         assert_eq!(
             stats["statements"], 0,
-            "no extraction ran (ingest only): {text}"
+            "no extraction ran (ingest only): {stats}"
         );
-        assert_eq!(stats["contradictions"], 0, "no contradictions: {text}");
+        assert_eq!(stats["contradictions"], 0, "no contradictions: {stats}");
         assert!(
             stats["entities"].as_i64().unwrap() >= 0,
-            "entities count present: {text}"
+            "entities count present: {stats}"
         );
     }
 
@@ -3082,8 +3134,7 @@ mod tests {
         let (mut client, server_side) = tokio::io::duplex(4096);
         let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ =
-                run_session_gated(Arc::new(brain), "personal".into(), read_half, write_half).await;
+            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
         });
 
         // A non-auth first message proceeds as a trusted local session.
@@ -3123,8 +3174,7 @@ mod tests {
         let (mut stream, server_side) = tokio::io::duplex(8192);
         let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ =
-                run_session_gated(Arc::new(brain), "personal".into(), read_half, write_half).await;
+            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
         });
 
         // Send auth as the first message.
@@ -3166,8 +3216,7 @@ mod tests {
         let (mut stream, server_side) = tokio::io::duplex(4096);
         let (read_half, write_half) = tokio::io::split(server_side);
         let _task = tokio::spawn(async move {
-            let _ =
-                run_session_gated(Arc::new(brain), "personal".into(), read_half, write_half).await;
+            let _ = run_session_gated(Arc::new(brain), read_half, write_half).await;
         });
 
         // Send bad token.
@@ -3298,7 +3347,7 @@ mod tests {
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let addr: std::net::SocketAddr = "127.0.0.1:18099".parse().unwrap();
         let _task = tokio::spawn(async move {
-            let _ = serve_http(brain, addr, None, "personal".into()).await;
+            let _ = serve_http(brain, addr, None).await;
         });
 
         // Wait for listener.
@@ -3339,7 +3388,7 @@ mod tests {
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let addr: std::net::SocketAddr = "127.0.0.1:18100".parse().unwrap();
         let _task = tokio::spawn(async move {
-            let _ = serve_http(brain, addr, None, "personal".into()).await;
+            let _ = serve_http(brain, addr, None).await;
         });
 
         // Wait for listener.
@@ -3745,18 +3794,13 @@ mod tests {
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Merged as episode"), "got: {text}");
 
-        // review_merges should show the merge record.
+        // Native `review` (v2.13: the console sections moved off the tool
+        // list) should show the merge record.
         let resp = server
-            .handle(msg(
-                3,
-                "tools/call",
-                Some(json!({
-                    "name": "review_merges",
-                    "arguments": { "space": "t" }
-                })),
-            ))
+            .handle(msg(3, "review", Some(json!({ "space": "t" }))))
             .await
             .unwrap();
+        assert!(resp["error"].is_null(), "review failed: {resp}");
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         let merges: Vec<Value> = serde_json::from_str(text).expect("merges parse");
         assert_eq!(merges.len(), 1);
@@ -3778,14 +3822,12 @@ mod tests {
         let resp = server
             .handle(msg(
                 2,
-                "tools/call",
-                Some(json!({
-                    "name": "review_merges",
-                    "arguments": { "space": "t", "section": "sources" }
-                })),
+                "review",
+                Some(json!({ "space": "t", "section": "sources" })),
             ))
             .await
             .unwrap();
+        assert!(resp["error"].is_null(), "review failed: {resp}");
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         let sources: Vec<Value> = serde_json::from_str(text).expect("sources parse");
         assert_eq!(sources.len(), 1);
@@ -3802,14 +3844,12 @@ mod tests {
         let resp = server
             .handle(msg(
                 1,
-                "tools/call",
-                Some(json!({
-                    "name": "review_merges",
-                    "arguments": { "space": "t", "section": "failures" }
-                })),
+                "review",
+                Some(json!({ "space": "t", "section": "failures" })),
             ))
             .await
             .unwrap();
+        assert!(resp["error"].is_null(), "review failed: {resp}");
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         let failures: Vec<Value> = serde_json::from_str(text).expect("failures parse");
         assert!(
@@ -3849,49 +3889,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reproject_rpc_defaults_to_personal_space() {
+    async fn reproject_rpc_requires_space() {
         let (_dir, server) = fresh_server().await;
         let _ = server.brain.ensure_space("personal").await.unwrap();
 
-        // No params → default space "personal".
+        // v2.13 (ADR-013): no params → params error, never a default.
         let resp = server.handle(msg(2, "reproject", None)).await.unwrap();
-        assert!(resp["error"].is_null(), "reproject failed: {resp}");
+        let m = resp["error"]["message"].as_str().unwrap_or_default();
         assert!(
-            resp["result"]["completed_at"].as_i64().unwrap() > 0,
-            "got: {resp}"
+            m.contains("required argument 'space'"),
+            "reproject without space must be a params error, got: {resp}"
         );
+
+        // With the space param it works as before.
+        let resp = server
+            .handle(msg(3, "reproject", Some(json!({ "space": "personal" }))))
+            .await
+            .unwrap();
+        assert!(resp["error"].is_null(), "reproject failed: {resp}");
     }
 
     #[tokio::test]
-    async fn tool_omitting_space_uses_configured_default() {
+    async fn tool_omitting_space_is_params_error_with_enum() {
         let (dir, server) = fresh_server().await;
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let _ = brain.ensure_space("dev").await.unwrap();
         drop(brain);
-        let server = server.with_default_space("dev".into());
 
-        // A read tool with no `space` param must resolve the configured
-        // default ("dev"), not the built-in "personal" (spec §4.6).
+        // A read tool with no `space` must be rejected with the available
+        // spaces enumerated — the error teaches (v2.13, ADR-013).
         let resp = server
             .handle(msg(
                 1,
                 "tools/call",
-                Some(json!({ "name": "stats", "arguments": {} })),
+                Some(json!({ "name": "contradictions", "arguments": {} })),
             ))
             .await
             .unwrap();
+        let err = resp["error"]["message"].as_str().unwrap_or_default();
         assert!(
-            resp["result"]["content"][0]["text"].is_string(),
-            "stats via configured default must succeed, got: {resp}"
+            err.contains("missing required argument 'space'")
+                && (err.contains("dev") || err.contains("personal")),
+            "missing space must enumerate spaces, got: {err}"
         );
 
         // An unknown explicit space is a caller error carrying the hint —
-        // never an implicit creation (spec §4.4).
+        // never an implicit creation (§4.4).
         let resp = server
             .handle(msg(
                 2,
                 "tools/call",
-                Some(json!({ "name": "stats", "arguments": { "space": "ghost" } })),
+                Some(json!({ "name": "contradictions", "arguments": { "space": "ghost" } })),
             ))
             .await
             .unwrap();
@@ -4438,7 +4486,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         let addr: std::net::SocketAddr = "0.0.0.0:8080".parse().unwrap();
-        let result = serve_http(brain, addr, None, "personal".into()).await;
+        let result = serve_http(brain, addr, None).await;
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("loopback"), "got: {msg}");

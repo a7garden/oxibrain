@@ -41,7 +41,7 @@ fn search_schema() -> Value {
         "type": "object",
         "properties": {
             "query": { "type": "string", "description": "The search query text." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." },
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
             "mode": { "type": "string", "enum": ["hybrid","lexical","lexical-vector","graph","community"], "description": "Retrieval mode (default: hybrid)." },
             "planes": { "type": "array", "items": { "type": "string", "enum": ["memory","documents"] }, "description": "Planes to search (default: both)." },
             "limit": { "type": "integer", "minimum": 1, "description": "Maximum results per plane (default: 20)." },
@@ -49,7 +49,7 @@ fn search_schema() -> Value {
             "known_at": { "type": "integer", "description": "Transaction-time instant (millis since epoch). Only beliefs recorded by this instant are returned (default: now)." },
             "min_confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Confidence floor (default: 0)." }
         },
-        "required": ["query"]
+        "required": ["query", "space"]
     })
 }
 
@@ -58,10 +58,10 @@ fn recall_schema() -> Value {
         "type": "object",
         "properties": {
             "query": { "type": "string", "description": "What information to assemble." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." },
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
             "token_budget": { "type": "integer", "minimum": 1, "description": "Maximum tokens for the assembled context (default: 3000)." }
         },
-        "required": ["query"]
+        "required": ["query", "space"]
     })
 }
 
@@ -72,9 +72,9 @@ fn brief_schema() -> Value {
             "target_kind": { "type": "string", "enum": ["entity", "space", "topic"], "description": "Which brief to render. Default: entity." },
             "entity_id": { "type": "string", "description": "Required when target_kind=entity. The entity's content-derived ID." },
             "topic": { "type": "string", "description": "Required when target_kind=topic. A keyword to match against entity surface forms (case-insensitive substring)." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
-        "required": []
+        "required": ["space"]
     })
 }
 
@@ -84,9 +84,21 @@ fn navigate_schema() -> Value {
         "properties": {
             "from": { "type": "string", "description": "The view/page the link came from (e.g. an entity:// id)." },
             "link": { "type": "string", "description": "The link to follow (entity://<id> or a raw entity id)." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
-        "required": ["from", "link"]
+        "required": ["from", "link", "space"]
+    })
+}
+
+fn resolve_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "surface": { "type": "string", "description": "The entity's surface form as declared." },
+            "ty": { "type": "string", "description": "The entity's type (e.g. Person, Organization)." },
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
+        },
+        "required": ["surface", "ty", "space"]
     })
 }
 
@@ -95,12 +107,12 @@ fn ingest_schema() -> Value {
         "type": "object",
         "properties": {
             "content": { "type": "string", "description": "The text to ingest." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." },
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
             "source_path": { "type": "string", "description": "Optional source label, e.g. a file path (default: mcp)." },
             "extract": { "type": "boolean", "description": "If true, extract claims via client sampling immediately (default: false)." },
             "trust": { "type": "string", "enum": ["trusted","semi_trusted","untrusted"], "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands)." }
         },
-        "required": ["content"]
+        "required": ["content", "space"]
     })
 }
 
@@ -109,9 +121,9 @@ fn declare_schema() -> Value {
         "type": "object",
         "properties": {
             "declaration_json": { "type": "string", "description": "Canonical declaration JSON (op = add_statement | merge | retract)." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
-        "required": ["declaration_json"]
+        "required": ["declaration_json", "space"]
     })
 }
 
@@ -120,9 +132,9 @@ fn why_schema() -> Value {
         "type": "object",
         "properties": {
             "statement_id": { "type": "string", "description": "The statement ID." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
-        "required": ["statement_id"]
+        "required": ["statement_id", "space"]
     })
 }
 
@@ -130,17 +142,9 @@ fn contradictions_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
-        }
-    })
-}
-
-fn stats_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
-        }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
+        },
+        "required": ["space"]
     })
 }
 
@@ -149,24 +153,14 @@ fn traverse_schema() -> Value {
         "type": "object",
         "properties": {
             "start": { "type": "array", "items": { "type": "string" }, "description": "Entity IDs to start from (at least one required)." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." },
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
             "depth": { "type": "integer", "minimum": 1, "description": "Max traversal depth (default: 3)." },
             "max_nodes": { "type": "integer", "minimum": 1, "description": "Max nodes to return (default: 256)." },
             "direction": { "type": "string", "enum": ["out","in","both"], "description": "Edge direction (default: both)." },
             "valid_at": { "type": "integer", "description": "Valid-time instant (millis since epoch). Walk the graph as believed at this instant (default: now)." },
             "min_confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Confidence floor for edges (default: 0)." }
         },
-        "required": ["start"]
-    })
-}
-
-fn review_merges_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "section": { "type": "string", "enum": ["merges", "failures", "sources"], "description": "What to list (default: merges)." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
-        }
+        "required": ["start", "space"]
     })
 }
 
@@ -175,11 +169,11 @@ fn remember_schema() -> Value {
         "type": "object",
         "properties": {
             "content": { "type": "string", "description": "The fact or note to remember." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." },
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
             "source_path": { "type": "string", "description": "Optional source label (default: remember)." },
             "trust": { "type": "string", "enum": ["trusted","semi_trusted","untrusted"], "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands)." }
         },
-        "required": ["content"]
+        "required": ["content", "space"]
     })
 }
 
@@ -192,9 +186,9 @@ fn retract_schema() -> Value {
             "predicate": { "type": "string", "description": "Predicate name (legacy path)." },
             "object": { "type": "object", "description": "Entity or literal object (legacy path).", "properties": { "kind": {"type":"string","enum":["entity","literal"]} } },
             "episode": { "type": "string", "description": "Originating episode id (audit context)." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
-        "required": []
+        "required": ["space"]
     })
 }
 
@@ -204,9 +198,9 @@ fn merge_entities_schema() -> Value {
         "properties": {
             "loser": { "type": "object", "description": "Entity to merge away: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
             "winner": { "type": "object", "description": "Entity to keep: {\"surface\":\"...\",\"type\":\"...\"}", "properties": { "surface": {"type":"string"}, "type": {"type":"string"} }, "required": ["surface","type"] },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
-        "required": ["loser", "winner"]
+        "required": ["loser", "winner", "space"]
     })
 }
 
@@ -218,9 +212,9 @@ fn redact_schema() -> Value {
             "target_id": { "type": "string", "description": "Episode ID, entity ID, or 'entity_id/predicate' for predicate kind." },
             "reason": { "type": "string", "description": "Audit reason (default: 'mcp redact')." },
             "dry_run": { "type": "boolean", "description": "Preview the closure without modifying anything (default: false)." },
-            "space": { "type": "string", "description": "Space name (default: the configured default space)." }
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." }
         },
-        "required": ["target_kind", "target_id"]
+        "required": ["target_kind", "target_id", "space"]
     })
 }
 
@@ -256,6 +250,13 @@ pub const OPS: &[OpSpec] = &[
         mutating: false,
     },
     OpSpec {
+        name: "resolve",
+        summary: "Resolve an entity surface form + type to its content-derived id — the legal path to ids. Ids are derived (never guessed); an id slot in any other op rejects a surface string instead of silently resolving it.",
+        schema: resolve_schema,
+        caps: &["Read"],
+        mutating: false,
+    },
+    OpSpec {
         name: "ingest",
         summary: "Ingest text content as a new Primary episode. Set extract:true to trigger realtime extraction via client sampling (§12.3) — the server asks the client's model to extract claims. Requires the Sample capability on authenticated sessions.",
         schema: ingest_schema,
@@ -284,23 +285,9 @@ pub const OPS: &[OpSpec] = &[
         mutating: false,
     },
     OpSpec {
-        name: "stats",
-        summary: "Aggregate counts for a space: episodes, entities, statements, and contradicted statements.",
-        schema: stats_schema,
-        caps: &[CAP_READ],
-        mutating: false,
-    },
-    OpSpec {
         name: "traverse",
         summary: "Bounded subgraph traversal from a set of start entities. Returns nodes and edges within the depth/node budget. The graph is belief-filtered: retracted and contradicted edges are excluded (valid_at filters valid time). Useful for multi-hop recall (ToG driver).",
         schema: traverse_schema,
-        caps: &[CAP_READ],
-        mutating: false,
-    },
-    OpSpec {
-        name: "review_merges",
-        summary: "Console data tool. `section` selects what to list: `merges` (default) — entity merge records, by whom (rule/user/import), and when; `failures` — extraction failures (episode, extractor, raw response, errors); `sources` — registered sources (name, kind, mode, claims). All sections return JSON arrays.",
-        schema: review_merges_schema,
         caps: &[CAP_READ],
         mutating: false,
     },
@@ -365,25 +352,28 @@ pub fn tools_list() -> Value {
 mod tests {
     use super::*;
 
-    /// The registry's first output must be byte-identical to the
-    /// pre-refactor hand-written catalogue (ADR-012 migration guard). The
-    /// fixture was blessed from `oxibrain-mcp`'s catalogue before the move
-    /// and is never hand-edited afterwards.
+    /// The registry's output must match the blessed fixture (ADR-012
+    /// migration guard). The fixture is regenerated only deliberately,
+    /// with `BLESS=1 cargo test -p oxibrain-ops` — never hand-edited.
     #[test]
     fn tools_list_matches_blessed_fixture() {
         let generated = serde_json::to_string_pretty(&tools_list()).unwrap();
+        if std::env::var("BLESS").is_ok() {
+            std::fs::write("tests/golden_tools_list.json", generated + "\n").unwrap();
+            return;
+        }
         let fixture = include_str!("../tests/golden_tools_list.json");
         assert_eq!(generated.trim(), fixture.trim());
     }
 
     #[test]
-    fn registry_has_fifteen_unique_ops_with_schemas() {
+    fn registry_has_fourteen_unique_ops_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().unwrap();
         assert_eq!(
             tools.len(),
-            15,
-            "P1 keeps the current 15; the P3 cutover moves to 14"
+            14,
+            "v2.13 P3 cutover: 14 ops (−stats, −review_merges, +resolve; ADR-012)"
         );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         let mut sorted = names.clone();

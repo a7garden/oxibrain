@@ -134,7 +134,7 @@ fn unknown_space_fails_fast_with_hint() {
     init_store(store.path());
     let (ok, out, _) = run_oxibrain(
         store.path(),
-        &["stats", "--json", r#"{ "space": "ghost" }"#],
+        &["contradictions", "--json", r#"{ "space": "ghost" }"#],
     );
     assert!(!ok);
     let env: serde_json::Value = serde_json::from_str(&out).expect("envelope JSON");

@@ -19,7 +19,6 @@ pub mod reproject;
 pub mod serve;
 pub mod source_policy;
 pub mod space_add;
-pub mod space_default;
 pub mod space_remove;
 pub mod spaces;
 pub mod stats;

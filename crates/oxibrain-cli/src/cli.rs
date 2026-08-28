@@ -67,7 +67,7 @@ pub enum AdminCmd {
         surface: String,
         ty: String,
         #[arg(long)]
-        space: Option<String>,
+        space: String,
     },
     /// Reproject the store.
     Reproject,
@@ -82,9 +82,9 @@ pub enum AdminCmd {
     ImportOxios {
         /// Path to the oxios-memory `memory.db` file.
         db: PathBuf,
-        /// Target space (default: personal).
+        /// Target space (required — no resolution chain, ADR-013).
         #[arg(long)]
-        space: Option<String>,
+        space: String,
     },
     /// Token management (DESIGN §12.4: `token issue|list|revoke`).
     Token {
@@ -135,7 +135,7 @@ pub enum AdminCmd {
     /// Re-extract all primary episodes with the configured extractor.
     Reextract {
         #[arg(long)]
-        space: Option<String>,
+        space: String,
     },
     /// Model artifact management (§8.4: `model list|pull|verify|use`).
     Model {
@@ -185,7 +185,7 @@ pub enum TokenCmd {
     /// Issue a new token (returns the secret once).
     Issue {
         #[arg(long)]
-        space: Option<String>,
+        space: String,
         #[arg(long, help = "Comma-separated capabilities (Read,Ingest,Write,Sample)")]
         caps: String,
         #[arg(long)]
@@ -206,57 +206,7 @@ pub enum PredicateCmd {
         /// Full PredicateDef JSON.
         json: String,
         #[arg(long)]
-        space: Option<String>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum EntityCmd {
-    /// Show entity beliefs.
-    Show {
-        id: String,
-        #[arg(long)]
-        space: Option<String>,
-    },
-    /// Merge two entities (loser → winner).
-    Merge {
-        /// Loser entity surface form.
-        loser: String,
-        /// Loser entity type.
-        loser_type: String,
-        /// Winner entity surface form.
-        winner: String,
-        /// Winner entity type.
-        winner_type: String,
-        #[arg(long)]
-        space: Option<String>,
-    },
-    /// Split: undo the most recent merge for an entity.
-    Split {
-        /// Entity surface form.
-        surface: String,
-        /// Entity type.
-        ty: String,
-        #[arg(long)]
-        space: Option<String>,
-    },
-    /// Add an alias to an entity.
-    Alias {
-        /// Entity surface form.
-        surface: String,
-        /// Entity type.
-        ty: String,
-        /// Alias surface form to add.
-        alias: String,
-        #[arg(long)]
-        space: Option<String>,
-    },
-    /// Retract a statement by ID.
-    Retract {
-        /// Statement ID to retract.
-        statement_id: String,
-        #[arg(long)]
-        space: Option<String>,
+        space: String,
     },
 }
 
@@ -276,7 +226,7 @@ pub enum SourceCmd {
         #[arg(long)]
         effective_to: Option<i64>,
         #[arg(long)]
-        space: Option<String>,
+        space: String,
     },
 }
 
@@ -290,14 +240,6 @@ pub enum SpaceCmd {
     Add {
         /// Space name. See `validate_space_name` (Task 1) for rules.
         name: String,
-    },
-    /// Print or set the toml-configured default space (`~/.oxi/config.toml`).
-    ///
-    /// With no argument, prints the current default. With a name, validates
-    /// it, confirms the space exists in the resolved brain, then writes it.
-    Default {
-        /// Space name to promote to default.
-        name: Option<String>,
     },
     /// Remove a space. Refuses by default if the space has episodes,
     /// document chunks, or documents.toml roots referencing it; pass

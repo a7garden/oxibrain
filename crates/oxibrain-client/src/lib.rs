@@ -197,8 +197,10 @@ impl BrainClient {
 
     async fn spawn_child(endpoint: &LocalProcessEndpoint) -> Result<tokio::process::Child> {
         let mut cmd = tokio::process::Command::new(&endpoint.executable);
-        // Arg order is part of the daemonless contract: `serve --stdio --dir`.
-        cmd.arg("serve")
+        // Arg order is part of the daemonless contract: `admin serve --stdio
+        // --dir` (v2.13: serve lives under the admin namespace — ADR-012).
+        cmd.arg("admin")
+            .arg("serve")
             .arg("--stdio")
             .arg("--dir")
             .arg(&endpoint.dir)

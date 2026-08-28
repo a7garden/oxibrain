@@ -50,12 +50,13 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           }
         },
         "required": [
-          "query"
+          "query",
+          "space"
         ],
         "type": "object"
       },
@@ -70,7 +71,7 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "token_budget": {
@@ -80,7 +81,8 @@
           }
         },
         "required": [
-          "query"
+          "query",
+          "space"
         ],
         "type": "object"
       },
@@ -95,7 +97,7 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "target_kind": {
@@ -112,7 +114,9 @@
             "type": "string"
           }
         },
-        "required": [],
+        "required": [
+          "space"
+        ],
         "type": "object"
       },
       "name": "brief"
@@ -130,17 +134,44 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           }
         },
         "required": [
           "from",
-          "link"
+          "link",
+          "space"
         ],
         "type": "object"
       },
       "name": "navigate"
+    },
+    {
+      "description": "Resolve an entity surface form + type to its content-derived id — the legal path to ids. Ids are derived (never guessed); an id slot in any other op rejects a surface string instead of silently resolving it.",
+      "inputSchema": {
+        "properties": {
+          "space": {
+            "description": "Space name (required; enumerate with oxibrain describe).",
+            "type": "string"
+          },
+          "surface": {
+            "description": "The entity's surface form as declared.",
+            "type": "string"
+          },
+          "ty": {
+            "description": "The entity's type (e.g. Person, Organization).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface",
+          "ty",
+          "space"
+        ],
+        "type": "object"
+      },
+      "name": "resolve"
     },
     {
       "description": "Ingest text content as a new Primary episode. Set extract:true to trigger realtime extraction via client sampling (§12.3) — the server asks the client's model to extract claims. Requires the Sample capability on authenticated sessions.",
@@ -159,7 +190,7 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "trust": {
@@ -173,7 +204,8 @@
           }
         },
         "required": [
-          "content"
+          "content",
+          "space"
         ],
         "type": "object"
       },
@@ -188,12 +220,13 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           }
         },
         "required": [
-          "declaration_json"
+          "declaration_json",
+          "space"
         ],
         "type": "object"
       },
@@ -204,7 +237,7 @@
       "inputSchema": {
         "properties": {
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "statement_id": {
@@ -213,7 +246,8 @@
           }
         },
         "required": [
-          "statement_id"
+          "statement_id",
+          "space"
         ],
         "type": "object"
       },
@@ -224,26 +258,16 @@
       "inputSchema": {
         "properties": {
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           }
         },
+        "required": [
+          "space"
+        ],
         "type": "object"
       },
       "name": "contradictions"
-    },
-    {
-      "description": "Aggregate counts for a space: episodes, entities, statements, and contradicted statements.",
-      "inputSchema": {
-        "properties": {
-          "space": {
-            "description": "Space name (default: the configured default space).",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "name": "stats"
     },
     {
       "description": "Bounded subgraph traversal from a set of start entities. Returns nodes and edges within the depth/node budget. The graph is belief-filtered: retracted and contradicted edges are excluded (valid_at filters valid time). Useful for multi-hop recall (ToG driver).",
@@ -275,7 +299,7 @@
             "type": "number"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "start": {
@@ -291,33 +315,12 @@
           }
         },
         "required": [
-          "start"
+          "start",
+          "space"
         ],
         "type": "object"
       },
       "name": "traverse"
-    },
-    {
-      "description": "Console data tool. `section` selects what to list: `merges` (default) — entity merge records, by whom (rule/user/import), and when; `failures` — extraction failures (episode, extractor, raw response, errors); `sources` — registered sources (name, kind, mode, claims). All sections return JSON arrays.",
-      "inputSchema": {
-        "properties": {
-          "section": {
-            "description": "What to list (default: merges).",
-            "enum": [
-              "merges",
-              "failures",
-              "sources"
-            ],
-            "type": "string"
-          },
-          "space": {
-            "description": "Space name (default: the configured default space).",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "name": "review_merges"
     },
     {
       "description": "One-shot ingest + sync extraction for short user facts. Ingests text as a Primary episode and immediately extracts claims via client sampling. Requires the Sample capability on authenticated sessions.",
@@ -332,7 +335,7 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "trust": {
@@ -346,7 +349,8 @@
           }
         },
         "required": [
-          "content"
+          "content",
+          "space"
         ],
         "type": "object"
       },
@@ -378,7 +382,7 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "statement_id": {
@@ -398,7 +402,9 @@
             "type": "object"
           }
         },
-        "required": [],
+        "required": [
+          "space"
+        ],
         "type": "object"
       },
       "name": "retract"
@@ -424,7 +430,7 @@
             "type": "object"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "winner": {
@@ -446,7 +452,8 @@
         },
         "required": [
           "loser",
-          "winner"
+          "winner",
+          "space"
         ],
         "type": "object"
       },
@@ -465,7 +472,7 @@
             "type": "string"
           },
           "space": {
-            "description": "Space name (default: the configured default space).",
+            "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
           },
           "target_id": {
@@ -484,7 +491,8 @@
         },
         "required": [
           "target_kind",
-          "target_id"
+          "target_id",
+          "space"
         ],
         "type": "object"
       },

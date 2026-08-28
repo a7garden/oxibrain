@@ -36,8 +36,11 @@ Derived from the registry, with **zero hand-maintained duplicates**: the MCP `to
 payload, the CLI `oxibrain <op>` dispatch, `oxibrain schema`, and the generated SKILL.md.
 
 `OpCtx` carries the live predicate registry (P4 discipline: predicate semantics come from the
-registry). From P3 on, `declare`'s `predicate` field is a live enum of registered predicate
-names — the same generator that produces the extraction JSON Schema and GBNF grammar.
+registry). **Correction (P3 landing):** `declare`'s payload embeds the declaration as a JSON
+*string* (`declaration_json`), so a JSON-Schema enum cannot see the `predicate` field inside
+it. Registry enforcement for `declare` is therefore **runtime validation** with
+registry-sourced candidates in the error (lands in P4 with the hardening validators);
+schema-level enums apply where fields are direct payload members.
 
 **Slot accounting (the cap stays, the count changes).** The fifteen-tool cap (§16.2) is kept
 as a discipline against surface sprawl, but the set changes:
