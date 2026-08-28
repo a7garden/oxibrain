@@ -4,7 +4,62 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
-## [Unreleased]
+## [0.10.0] — 2026-08-28
+
+The agent-first CLI contract (ARCHITECTURE.md v2.13, ADR-012/013, spec
+`doc/spec/agent-first-cli-v1.md`): the CLI and MCP become two transports
+over one op registry, built for agent callers — predictable envelopes,
+explicit space, dry-run rails, counted budgets.
+
+### Architecture (ARCHITECTURE.md v2.13)
+
+- **One op registry** — new crate `oxibrain-ops` is the single source of
+  truth for the tool surface: MCP `tools/list`, the CLI `oxibrain <op>`
+  dispatch, `oxibrain schema`, and the generated agent skill all derive
+  from it. MCP tools 15 → **14** (cap holds; `stats`/`review_merges`
+  became admin CLI subcommands, `resolve` moved in).
+- **Agent contract (ADR-013)** — every op takes a JSON payload with
+  `space` REQUIRED (no implicit creation; unknown space errors with the
+  `space add` hint); responses use one envelope `{api, ok, op, space?,
+  data, meta}`; exit codes are machine-meaningful (`locked` is a
+  first-class outcome, exit 5, with `wait_lock_ms`); stderr is for
+  humans, stdout is for the caller. Ids are never guessed — surfaces
+  resolve via `resolve`/`search` only.
+
+### Breaking
+
+- CLI human verbs (`remember`, `ask`, `spaces`, `review`, …) are replaced
+  by the 14-op payload dispatch (`oxibrain remember` now reads the same
+  JSON payload as the MCP tool; legacy spelling removed, not deprecated).
+- `declare`/`retract`/`merge_entities`/`redact` validate predicate names
+  against the registry at runtime — unknown predicates are
+  `invalid_input`, not silently `internal`.
+
+### Safety rails (P6)
+
+- **Capability-filtered `tools/list`** — a scoped MCP session sees only
+  the ops its `Scope.caps` allow; read-only callers never learn a
+  mutating op exists.
+- **Plan tokens (dry-run → commit)** — `dry_run: true` returns
+  `{plan: {token, closure_hash, expires_at, affected}}` and writes
+  nothing; committing presents the token, and the server re-derives the
+  closure from current ledger state — a moved ledger refuses with
+  `plan_stale`. `redact` REQUIRES a plan token on every commit.
+
+### Hardening (P4) and instrumentation (P5)
+
+- Validators for 64-hex ids, locators, timestamps, `idempotency_key`;
+  untrusted retrieved text is wrapped with provenance
+  (`untrusted_content`), never inlined raw.
+- Read ops report `meta.tokens` (model-tokenized, budget-bound
+  projections) and `meta.dropped` (what filters/truncation discarded) —
+  an empty result is not "nothing exists" until `dropped` agrees.
+
+### Agent skill (P7)
+
+- **`admin skill install`** — generates `SKILL.md` + `CONTEXT.md` from
+  the op registry (targets: `omp`, `claude`, `raw`), so the skill cannot
+  drift from the live surface.
 
 ### Toolchain
 
@@ -14,6 +69,14 @@ squash-merged.
   `dtolnay/rust-toolchain@1.96`. Comments that cited the old 1.85 floor
   (MCP hand-rolled JSON-RPC rationale, `human_format` pin, consumer-smoke
   note) updated to match.
+
+## [0.9.0] — 2026-08-28
+
+### Features
+
+- **Space lifecycle management** — explicit named spaces with
+  `oxibrain space add|remove`; `documents.toml` roots carry a mandatory
+  `space` field; per-space vaults with a default space in config.
 
 
 ## [0.8.0] — 2026-08-27
