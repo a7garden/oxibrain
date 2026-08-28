@@ -17,6 +17,7 @@ pub mod provision;
 pub mod reextract;
 pub mod reproject;
 pub mod serve;
+pub mod skill;
 pub mod source_policy;
 pub mod space_add;
 pub mod space_remove;

@@ -130,6 +130,9 @@ async fn main() -> anyhow::Result<()> {
                     cmd::space_remove::run(&dir, home.as_deref(), &name, purge).await
                 }
             },
+            AdminCmd::Skill { command } => match command {
+                cli::SkillCmd::Install { target } => cmd::skill::run(&target).await,
+            },
         },
     }
 }

@@ -158,9 +158,26 @@ pub enum AdminCmd {
         #[command(subcommand)]
         command: SpaceCmd,
     },
+    /// Generate/install the agent skill (SKILL.md + CONTEXT.md) from the op
+    /// registry (spec §10: `admin skill install`; derived, never
+    /// hand-maintained).
+    Skill {
+        #[command(subcommand)]
+        command: SkillCmd,
+    },
 }
 
 // ── Nested subcommand groups (DESIGN §12.4) ────────────────────────────────
+
+#[derive(Subcommand, Debug)]
+pub enum SkillCmd {
+    /// Install to a target: `omp` (~/.omp/skills/oxibrain), `claude`
+    /// (~/.claude/skills/oxibrain), or `raw` (print to stdout).
+    Install {
+        #[arg(long, default_value = "omp")]
+        target: String,
+    },
+}
 
 #[derive(Subcommand, Debug)]
 pub enum ModelCmd {
