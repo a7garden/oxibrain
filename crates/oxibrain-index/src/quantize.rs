@@ -408,9 +408,21 @@ pub fn quantize_i8(vec: &[f32]) -> Vec<u8> {
     let scale = max_abs(vec);
     vec.iter()
         .map(|&v| {
-            let unit = if scale > 0.0 { (v / scale).clamp(-1.0, 1.0) } else { 0.0 };
+            let unit = if scale > 0.0 {
+                (v / scale).clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
             (unit * 127.0).round() as i8 as u8
         })
+        .collect()
+}
+
+/// Symmetric int8 quantization with scale 1.0 — for L2-normalized encoder
+/// outputs whose components already satisfy `|x_i| <= 1`. Clamps defensively.
+pub fn quantize_i8_unit(vec: &[f32]) -> Vec<u8> {
+    vec.iter()
+        .map(|&v| (v.clamp(-1.0, 1.0) * 127.0).round() as i8 as u8)
         .collect()
 }
 
@@ -438,7 +450,10 @@ mod int8_tests {
         let qa = dequantize_i8(&quantize_i8(&a));
         let qb = dequantize_i8(&quantize_i8(&b));
         let qc = dequantize_i8(&quantize_i8(&c));
-        assert!(cosine(&qa, &qb) > cosine(&qa, &qc), "similarity ordering must survive");
+        assert!(
+            cosine(&qa, &qb) > cosine(&qa, &qc),
+            "similarity ordering must survive"
+        );
         assert!(
             (cosine(&qa, &qb) - cosine(&a, &b)).abs() < 0.02,
             "cosine drift < 0.02, got {}",
@@ -462,5 +477,16 @@ mod int8_tests {
     fn i8_clamps_and_extremes() {
         let q = quantize_i8(&[-1.0, 1.0]);
         assert_eq!((q[0] as i8, q[1] as i8), (-127, 127));
+    }
+
+    #[test]
+    fn i8_unit_scale_is_identity_for_normalized() {
+        let v: Vec<f32> = vec![-0.5, 0.25, 1.0, -1.0, 0.0];
+        let q = super::quantize_i8_unit(&v);
+        assert_eq!((q[0] as i8, q[1] as i8, q[2] as i8), (-64, 32, 127));
+        // Clamping keeps out-of-range input bounded, not panicking.
+        let big = vec![5.0f32, -5.0];
+        let qb = super::quantize_i8_unit(&big);
+        assert_eq!((qb[0] as i8, qb[1] as i8), (127, -127));
     }
 }

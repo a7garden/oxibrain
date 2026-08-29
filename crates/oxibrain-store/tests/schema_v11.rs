@@ -74,7 +74,7 @@ fn fresh_db_reaches_v11_without_queue() {
     let conn = Connection::open_in_memory().unwrap();
     let v = migration::run(&conn).unwrap();
     assert_eq!(v, LEDGER_SCHEMA_VERSION);
-    assert_eq!(LEDGER_SCHEMA_VERSION, 11);
+    assert_eq!(LEDGER_SCHEMA_VERSION, 12);
 
     assert!(
         !has_table(&conn, "ingest_jobs"),
@@ -97,7 +97,7 @@ fn migrates_from_v10_with_data() {
 
     let v = migration::run(&conn).unwrap();
     assert_eq!(v, LEDGER_SCHEMA_VERSION);
-    assert_eq!(LEDGER_SCHEMA_VERSION, 11);
+    assert_eq!(LEDGER_SCHEMA_VERSION, 12);
 
     // Queue table gone (index goes with it).
     assert!(!has_table(&conn, "ingest_jobs"));

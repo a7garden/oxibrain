@@ -99,6 +99,37 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.pragma_update(None, "user_version", 11i64)
             .map_err(sql_err)?;
     }
+    if current < 12 {
+        ensure_vec_extension();
+        // Convert existing float32 rows to int8 BEFORE the DDL drops the
+        // vec0 table (ADR-014: ranking-half state, converted in place so
+        // no re-embedding pass is required after upgrade).
+        let old: Vec<(String, Vec<u8>)> = {
+            let mut stmt = conn
+                .prepare("SELECT entity_id, embedding FROM entity_vectors")
+                .map_err(sql_err)?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(sql_err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sql_err)?
+        };
+        let sql = include_str!("migrations/v12.sql");
+        conn.execute_batch(sql).map_err(sql_err)?;
+        for (entity_id, blob) in &old {
+            let floats: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            let q = oxibrain_index::quantize_i8_unit(&floats);
+            conn.execute(
+                "INSERT INTO entity_vectors(entity_id, embedding) VALUES (?1, ?2)",
+                rusqlite::params![entity_id, q],
+            )
+            .map_err(sql_err)?;
+        }
+        conn.pragma_update(None, "user_version", 12i64)
+            .map_err(sql_err)?;
+    }
     let now: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sql_err)?;
