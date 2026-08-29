@@ -289,6 +289,18 @@ pub fn insert_event(
     }
 }
 
+/// Count source-registry rows that never produced an episode (the
+/// tempdir-path leak; v13 deletes them at migration, doctor reports them).
+pub fn count_orphan_sources(conn: &Connection) -> Result<i64, BrainError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sources
+         WHERE id NOT IN (SELECT source_id FROM episodes WHERE source_id IS NOT NULL)",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(sql_err)
+}
+
 pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, BrainError> {
     let row = conn.query_row(
         "SELECT id, space_id, seq, content_hash, content, source_kind, source_ref,
