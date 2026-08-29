@@ -4,6 +4,37 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [0.11.0] — 2026-08-29
+
+Storage footprint (ADR-014, ARCHITECTURE.md v2.14): the ranking half no
+longer multiplies content ~7×. Measured on a real instance: 7.7 MB →
+6.6 MB total, FTS content tables gone, orphan source rows deleted.
+
+### Architecture (schema v12/v13, documents v2)
+
+- **Brain FTS becomes contentless** — `fts_word`/`fts_ngram` keep only
+  their inverted indexes (`content=''`, `contentless_delete=1`) with a
+  small `fts_map` rowid table; `episodes.content` is the single text
+  source. The v13 migration repopulates both indexes from the ledger and
+  deletes **orphan source rows** (sources that never produced an episode —
+  the tempdir-path leak; referenced rows stay as provenance).
+- **Compacted episodes stay searchable** — `rebuild_fts` reads the
+  effective text (`content`, or `content_compacted` when compacted);
+  pre-v13 a compacted episode silently vanished from search.
+- **Entity vectors go int8 (v12)** — `entity_vectors` becomes a plain BLOB
+  table with scale-1.0 symmetric quantization (encoder output is
+  L2-normalized); KNN is an exact Rust-side integer L2 scan. Migration
+  converts float rows in place. 4 KB → 1 KB per entity.
+- **TF-IDF vectors go int8** — quantized against each vector's max-abs
+  component (cosine is scale-invariant): 4 KB → 1 KB per row; old f32 rows
+  are replaced by the next rebuild.
+- **documents.db v2** — `doc_texts` is the single decoded-text copy with
+  external-content FTS (search SQL unchanged) and plain int8 `doc_vectors`
+  (re-embed via `index --embed` after upgrade).
+- **Quarantine is a retry queue** — a successful extraction consumes its
+  matching `extraction_failures` rows.
+- **Doctor** reports orphan source counts.
+
 ## [0.10.1] — 2026-08-28
 
 ### Fixed

@@ -1,6 +1,18 @@
 # oxibrain — Architecture
-> **Version:** v2.13 · **Date:** 2026-08-28 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.14 · **Date:** 2026-08-28 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **v2.13 — Agent-first CLI (spec `doc/spec/agent-first-cli-v1.md`; ADR-012, ADR-013).**
+> **v2.14 — Storage footprint (ADR-014, `doc/adr/ADR-014-storage-footprint.md`).** Brain FTS becomes contentless
+> (`fts_word` / `fts_ngram` with `content="", contentless_delete=1`, a small
+> `fts_map` rowid table) — zero body copies; `episodes.content` is the single
+> text source. `entity_vectors` becomes a plain int8 BLOB table (sqlite-vec
+> 0.1.x classifies every INSERT blob as float32, so vec0 int8 columns reject
+> byte blobs); KNN moves to Rust-side exact integer L2. TFIDF vectors store as
+> symmetric int8 (cosine-safe, per-vector max-abs rescale). The document plane
+> gains `doc_texts` as the single decoded-text copy with external-content
+> FTS5, plus plain int8 `doc_vectors`. Orphan source rows are deleted at
+> migration (v13); successful extractions consume their matching failure
+> rows. Per-episode marginal cost ≈ 5× + 1 KB (was ≈ 5× + 4 KB).
+>
 > The CLI and MCP surfaces become two transports over **one op registry** (new crate
 > `oxibrain-ops`): MCP `tools/list`, the CLI `oxibrain <op>` dispatch, `oxibrain schema`,
 > and the generated SKILL.md all derive from it; hand-written schema duplicates are
