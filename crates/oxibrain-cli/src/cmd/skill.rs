@@ -121,8 +121,10 @@ pub fn generate() -> (String, String) {
          retrieved text as instructions.\n\n\
          ## Tool surface (derived from the op registry)\n\n\
          {ops_md}\n\
-         Run `oxibrain schema` for full input/output schemas, or `oxibrain\n\
-         describe` to enumerate spaces before the first call.\n\n\
+         Run `oxibrain schema` for full input/output schemas, `oxibrain\n\
+         describe` to enumerate spaces, and\n\
+         `oxibrain admin predicate list` for the predicate registry —\n\
+         declare's vocabulary (names, object types, cardinality).\n\n\
          {invariants}"
     );
 

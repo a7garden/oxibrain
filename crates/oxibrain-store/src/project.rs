@@ -474,6 +474,27 @@ fn parse_literal(lt: &str, value: &str) -> Result<TypedValue, BrainError> {
     }
 }
 
+/// Registry-sourced rejection for an unknown predicate (spec agent-first-cli
+/// §5: "rejection lists nearest candidates"). The valid set is read live from
+/// the store registry — core/v1 plus every custom registration — and sorted
+/// for determinism. A registry read failure degrades to the bare rejection.
+fn unknown_predicate_error(conn: &Connection, requested: &str) -> BrainError {
+    let valid = registry::load_all_predicates(conn)
+        .map(|defs| {
+            let mut names: Vec<String> = defs.into_keys().collect();
+            names.sort();
+            names.join(", ")
+        })
+        .unwrap_or_default();
+    if valid.is_empty() {
+        BrainError::Invalid(format!("unknown predicate: {requested}"))
+    } else {
+        BrainError::Invalid(format!(
+            "unknown predicate: {requested} — valid predicates: {valid}"
+        ))
+    }
+}
+
 /// Project a declaration: write episode, resolve entities, create assertions,
 /// re-fold affected group, update beliefs. All in one transaction.
 /// `cache` is the persistent `ResolutionCache` from `Brain` (or a fresh local
@@ -491,6 +512,18 @@ pub fn project_declaration(
     // `now` is the transaction time: `recorded_at`, `occurred_at`, `ingested_at`.
     // Callers pass the current wall clock (facade) or an episode's stored
     // ingested_at (reproject) so the derived ids/timestamps are deterministic.
+
+    // Registry gate (P4: semantics in the registry) — reject unknown
+    // predicates before ANY write, including the Declaration episode itself
+    // (spec agent-first-cli §5: rejection lists the valid set so callers
+    // can self-correct).
+    let gated_pred = match decl {
+        Declaration::AddStatement { predicate, .. } => Some(
+            registry::load_predicate(conn, predicate)?
+                .ok_or_else(|| unknown_predicate_error(conn, predicate))?,
+        ),
+        _ => None,
+    };
 
     // 1. Build canonical content + episode.
     let content = canonical_declaration_content(decl);
@@ -621,11 +654,12 @@ pub fn project_declaration(
 
             // 3. Re-fold the affected group.
             let calibration = CalibrationTable::default();
-            let pred_def = registry::load_predicate(conn, predicate)?
-                .ok_or_else(|| BrainError::Invalid(format!("unknown predicate: {predicate}")))?;
+            let pred_def = gated_pred
+                .as_ref()
+                .expect("AddStatement gate resolved the predicate");
 
             let group = kcrud::get_statement_group(conn, space, &subj_id, predicate)?;
-            let beliefs = fold(&pred_def, &group, now, &calibration);
+            let beliefs = fold(pred_def, &group, now, &calibration);
 
             // Collect all statement IDs in the group for belief replacement.
             let group_stmt_ids: Vec<String> =

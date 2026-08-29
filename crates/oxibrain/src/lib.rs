@@ -316,6 +316,22 @@ impl Brain {
         .await
     }
 
+    /// Predicate registry as persisted in the store — the core/v1 seed plus
+    /// every custom registration — ordered by name. The read path for
+    /// registry introspection (`admin predicate list`); semantics stay in
+    /// the registry (P4).
+    pub async fn list_predicates(&self) -> Result<Vec<oxibrain_core::PredicateDef>, BrainError> {
+        self.read(move |conn| {
+            let mut defs: Vec<oxibrain_core::PredicateDef> =
+                oxibrain_store::registry::load_all_predicates(conn)?
+                    .into_values()
+                    .collect();
+            defs.sort_by(|a, b| a.name.cmp(&b.name));
+            Ok(defs)
+        })
+        .await
+    }
+
     /// Episode count for one space id (space-remove empty check, spec §4.5).
     pub async fn episode_count_for_space(&self, space_id: &str) -> Result<i64, BrainError> {
         let space_id = space_id.to_string();

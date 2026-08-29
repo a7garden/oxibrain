@@ -110,3 +110,50 @@ fn supersession_updates_beliefs() {
     assert!(statuses.contains(&"superseded".to_string()));
     assert!(statuses.contains(&"active".to_string()));
 }
+
+#[test]
+fn unknown_predicate_rejected_before_any_write() {
+    let (_dir, conn, clock) = setup();
+
+    let decl = Declaration::AddStatement {
+        subject: EntityRef {
+            surface: "Alice".into(),
+            ty: "Person".into(),
+        },
+        predicate: "emploied_by".into(), // typo — not in the registry
+        object: DeclObject::Entity {
+            surface: "Acme".into(),
+            ty: "Organization".into(),
+        },
+        polarity: "affirm".into(),
+        valid_from: TIME_MIN.millis(),
+        valid_to: TIME_MAX.millis(),
+    };
+
+    let mut cache = ResolutionCache::new();
+    let err = project_declaration(&conn, "s1", &decl, clock.now(), &mut cache)
+        .expect_err("unknown predicate must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("unknown predicate: emploied_by"), "{msg}");
+    assert!(
+        msg.contains("employed_by"),
+        "rejection must list the valid set (spec §5): {msg}"
+    );
+
+    // Fail-fast proof: the old path inserted the episode, statement,
+    // assertion, and mentions before discovering the bad predicate. Called
+    // without an ambient transaction here, so any pre-validation write
+    // would survive as orphan rows.
+    for table in [
+        "episodes",
+        "statements",
+        "assertions",
+        "mentions",
+        "entities",
+    ] {
+        let n: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "{table} must stay empty on a rejected declare");
+    }
+}

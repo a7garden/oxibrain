@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
                 cmd::serve::run(&dir, http, ui_dir).await
             }
             AdminCmd::Predicate { command } => match command {
-                cli::PredicateCmd::List => cmd::predicate::run(),
+                cli::PredicateCmd::List => cmd::predicate::run(&dir).await,
                 cli::PredicateCmd::Add { json, space } => {
                     cmd::predicate::run_add(&dir, &json, &space).await
                 }

@@ -37,6 +37,7 @@ fn generated_skill_carries_invariant_contract() {
         "`redact` REQUIRES a plan token",
         "Read `meta.dropped`",
         "`pending` extraction is not completion",
+        "`oxibrain admin predicate list`",
     ] {
         assert!(
             skill.contains(needle),

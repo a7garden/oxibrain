@@ -35,6 +35,7 @@ pub const EXIT_INTERNAL: i32 = 9;
 /// Parsed `oxibrain <op>` invocation: the op name plus transport flags.
 /// Only two flags exist at the op level and both are parsed here — clap's
 /// external-subcommand capture is verbatim.
+#[derive(Debug)]
 pub struct OpArgs {
     pub name: String,
     pub json: Option<String>,
@@ -72,7 +73,8 @@ pub fn parse_op_args(args: &[String]) -> Result<OpArgs, String> {
             }
             _ => {
                 return Err(format!(
-                    "unexpected argument '{flag}': op arguments belong in the --json payload"
+                    "unexpected argument '{flag}': op arguments belong in the --json payload; \
+                     machine verbs live under `oxibrain admin`"
                 ));
             }
         }
@@ -170,7 +172,10 @@ pub async fn run(dir: &Path, args: &[String]) -> i32 {
 
     if oxibrain_ops::find(&op_name).is_none() {
         let names: Vec<&str> = oxibrain_ops::ops().iter().map(|o| o.name).collect();
-        let m = format!("unknown op '{op_name}'; ops: {}", names.join(", "));
+        let m = format!(
+            "unknown op '{op_name}'; ops: {}; machine verbs live under `oxibrain admin`",
+            names.join(", ")
+        );
         print_envelope(&err_envelope(&op_name, "invalid_input", &m, false));
         return EXIT_INVALID_INPUT;
     }
@@ -386,6 +391,11 @@ mod tests {
         assert!(parse_op_args(&["search".into(), "--space".into(), "dev".into()]).is_err());
         assert!(parse_op_args(&["search".into(), "--json".into()]).is_err());
         assert!(parse_op_args(&["search".into(), "--format".into(), "md".into()]).is_err());
+        let err = parse_op_args(&["predicate".into(), "list".into()]).unwrap_err();
+        assert!(
+            err.contains("`oxibrain admin`"),
+            "misdirected admin verb must be hinted: {err}"
+        );
     }
 
     #[test]
