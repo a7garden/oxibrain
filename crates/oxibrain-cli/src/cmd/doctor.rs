@@ -78,5 +78,10 @@ pub async fn run(dir: &Path) -> anyhow::Result<()> {
         }
     }
 
+    // Orphaned source-registry rows: registered but never bound to an
+    // episode (the tempdir-path leak; v13 deletes them at migration).
+    let orphans = brain.orphan_source_count().await?;
+    println!("orphan sources (never produced an episode): {orphans}");
+
     Ok(())
 }

@@ -78,7 +78,7 @@ fn fresh_db_reaches_v10_with_event_identity_columns() {
     let conn = Connection::open_in_memory().unwrap();
     let v = migration::run(&conn).unwrap();
     assert_eq!(v, LEDGER_SCHEMA_VERSION);
-    assert_eq!(LEDGER_SCHEMA_VERSION, 12);
+    assert_eq!(LEDGER_SCHEMA_VERSION, 13);
 
     // New tables exist.
     assert!(has_table(&conn, "sources"));
@@ -112,7 +112,7 @@ fn migrates_from_v9_with_data() {
 
     let v = migration::run(&conn).unwrap();
     assert_eq!(v, LEDGER_SCHEMA_VERSION);
-    assert_eq!(LEDGER_SCHEMA_VERSION, 12);
+    assert_eq!(LEDGER_SCHEMA_VERSION, 13);
 
     // New tables exist.
     assert!(has_table(&conn, "sources"));

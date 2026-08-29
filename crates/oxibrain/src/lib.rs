@@ -683,6 +683,12 @@ impl Brain {
             .await
     }
 
+    /// Source-registry rows that never produced an episode (doctor report).
+    pub async fn orphan_source_count(&self) -> Result<i64, BrainError> {
+        self.read(oxibrain_store::ledger::count_orphan_sources)
+            .await
+    }
+
     pub async fn timeline(
         &self,
         space: &str,

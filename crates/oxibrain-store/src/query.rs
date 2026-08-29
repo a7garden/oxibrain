@@ -477,18 +477,21 @@ pub fn fts_search(
     if fts_query.is_empty() {
         return Ok(Vec::new());
     }
+    // Contentless FTS (v13): the map join supplies the target columns the
+    // contentless table no longer carries.
     let sql = format!(
-        "SELECT target_kind, target_id, rank
-         FROM {table}
-         WHERE {table} MATCH ?1 AND space_id = ?2
+        "SELECT m.target_kind, m.target_id, f.rank
+         FROM {table} f
+         JOIN fts_map m ON m.rowid = f.rowid
+         WHERE {table} MATCH ?1 AND m.space_id = ?2
            AND NOT (
-             {table}.target_kind = 'episode' AND EXISTS (
+             m.target_kind = 'episode' AND EXISTS (
                SELECT 1 FROM episodes e
-               WHERE e.id = {table}.target_id
+               WHERE e.id = m.target_id
                  AND e.source_kind IN ('document', 'document_revision')
              )
            )
-         ORDER BY rank
+         ORDER BY f.rank
          LIMIT ?3"
     );
     let mut stmt = conn.prepare(&sql).map_err(sql_err)?;

@@ -317,11 +317,12 @@ fn execute_space_redaction(
 
     // 3. Teardown in FK-safe order. Cache/derived tables first (no FKs into
     //    truth tables), then truth half (children before parents).
-    //    `fts_word` / `fts_ngram` use column `space_id` (v6 schema —
-    //    `episodes_fts` was dropped in v6 and is gone in v11).
+    //    `fts_word` / `fts_ngram` are contentless (v13): deletes go
+    //    through the fts_map rowids.
     for sql in [
-        "DELETE FROM fts_word WHERE space_id = ?1",
-        "DELETE FROM fts_ngram WHERE space_id = ?1",
+        "DELETE FROM fts_word WHERE rowid IN (SELECT rowid FROM fts_map WHERE space_id = ?1)",
+        "DELETE FROM fts_ngram WHERE rowid IN (SELECT rowid FROM fts_map WHERE space_id = ?1)",
+        "DELETE FROM fts_map WHERE space_id = ?1",
         "DELETE FROM tfidf_vectors WHERE space_id = ?1",
         "DELETE FROM entity_vectors WHERE entity_id IN (SELECT id FROM entities WHERE space_id = ?1)",
         "DELETE FROM communities WHERE space_id = ?1",
