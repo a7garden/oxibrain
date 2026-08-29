@@ -77,7 +77,7 @@ fn open_creates_schema_v1() {
         cache.user_version().unwrap(),
         oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION
     );
-    assert_eq!(oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION, 1);
+    assert_eq!(oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION, 2);
     assert!(dir.path().join("documents.db").exists());
 }
 
@@ -87,7 +87,7 @@ fn open_is_idempotent() {
     let _first = open(dir.path());
     drop(_first);
     let second = open(dir.path());
-    assert_eq!(second.user_version().unwrap(), 1);
+    assert_eq!(second.user_version().unwrap(), 2);
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn open_ro_succeeds_when_db_exists() {
         // Drop releases the lock; the db file persists.
     }
     let ro = DocumentCache::open_ro(dir.path()).unwrap();
-    assert_eq!(ro.user_version().unwrap(), 1);
+    assert_eq!(ro.user_version().unwrap(), 2);
 }
 
 #[test]
@@ -700,4 +700,50 @@ fn assert_row_counts_val(cache: &DocumentCache, table: &str) -> i64 {
         .conn
         .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
         .unwrap()
+}
+
+#[test]
+fn doc_texts_is_the_single_body_copy() {
+    // v2 (ADR-014): doc_texts holds exactly one body per chunk, the FTS
+    // tables are external-content indexes over it, and removing the root
+    // clears doc_texts too.
+    let dir = TempDir::new().unwrap();
+    let cache = open(dir.path());
+
+    let plan = oxibrain_store::documents::ApplyPlan {
+        root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
+        roots: vec![oxibrain_store::documents::RootApply {
+            fingerprint: fp("vault", "personal"),
+            expected_generation: 0,
+            actions: vec![FileAction::Add(obs("notes/a.md", 11, "rev1"))],
+            upserts: vec![ups("notes/a.md", "rev1", "hello world", 1)],
+        }],
+    };
+    cache.apply(&plan).unwrap();
+
+    let bodies: i64 = cache
+        .conn
+        .query_row("SELECT COUNT(*) FROM doc_texts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(bodies, 1, "one body per chunk in doc_texts");
+
+    // External-content: reading the FTS body column routes through
+    // doc_texts, so it returns the canonical copy.
+    let fts_body: String = cache
+        .conn
+        .query_row("SELECT body FROM doc_fts_word LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fts_body, "hello world");
+
+    // Remove the root: doc_texts empties with everything else.
+    let plan = oxibrain_store::documents::ApplyPlan {
+        root_actions: vec![("vault".to_owned(), RootAction::RemoveRoot)],
+        roots: vec![],
+    };
+    cache.apply(&plan).unwrap();
+    let bodies: i64 = cache
+        .conn
+        .query_row("SELECT COUNT(*) FROM doc_texts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(bodies, 0, "doc_texts empties with the document");
 }
