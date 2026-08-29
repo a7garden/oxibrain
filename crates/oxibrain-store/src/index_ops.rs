@@ -7,7 +7,7 @@ use oxibrain_core::chunking::{ChunkPolicy, render_context_prefix, split_into_chu
 use oxibrain_core::knowledge::{Object, Statement};
 use oxibrain_core::object_repr;
 #[allow(unused_imports)]
-use oxibrain_index::{TfIdfModel, TfIdfVector, features};
+use oxibrain_index::{TfIdfModel, TfIdfVector, features, quantize_i8};
 use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
 use rusqlite::{Connection, params};
 
@@ -229,6 +229,8 @@ pub fn rebuild_fts(conn: &Connection, space: &str) -> Result<(), BrainError> {
 }
 
 /// Build TF-IDF model and persist vectors for all episodes + statements in a space.
+/// Vectors are stored symmetric-int8 (§7.4 storage budget, ADR-014):
+/// 1 KB/row instead of 4 KB, cosine-preserving (scale-invariant).
 pub fn rebuild_tfidf(conn: &Connection, space: &str, dim: usize) -> Result<(), BrainError> {
     // Collect all texts.
     let mut texts: Vec<String> = Vec::new();
@@ -275,7 +277,7 @@ pub fn rebuild_tfidf(conn: &Connection, space: &str, dim: usize) -> Result<(), B
         conn.execute(
             "INSERT OR REPLACE INTO tfidf_vectors (space_id, target_kind, target_id, vector)
              VALUES (?1, ?2, ?3, ?4)",
-            params![space, kind, id, vector.to_bytes()],
+            params![space, kind, id, quantize_i8(vector.as_slice())],
         )
         .map_err(sql_err)?;
     }

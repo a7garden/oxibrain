@@ -555,7 +555,9 @@ pub fn load_knn_index(conn: &Connection, space: &str) -> Result<KnnIndex, BrainE
     for row in rows {
         let (kind, id, blob) = row.map_err(sql_err)?;
         let key = format!("{kind}:{id}");
-        let vector = TfIdfVector::from_bytes(&blob);
+        // Stored symmetric-int8 (ADR-014): dequantize back to f32; cosine
+        // is scale-invariant, so retrieval ordering is unchanged.
+        let vector = TfIdfVector::from_vec(oxibrain_index::dequantize_i8(&blob));
         index.insert(key, vector);
     }
     Ok(index)
