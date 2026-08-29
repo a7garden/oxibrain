@@ -134,8 +134,8 @@ pub fn next_seq(conn: &Connection, space: &str) -> Result<u64, BrainError> {
     Ok(max.map(|m| m as u64 + 1).unwrap_or(0))
 }
 
-/// Insert an episode. Idempotent: re-inserting the same (space, content_hash) is a no-op.
-/// Derives id, seq, content_hash. `episode.id`/`seq`/`content_hash` inputs are overwritten.
+/// Insert an episode. Idempotent: re-inserting the same (space, content_hash) is a no-op
+/// that adopts the existing row's identity. `episode.id`/`seq`/`content_hash` are overwritten.
 pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainError> {
     let ch = content_hash(&ep.content);
     let id = episode_id(&ep.space, &ch, &ep.source, ep.occurred_at);
@@ -148,9 +148,23 @@ pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainEr
         )
         .map_err(sql_err)?;
     if exists > 0 {
-        ep.id = id;
+        // Dedup hit (§9.7 layer 1): same content = same episode. Adopt the
+        // EXISTING row's identity — recomputing the id from the caller's
+        // occurred_at would mint an id that no episode row backs, and
+        // downstream rows (assertions, mentions) would FK-fail on commit.
+        let (existing_id, existing_seq): (String, i64) = conn
+            .query_row(
+                "SELECT id, seq FROM episodes
+                 WHERE space_id = ?1 AND content_hash = ?2
+                 ORDER BY seq LIMIT 1",
+                params![ep.space, ch.as_bytes()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(sql_err)?;
+        ep.id = existing_id;
+        ep.seq = existing_seq as u64;
         ep.content_hash = ch;
-        return Ok(()); // no-op (ARCHITECTURE.md §9.7 idempotency layer 1)
+        return Ok(());
     }
     let seq = next_seq(conn, &ep.space)?;
     let (source_kind, source_ref) = ep.source.db_columns();
