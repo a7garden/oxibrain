@@ -49,10 +49,10 @@ fn default_exclude() -> Vec<String> {
 /// entries that aren't tilde-prefixed. Shared with `space remove`, whose
 /// scaffold detection is path-conditioned (spec §4.5).
 pub(crate) fn root_path_for(home: &Path, name: &str) -> PathBuf {
-    home.join(".oxi").join("vault").join(name)
+    home.join(".oxi").join("spaces").join(name).join("vault")
 }
 
-/// `~/.oxi/vault` expanded against the calling process's `$HOME`. When
+/// Legacy flat `~/.oxi/vault` expanded against the calling process's `$HOME`. When
 /// `DocumentsConfig::load` rewrites a tilde-prefixed flat-vault root, the
 /// in-memory `path` is exactly this value.
 fn expand_user_flat() -> PathBuf {
@@ -77,7 +77,7 @@ fn is_flat_root(root_path: &Path, flat: &Path, flat_canonical: &Path) -> bool {
     candidates.iter().any(|c| c.as_path() == root_path)
 }
 
-/// Ensure `<home>/.oxi/vault/<name>/` exists, add a root entry that maps the
+/// Ensure `<home>/.oxi/spaces/<name>/vault/` exists, add a root entry that maps the
 /// new vault into `<name>`, and (if a legacy flat `<home>/.oxi/vault/` root
 /// exists in `documents.toml`) exclude `<name>/**` from it exactly once.
 ///
@@ -87,7 +87,7 @@ fn is_flat_root(root_path: &Path, flat: &Path, flat_canonical: &Path) -> bool {
 /// - the vault directory is created with `create_dir_all`, so a pre-existing
 ///   directory is left intact.
 pub fn provision_space_vault(brain_dir: &Path, home: &Path, name: &str) -> Result<ProvisionReport> {
-    let vault_dir = home.join(".oxi").join("vault").join(name);
+    let vault_dir = home.join(".oxi").join("spaces").join(name).join("vault");
     std::fs::create_dir_all(&vault_dir)
         .with_context(|| format!("create vault dir {}", vault_dir.display()))?;
 
@@ -169,17 +169,14 @@ mod tests {
 
         let r1 = provision_space_vault(brain.path(), h.path(), "dev").unwrap();
         assert!(r1.vault_dir.is_dir());
-        assert_eq!(
-            r1.vault_dir,
-            h.path().join(".oxi").join("vault").join("dev")
-        );
+        assert_eq!(r1.vault_dir, h.path().join(".oxi/spaces/dev/vault"));
         assert!(r1.root_added);
         assert!(r1.parent_excludes_added.is_empty());
 
         let cfg = DocumentsConfig::load(brain.path()).unwrap();
         assert_eq!(cfg.roots.iter().filter(|r| r.alias == "dev").count(), 1);
         let dev = cfg.roots.iter().find(|r| r.alias == "dev").unwrap();
-        assert_eq!(dev.path, h.path().join(".oxi").join("vault").join("dev"));
+        assert_eq!(dev.path, h.path().join(".oxi/spaces/dev/vault"));
         assert_eq!(dev.space, "dev");
         assert_eq!(dev.include, default_include());
         assert_eq!(dev.exclude, default_exclude());

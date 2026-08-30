@@ -1,6 +1,6 @@
 //! Model artifact management (§8.4).
 //!
-//! Manifest at `~/.oxi/models/manifest.toml` declares the model set:
+//! Manifest at `~/.oxi/brain/models/manifest.toml` declares the model set:
 //! role, name, url, blake3 digest, size, license. `oxibrain model` commands
 //! list / pull / verify / use it. The digest feeds `ExtractorId` (§9.5):
 //! changing weights must change the extractor id, or a silent quality
@@ -72,23 +72,32 @@ pub fn default_manifest() -> Vec<ModelEntry> {
     ]
 }
 
-/// The models directory: `$OXIBRAIN_MODELS_DIR` if set, else `~/.oxi/models/`.
+/// The models directory: `$OXIBRAIN_MODELS_DIR` if set, else
+/// `~/.oxi/brain/models/`.
 ///
 /// The env override is the air-gapped escape hatch (§8.4): point it at a
 /// pre-pulled directory and the lazy pull becomes a verify-only no-op.
 pub fn model_dir() -> PathBuf {
-    model_dir_with(std::env::var_os("OXIBRAIN_MODELS_DIR"))
-}
-
-fn model_dir_with(override_dir: Option<std::ffi::OsString>) -> PathBuf {
-    if let Some(dir) = override_dir {
+    if let Some(dir) = std::env::var_os("OXIBRAIN_MODELS_DIR") {
         return PathBuf::from(dir);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".oxi").join("models")
+    model_dir_from(crate::paths::brain_dir(), &crate::paths::oxi_home())
 }
 
-/// The manifest path: `~/.oxi/models/manifest.toml`.
+/// Pure resolution behind [`model_dir`]: prefer the canonical
+/// `<brain>/models`; when it is absent and the legacy `<oxi-home>/models`
+/// exists, read the legacy location until `oxibrain migrate` has moved it
+/// (read-only compatibility window — never written through this path).
+fn model_dir_from(canonical: PathBuf, legacy_home: &Path) -> PathBuf {
+    let legacy = legacy_home.join("models");
+    if !canonical.exists() && legacy.exists() {
+        legacy
+    } else {
+        canonical
+    }
+}
+
+/// The manifest path: `~/.oxi/brain/models/manifest.toml`.
 pub fn manifest_path() -> PathBuf {
     model_dir().join("manifest.toml")
 }
@@ -290,17 +299,36 @@ mod tests {
     }
 
     #[test]
-    fn model_dir_env_override_wins() {
-        assert_eq!(
-            model_dir_with(Some("/opt/oxibrain-models".into())),
-            PathBuf::from("/opt/oxibrain-models")
-        );
+    fn model_dir_prefers_canonical_when_present() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let canonical = home.path().join("brain").join("models");
+        std::fs::create_dir_all(&canonical).expect("mkdir");
+        assert_eq!(model_dir_from(canonical.clone(), home.path()), canonical);
     }
 
     #[test]
-    fn model_dir_default_is_home_dot_oxi_models() {
-        let dir = model_dir_with(None);
-        assert!(dir.ends_with(".oxi/models"), "got {dir:?}");
+    fn model_dir_falls_back_to_legacy_when_canonical_missing() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let legacy = home.path().join("models");
+        std::fs::create_dir_all(&legacy).expect("mkdir");
+        let canonical = home.path().join("brain").join("models");
+        assert_eq!(model_dir_from(canonical, home.path()), legacy);
+    }
+
+    #[test]
+    fn model_dir_prefers_canonical_when_both_present() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let canonical = home.path().join("brain").join("models");
+        std::fs::create_dir_all(&canonical).expect("mkdir");
+        std::fs::create_dir_all(home.path().join("models")).expect("mkdir");
+        assert_eq!(model_dir_from(canonical.clone(), home.path()), canonical);
+    }
+
+    #[test]
+    fn model_dir_canonical_when_neither_exists() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let canonical = home.path().join("brain").join("models");
+        assert_eq!(model_dir_from(canonical.clone(), home.path()), canonical);
     }
 
     #[test]

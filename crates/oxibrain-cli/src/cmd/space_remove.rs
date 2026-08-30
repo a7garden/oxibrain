@@ -48,7 +48,7 @@ pub async fn run(dir: &Path, home: Option<&Path>, name: &str, purge: bool) -> an
     let mut cfg = DocumentsConfig::load(dir)?;
     // Scaffold detection (spec §4.5): the provisioning scaffold is
     // path-conditioned — alias == space == name AND path == the provisioned
-    // root (<home>/.oxi/vault/<name>). documents.toml stores EXPANDED
+    // root (<home>/.oxi/spaces/<name>/vault). documents.toml stores EXPANDED
     // absolute paths, so a tilde-literal comparison never matches. With a
     // resolved home the full path condition applies, so a user-authored
     // root that merely reuses the alias is NOT scaffold and removing it
@@ -113,7 +113,7 @@ pub async fn run(dir: &Path, home: Option<&Path>, name: &str, purge: bool) -> an
 
     // 4. Vault dir: never delete files; rmdir only when empty.
     if let Some(h) = home {
-        let vault = h.join(".oxi").join("vault").join(name);
+        let vault = crate::cmd::provision::root_path_for(h, name);
         if vault.is_dir() && std::fs::read_dir(&vault)?.next().is_none() {
             std::fs::remove_dir(&vault)?;
         } else if vault.is_dir() {
@@ -151,7 +151,7 @@ mod tests {
         let b = brain(dir.path()).await;
         let _ = b.ensure_space("dev").await.unwrap();
         drop(b);
-        // Provisioned scaffold (root alias==dev, path ~/.oxi/vault/dev).
+        // Provisioned scaffold (root alias==dev, path ~/.oxi/spaces/dev/vault).
         crate::cmd::provision::provision_space_vault(dir.path(), home.path(), "dev").unwrap();
         run(dir.path(), Some(home.path()), "dev", false)
             .await
@@ -183,7 +183,7 @@ mod tests {
             .unwrap();
         drop(b);
         // User file in the vault dir — must survive purge.
-        let vault = home.path().join(".oxi").join("vault").join("work");
+        let vault = crate::cmd::provision::root_path_for(home.path(), "work");
         std::fs::create_dir_all(&vault).unwrap();
         std::fs::write(vault.join("note.md"), "user data").unwrap();
 

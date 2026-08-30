@@ -43,6 +43,13 @@
 > **1.5 (2026-08-27) — space lifecycle.** Workspace crates (including
 > `oxibrain-client`) move `0.8.0 → 0.9.0` together; the changes are §1.5 below.
 > The MCP tool surface stays at fifteen.
+>
+> **1.6 (2026-08-30) — unified Oxi home.** No shared config and no global
+> default space; the canonical layout is `spaces/<space>/vault` plus
+> app-private subtrees. New additive client surface:
+> `BrainClient::register_document_root` + `RegisterDocumentRootRequest` /
+> `RegisterDocumentRootOutcome` over the native `register_document_root`
+> method; apps never edit `documents.toml`.
 
 ## 1.5 (2026-08-27) — Space lifecycle
 
@@ -59,6 +66,24 @@
    signature (`BrainServer::with_default_space` is the builder alternative).
    `oxibrain-mcp` is feature-gated unstable (see *Stability tiers*), so this
    rides the minor bump like the rest of 1.5.
+## 1.6 (2026-08-30) — Unified Oxi home
+
+1. **Breaking (policy, enforced):** `documents.toml` is oxibrain-owned.
+   Consumers register document roots through `Brain::register_document_root`
+   or the native JSON-RPC method `register_document_root`; direct edits are
+   a contract violation. The facade op is idempotent (added / replaced /
+   unchanged, upsert keyed by alias) and omits-unknown-rules turn into
+   connector defaults.
+2. **Additive:** `BrainClient::register_document_root(request) -> outcome`
+   with `RegisterDocumentRootRequest { space, alias, path, include?,
+   exclude?, max_file_bytes? }` and `RegisterDocumentRootOutcome
+   { outcome, root }`.
+3. **Compatibility:** legacy homes (`~/.oxi/models`, flat `~/.oxi/vault`,
+   `~/.oxios`, `~/.oxicode`) are read-only fallbacks for one release;
+   migrations are journaled + resumable (`oxibrain admin migrate
+   [--dry-run]`) and never delete sources. `OXI_HOME` overrides the root
+   on every app.
+
 ## Versioning
 
 - **Semver** on the `oxibrain` crate facade.

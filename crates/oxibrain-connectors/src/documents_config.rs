@@ -25,11 +25,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 const DEFAULT_INCLUDE: &[&str] = &["**/*.md", "**/*.txt", "**/*.html"];
 const DEFAULT_EXCLUDE: &[&str] = &["**/.git/**", "**/.DS_Store", "**/*.tmp", "**/*.lock"];
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Uniqueness suffix for atomic-save temp files: pid alone collides when
+/// two saves run concurrently in one process (the first rename would move
+/// the shared temp file out from under the second save).
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// File-name of the on-disk configuration inside the brain directory.
 pub const CONFIG_FILE_NAME: &str = "documents.toml";
@@ -48,6 +54,17 @@ pub struct RootEntry {
     pub exclude: Vec<String>,
     #[serde(default = "default_max_file_bytes")]
     pub max_file_bytes: u64,
+}
+
+/// Outcome of an idempotent [`DocumentsConfig::upsert`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpsertOutcome {
+    /// No entry existed for the alias; it was appended.
+    Added,
+    /// The alias existed with different rules; the entry was replaced.
+    Replaced,
+    /// The alias existed with byte-identical rules; nothing changed.
+    Unchanged,
 }
 
 /// The complete configuration: an ordered list of root entries plus the
@@ -94,6 +111,10 @@ impl DocumentsConfig {
 
     /// Persist the configuration to `<dir>/documents.toml`. Creates the
     /// directory if missing so callers can hand us a fresh brain dir.
+    ///
+    /// The write is atomic (temp file + rename in the same directory) so a
+    /// crash mid-save can never leave a truncated or half-written config
+    /// behind — every registration rides this path.
     pub fn save(dir: &Path, cfg: &DocumentsConfig) -> Result<(), ConfigError> {
         if let Err(e) = fs::create_dir_all(dir) {
             return Err(ConfigError::Io(e.to_string()));
@@ -103,7 +124,17 @@ impl DocumentsConfig {
             path: path.clone(),
             message: e.to_string(),
         })?;
-        if let Err(e) = fs::write(&path, text) {
+        let tmp = dir.join(format!(
+            ".{}.tmp-{}-{}",
+            CONFIG_FILE_NAME,
+            std::process::id(),
+            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        if let Err(e) = fs::write(&tmp, &text) {
+            return Err(ConfigError::Io(e.to_string()));
+        }
+        if let Err(e) = fs::rename(&tmp, &path) {
+            let _ = fs::remove_file(&tmp);
             return Err(ConfigError::Io(e.to_string()));
         }
         Ok(())
@@ -149,17 +180,39 @@ impl DocumentsConfig {
     pub fn root(&self, alias: &str) -> Option<&RootEntry> {
         self.roots.iter().find(|r| r.alias == alias)
     }
+
+    /// Idempotent upsert keyed by `alias`: append the entry when the alias
+    /// is new, replace it in place when its rules differ, and report
+    /// [`UpsertOutcome::Unchanged`] when an identical entry already exists.
+    /// This is the pure decision behind the facade's `register_document_root`
+    /// operation — duplicate and replacement semantics live here and nowhere
+    /// else, so every caller (facade, server, tests) agrees on them.
+    pub fn upsert(&mut self, entry: RootEntry) -> UpsertOutcome {
+        if let Some(existing) = self.roots.iter_mut().find(|r| r.alias == entry.alias) {
+            if *existing == entry {
+                return UpsertOutcome::Unchanged;
+            }
+            *existing = entry;
+            return UpsertOutcome::Replaced;
+        }
+        self.roots.push(entry);
+        UpsertOutcome::Added
+    }
 }
 
-fn default_include() -> Vec<String> {
+/// Connector-default include globs, exposed so the facade's registration
+/// op fills omitted rules from the same source of truth as serde defaults.
+pub fn default_include() -> Vec<String> {
     DEFAULT_INCLUDE.iter().map(|s| (*s).to_string()).collect()
 }
 
-fn default_exclude() -> Vec<String> {
+/// Connector-default exclude globs (see [`default_include`]).
+pub fn default_exclude() -> Vec<String> {
     DEFAULT_EXCLUDE.iter().map(|s| (*s).to_string()).collect()
 }
 
-fn default_max_file_bytes() -> u64 {
+/// Connector-default per-file byte cap (see [`default_include`]).
+pub fn default_max_file_bytes() -> u64 {
     DEFAULT_MAX_FILE_BYTES
 }
 

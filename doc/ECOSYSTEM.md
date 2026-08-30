@@ -210,17 +210,17 @@ apps may write into it, and three disciplines make that safe:
    for memo indexing is by frontmatter convention (a `---` block ⇒ memo, no block ⇒
    `BodyOnly`), never by reserved filenames.
 
-**Vault resolution, as shipped.** `~/.oxi/config.toml` `[vault].space` is the
-ecosystem-canonical brain space — both apps read it for vault ingestion, and a
-per-app space setting only applies when the ecosystem key is absent.
-`[vault].path` is honored by oxios (tier 2 of `kernel.knowledge_root` →
-`[vault].path` → `~/.oxi/vault`) and by the ecosystem migration tooling; oximemo
-in this release does not read it — it opens the default `~/.oxi/vault`, with a
-custom root set per-app via `--vault` or `OXIMEMO_VAULT`. Per-app overrides can
-therefore **diverge silently today** — a split pair fragments the vault: a second
-space registration leaves one space with a single full pass and no watcher.
-Operators running custom roots must keep both apps on one tree; a loud cross-app
-mismatch warning is future work. Apps reach the brain by spawning a `serve --stdio`
+**Vault resolution, as shipped (unified home).** There is **no shared ecosystem
+config file** — the canonical vault for a space is `~/.oxi/spaces/<space>/vault/`
+(`OXI_HOME` overridable), oximemo owns space provisioning, and each app keeps an
+app-private "last space" preference in its own subtree (`oximemo/`, `oxios/`,
+`oxicode/`). Per-app explicit overrides (`--vault` / `OXIMEMO_VAULT`, oxios
+`kernel.knowledge_root`) still win over the canonical default; operators running
+custom roots must keep both apps on one tree. Vault roots reach the brain only
+through the `register_document_root` boundary (idempotent upsert keyed by alias
+over the `serve --stdio` child) — apps never edit `documents.toml`, and when no
+brain binary is installed the registration is recorded and replayed later.
+Apps reach the brain by spawning a `serve --stdio`
 child against an explicit `--dir` (`oxibrain-client::spawn_local(LocalProcessEndpoint
 { executable, dir })`) — there is no ambient discovery, no default path, and no
 `$OXIBRAIN_SOCKET`. A fresh install still finds the existing brain with no setup:

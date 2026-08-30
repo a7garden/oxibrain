@@ -2,12 +2,12 @@
 //!
 //! The CLI arm has already resolved the space; init validates the name,
 //! ensures the space exists, and — only when the resolved dir is a default
-//! dir (no `--dir` passed and a home is known) — provisions the per-space
-//! vault directory and its `documents.toml` root (§4.3), then writes
-//! `~/.oxi/config.toml` with `default_space` when no config file exists
-//! yet. An explicit `--dir` is a deliberate store: nothing under home is
-//! touched. Provisioning is idempotent: re-running init neither clobbers
-//! an existing config nor duplicates roots.
+//! dir (no `--dir` passed and a home is known) — provisions the
+//! per-space vault directory and its `documents.toml` root (§4.3). There
+//! is deliberately no shared `~/.oxi/config.toml` and no global default
+//! space (ADR-013): each app keeps its own state. An explicit `--dir` is
+//! a deliberate store: nothing under home is touched. Provisioning is
+//! idempotent: re-running init neither clobbers nor duplicates.
 
 use crate::cmd::provision::provision_space_vault;
 use oxibrain::{Brain, BrainConfig};
@@ -55,7 +55,7 @@ mod tests {
         run(dir.path(), "personal", false, Some(home.path()))
             .await
             .unwrap();
-        assert!(home.path().join(".oxi/vault/personal").is_dir());
+        assert!(home.path().join(".oxi/spaces/personal/vault").is_dir());
         assert!(dir.path().join("documents.toml").exists());
         // v2.13: no config.toml is written — default_space is gone (ADR-013).
         assert!(!home.path().join(".oxi/config.toml").exists());

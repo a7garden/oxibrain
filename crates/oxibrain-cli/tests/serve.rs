@@ -101,8 +101,8 @@ async fn serve_stdio_raw_jsonrpc_round_trip() {
         .await
         .unwrap();
     let _ = brain.ensure_space("personal").await.unwrap();
-    // Isolated HOME: without this the child resolves default_space from
-    // the developer's real ~/.oxi/config.toml.
+    // Isolated HOME/OXI_HOME: the child must resolve the default brain dir
+    // from a scratch home, never the developer's real ~/.oxi.
     let fake_home = tempfile::TempDir::new().unwrap();
     let home_str = fake_home.path().to_str().unwrap().to_string();
     let mut child = StdioChild::spawn(dir.path(), &[("HOME", &home_str)]);

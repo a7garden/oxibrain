@@ -1,6 +1,6 @@
 //! Integration test for oxibrain-llm-local against a real GGUF model.
 //!
-//! Ignored by default — requires a model at `~/.oxi/models/`. Run with:
+//! Ignored by default — requires a model at `~/.oxi/brain/models/`. Run with:
 //!   cargo test -p oxibrain-llm-local --test local_model -- --ignored
 //! The Qwen2.5-1.5B-Instruct-Q4_K_M model validates generation + tokenizer.
 
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 fn model_path() -> PathBuf {
     let mut p = home_dir();
-    p.push(".oxi/models/qwen2.5-1.5b-instruct-q4_k_m.gguf");
+    p.push(".oxi/brain/models/qwen2.5-1.5b-instruct-q4_k_m.gguf");
     p
 }
 

@@ -41,7 +41,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use oxibrain_connectors::documents_config::{DocumentsConfig, RootEntry};
+use oxibrain_connectors::documents_config::{
+    DEFAULT_MAX_FILE_BYTES, DocumentsConfig, RootEntry, UpsertOutcome, default_exclude,
+    default_include,
+};
 use oxibrain_connectors::scan::{canonicalize_root, scan_root};
 use oxibrain_connectors::{GitDocumentReader, MediaType, decode};
 use oxibrain_core::chunking::{ChunkPolicy, render_context_prefix, split_into_chunks};
@@ -53,7 +56,7 @@ use oxibrain_core::retrieval::{Query as CoreQuery, QueryMode as CoreQueryMode, S
 use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
 use oxibrain_store::documents::{
     ApplyPlan, CachedChunk, ChunkUpsert as StoreChunkUpsert, DocumentCache, DocumentUpsert,
-    FtsTable, RootApply as StoreRootApply,
+    DocumentsLock, FtsTable, RootApply as StoreRootApply,
 };
 use oxibrain_store::ledger;
 
@@ -141,6 +144,47 @@ pub struct SearchResponse {
 pub struct PendingStats {
     pub count: u64,
     pub oldest_seq: Option<u64>,
+}
+
+/// Typed registration request for one document root — the surface other
+/// apps use to declare a vault instead of editing `documents.toml`
+/// themselves (unified-home ownership rule: only oxibrain writes its own
+/// config). `None` rules fall back to the `documents.toml` defaults, so a
+/// registration with no include/exclude/limit lands exactly where a
+/// hand-written entry with omitted fields would.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentRootSpec {
+    /// Logical space the root's documents belong to.
+    pub space: String,
+    /// Unique alias inside `documents.toml` — the upsert key.
+    pub alias: String,
+    /// Filesystem path of the root (absolute recommended; `~` expands at load).
+    pub path: PathBuf,
+    /// Include globs; `None` = connector defaults.
+    pub include: Option<Vec<String>>,
+    /// Exclude globs; `None` = connector defaults.
+    pub exclude: Option<Vec<String>>,
+    /// Per-file byte cap; `None` = connector default.
+    pub max_file_bytes: Option<u64>,
+}
+
+/// Idempotent outcome of a root registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegisterRootOutcome {
+    /// No entry existed for the alias; it was appended.
+    Added,
+    /// The alias existed with different rules; it was replaced in place.
+    Replaced,
+    /// An identical entry already existed; nothing was written.
+    Unchanged,
+}
+
+/// What a registration did plus the effective entry now on disk.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RegistrationResult {
+    pub outcome: RegisterRootOutcome,
+    pub root: RootEntry,
 }
 
 impl Brain {
@@ -939,6 +983,67 @@ impl Brain {
             document_id: ch.document_id.clone(),
             text: decoded.text[span_start..span_end].to_string(),
         }))
+    }
+
+    // ─── root registration (unified-home boundary) ────────────────────────
+
+    /// Idempotently register a document root on behalf of another app (the
+    /// unified-home contract: oximemo and oxios never edit `documents.toml`
+    /// themselves — they reach this operation through the client/stdio
+    /// boundary). Upsert is keyed by `alias` with Added / Replaced /
+    /// Unchanged semantics; omitted rules fall back to the connector
+    /// defaults exactly like a hand-written entry with missing fields, and
+    /// the save is atomic. Pure document-plane state: no `brain.db` access,
+    /// no inference, no space row creation.
+    pub async fn register_document_root(
+        &self,
+        spec: DocumentRootSpec,
+    ) -> Result<RegistrationResult, BrainError> {
+        let dir = self.config.dir.clone();
+        blocking(move || {
+            let entry = RootEntry {
+                alias: spec.alias,
+                path: spec.path,
+                space: spec.space,
+                include: spec.include.unwrap_or_else(default_include),
+                exclude: spec.exclude.unwrap_or_else(default_exclude),
+                max_file_bytes: spec.max_file_bytes.unwrap_or(DEFAULT_MAX_FILE_BYTES),
+            };
+            // Serialize the load-modify-save against the documents plane's
+            // own writer lock: another serve child (or the CLI) may register
+            // concurrently. Same bounded ladder as every write op.
+            let mut last_err: Option<BrainError> = None;
+            let _lock = 'acquire: {
+                for delay_ms in [0u64, 25, 50, 100, 200, 400, 800] {
+                    if delay_ms > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    }
+                    match DocumentsLock::acquire(&dir) {
+                        Ok(lock) => break 'acquire lock,
+                        Err(e @ BrainError::Busy(_)) => last_err = Some(e),
+                        Err(e) => return Err(e),
+                    }
+                }
+                return Err(last_err.unwrap_or_else(|| BrainError::Busy("documents.lock".into())));
+            };
+            let mut cfg = load_documents_config(&dir)?;
+            let outcome = cfg.upsert(entry.clone());
+            cfg.validate()
+                .map_err(|e| BrainError::Config(e.to_string()))?;
+            if outcome != UpsertOutcome::Unchanged {
+                DocumentsConfig::save(&dir, &cfg).map_err(|e| BrainError::Config(e.to_string()))?;
+            }
+            let outcome = match outcome {
+                UpsertOutcome::Added => RegisterRootOutcome::Added,
+                UpsertOutcome::Replaced => RegisterRootOutcome::Replaced,
+                UpsertOutcome::Unchanged => RegisterRootOutcome::Unchanged,
+            };
+            Ok(RegistrationResult {
+                outcome,
+                root: entry,
+            })
+        })
+        .await
     }
 
     // ─── helpers ───────────────────────────────────────────────────────────

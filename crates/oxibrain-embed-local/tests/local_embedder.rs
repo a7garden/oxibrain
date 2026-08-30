@@ -1,6 +1,5 @@
 //! Integration test for oxibrain-embed-local against a real embedding model.
-//!
-//! Ignored by default — requires a model at `~/.oxi/models/`. Run with:
+//! Ignored by default — requires a model at `~/.oxi/brain/models/`. Run with:
 //!   cargo test -p oxibrain-embed-local --test local_embedder -- --ignored
 //! Validated against BGE-M3-Q4_K_M (multilingual, 1024 dims).
 
@@ -10,7 +9,7 @@ use std::path::PathBuf;
 
 fn model_path() -> PathBuf {
     let mut p = home_dir();
-    p.push(".oxi/models/bge-m3-Q4_K_M.gguf");
+    p.push(".oxi/brain/models/bge-m3-Q4_K_M.gguf");
     p
 }
 

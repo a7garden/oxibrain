@@ -5,7 +5,7 @@
 //! `eval/probes/probes.toml`. The ranking-half tolerance is
 //! `max(2pp, 2 × observed_max_delta)`.
 //!
-//! Ignored by default — requires the model at `~/.oxi/models/bge-m3-Q4_K_M.gguf`
+//! Ignored by default — requires the model at `~/.oxi/brain/models/bge-m3-Q4_K_M.gguf`
 //! and, for the Metal arm, an Apple GPU. Run with:
 //!
 //!   cargo test -p oxibrain-embed-local --test ranking_equivalence -- --ignored --nocapture
@@ -44,7 +44,7 @@ struct Query {
 
 fn model_path() -> PathBuf {
     let mut p = home_dir();
-    p.push(".oxi/models/bge-m3-Q4_K_M.gguf");
+    p.push(".oxi/brain/models/bge-m3-Q4_K_M.gguf");
     p
 }
 

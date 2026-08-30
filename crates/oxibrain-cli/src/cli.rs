@@ -137,6 +137,15 @@ pub enum AdminCmd {
         #[arg(long)]
         space: String,
     },
+    /// Migrate legacy Oxi-home layouts into the canonical tree (resumable).
+    /// Copies `<oxi-home>/models` into `<oxi-home>/brain/models`; the source
+    /// is kept as a recoverable backup and the run is journaled, so it is
+    /// safe to re-run after a crash or interruption.
+    Migrate {
+        /// Preview source, destination, size, and conflicts — mutates nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Model artifact management (§8.4: `model list|pull|verify|use`).
     Model {
         #[command(subcommand)]

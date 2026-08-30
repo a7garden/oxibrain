@@ -529,3 +529,43 @@ async fn dangling_document_refs_lists_only_unknown_aliases() {
         "only the alias missing from documents.toml is dangling"
     );
 }
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_registrations_all_persist() {
+    // Regression: two concurrent register_document_root calls used to race
+    // on the shared load-modify-save (one save could error or be lost).
+    // The documents writer lock + unique temp files make every call land.
+    let brain_dir = TempDir::new().unwrap();
+    let brain = make_brain(brain_dir.path()).await;
+    let vault_a = TempDir::new().unwrap();
+    let vault_b = TempDir::new().unwrap();
+
+    let (ra, rb) = tokio::join!(
+        brain.register_document_root(oxibrain::document_plane::DocumentRootSpec {
+            space: "personal".into(),
+            alias: "vault-a".into(),
+            path: vault_a.path().to_path_buf(),
+            include: None,
+            exclude: None,
+            max_file_bytes: None,
+        }),
+        brain.register_document_root(oxibrain::document_plane::DocumentRootSpec {
+            space: "personal".into(),
+            alias: "vault-b".into(),
+            path: vault_b.path().to_path_buf(),
+            include: None,
+            exclude: None,
+            max_file_bytes: None,
+        }),
+    );
+    ra.expect("registration A");
+    rb.expect("registration B");
+
+    let text = fs::read_to_string(brain_dir.path().join("documents.toml")).unwrap();
+    assert!(text.contains("vault-a"), "{text}");
+    assert!(text.contains("vault-b"), "{text}");
+    assert_eq!(
+        text.matches("[[root]]").count(),
+        2,
+        "both roots persisted exactly once each: {text}"
+    );
+}

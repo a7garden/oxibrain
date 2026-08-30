@@ -1,5 +1,17 @@
 # oxibrain — Architecture
-> **Version:** v2.14 · **Date:** 2026-08-28 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.15 · **Date:** 2026-08-30 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.15 — Unified Oxi home (spec `docs/superpowers/specs/2026-08-29-oxi-home-layout-design.md`, ADR-015).**
+> One discoverable root (`~/.oxi`, override `OXI_HOME`) with strict ownership: `brain/` is
+> oxibrain-private, `spaces/<space>/vault/` is the only shared write area (oximemo owns space
+> provisioning), and `oxios/` / `oxicode/` / `oximemo/` are app-private subtrees. There is **no
+> shared top-level config file and no global default space** — the directory layout is the
+> installation registry. Other apps register document roots through the new idempotent
+> `register_document_root` boundary (facade op + native JSON-RPC method + `BrainClient`
+> method; upsert keyed by alias with added/replaced/unchanged semantics) and never edit
+> `documents.toml` themselves. Legacy layouts (`~/.oxi/models`, `~/.oxios`, `~/.oxicode`,
+> app-support vaults, the flat `~/.oxi/vault`) are read-only during one compatibility window
+> and consolidated by journaled, resumable, copy-verify migrations (`oxibrain admin migrate`,
+> dry-run first) that never delete the source. `documents.toml` saves become atomic.
 > **v2.13 — Agent-first CLI (spec `doc/spec/agent-first-cli-v1.md`; ADR-012, ADR-013).**
 > **v2.14 — Storage footprint (ADR-014, `doc/adr/ADR-014-storage-footprint.md`).** Brain FTS becomes contentless
 > (`fts_word` / `fts_ngram` with `content="", contentless_delete=1`, a small
@@ -1383,7 +1395,9 @@ onboarding; it is now one accepted only for quality, on episodes the user's poli
 ### 8.4 Model artifacts are Cache-zone
 
 Weights are fetched lazily — by the first command that needs them (`extract`,
-`reextract`) — into `~/.oxi/models/`, or `$OXIBRAIN_MODELS_DIR` when set, pinned
+`reextract`) — into `~/.oxi/brain/models/` (the legacy `~/.oxi/models/` is read
+read-only until `oxibrain admin migrate` consolidates it), or
+`$OXIBRAIN_MODELS_DIR` when set, pinned
 by digest. `oxibrain init` provisions the store and nothing else: the empty
 install is instant, and exploration commands (`stats`, `page`, MCP read tools)
 never download. This is the **Cache zone** the design already defines: expensive
@@ -2045,14 +2059,15 @@ yesterday's agent session if they land together. Apps are distinguished by `Sour
 it: resolution may consult `shared` as an additional **read-only candidate source**; writes never
 cross; a local entity linked to a shared one records that link explicitly.
 
-**Lifecycle (v2.12).** Spaces are created by `init`/`space add` (with per-space
-vault provisioning under `~/.oxi/vault/<space>/` for the default brain dir) and
-removed by `space remove` (empty-only, scaffold-aware) or `space remove --purge`
-(audited `RedactTarget::Space`; vault files are never deleted — §1.4). The
-default space lives in `~/.oxi/config.toml` and resolves identically for CLI
-and MCP. Provisioned vault roots persist in `documents.toml` as expanded
-absolute paths — loading expands a leading `~` against `$HOME`, and
-provisioning writes the resolved path, never the tilde literal.
+**Lifecycle (v2.12, paths v2.15).** Spaces are created by `init`/`space add` (with
+per-space vault provisioning under `~/.oxi/spaces/<space>/vault/` for the default
+brain dir) and removed by `space remove` (empty-only, scaffold-aware) or
+`space remove --purge` (audited `RedactTarget::Space`; vault files are never
+deleted — §1.4). There is **no default space** (ADR-013): `space` is a required
+argument on every space-scoped call. Provisioned vault roots persist in
+`documents.toml` as expanded absolute paths — loading expands a leading `~`
+against `$HOME`, and provisioning writes the resolved path, never the tilde
+literal.
 
 ### 15.2 Capabilities
 
@@ -2526,25 +2541,39 @@ oxibrain/
 └── apps/                      # brain-ui source — its `dist/` is embedded into the binary (§16.6)
 ```
 
-**Installation root.** Every consuming app reads from a single tree, which `oxibrain init`
-creates and any caller can open via `--dir <dir>` thereafter. Clients never read SQLite
-directly; they reach the brain through a caller-owned stdio child (or in-process `Brain`).
+**Installation root (unified Oxi home, v2.15).** `~/.oxi` (override: `OXI_HOME`) is the one
+discoverable tree for the whole Oxi family, with strict ownership: each app writes only its
+own subtree, `spaces/<space>/vault/` is the only shared write area, and there is **no shared
+top-level config file and no global default space** — the directory layout is the installation
+registry. oxibrain's store can still be opened anywhere via `--dir <dir>`; clients never read
+SQLite directly, they reach the brain through a caller-owned stdio child (or in-process
+`Brain`). Other apps declare vault roots through `register_document_root` — never by editing
+`documents.toml`.
 
 ```
 ~/.oxi/
-├── config.toml                 # (v2.13: `default_space` deleted — space is a required op argument; other keys reserved) — strict parse
-├── foundation/v1/              # Foundation v1 contract (ADR-007) — non-secret
+├── foundation/v1/              # Foundation v1 contract (ADR-007) — shared, non-secret
 │   ├── profiles.json           # provider profiles (Keychain locator only — never a secret)
 │   └── packages.lock           # resolved Foundation packages (name/version/digest/source/trust)
-├── vault/                      # per-space note vaults (v2.12) — provisioned by init/space add; §15.1
-│   └── <space>/                # one directory per space; lands in documents.toml as an expanded absolute root
-└── brain/                      # oxibrain data directory (`<dir>``, default ~/.oxi/brain)
-    ├── brain.db                # memory ledger + projections (schema v11)
-    ├── brain.lock              # advisory lock on brain.db
-    ├── documents.db            # disposable document cache (schema v1)
-    ├── documents.lock          # advisory lock on documents.db
-    └── documents.toml          # configured document roots (§4.2.1)
+├── brain/                      # oxibrain-owned data and models (default <dir>)
+│   ├── brain.db                # memory ledger + projections
+│   ├── brain.lock              # advisory lock on brain.db
+│   ├── documents.db            # disposable document cache (schema v1)
+│   ├── documents.lock          # advisory lock on documents.db
+│   ├── documents.toml          # configured document roots (§4.2.1) — written only by oxibrain
+│   └── models/                 # GGUF weights (moved from legacy ~/.oxi/models by `admin migrate`)
+├── spaces/                     # space identity and user file containers (oximemo-owned)
+│   └── <space>/
+│       └── vault/              # one shared vault per space; an expanded absolute root in documents.toml
+├── oxios/                      # oxios-private state
+├── oxicode/                    # oxicode-private state
+└── oximemo/                    # oximemo-private state and derived index
 ```
+
+Legacy layouts (`~/.oxi/models`, the flat `~/.oxi/vault`, app-support vaults, `~/.oxios`,
+`~/.oxicode`) stay readable read-only for one compatibility release and are consolidated by
+the journaled, resumable migrations (`oxibrain admin migrate [--dry-run]`, per-app equivalents);
+migrations copy + verify and never delete the source.
 
 **Dependency rules, enforced in CI:**
 

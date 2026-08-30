@@ -11,8 +11,39 @@ use oxibrain::{Brain, BrainConfig, IndexOptions};
 use std::path::Path;
 
 pub async fn run(dir: &Path) -> anyhow::Result<()> {
+    // Unified-home layout: active root, owned subtree, and legacy state
+    // (the operator's view of what migration would do — P1 diagnostics).
+    let oxi = oxibrain::paths::oxi_home();
+    let override_note = if std::env::var_os("OXI_HOME").is_some() {
+        " (OXI_HOME)"
+    } else {
+        ""
+    };
+    println!("oxi home: {}{override_note}", oxi.display());
+    println!("store dir: {}", dir.display());
+    let models = oxibrain::migrate::models_paths(&oxi);
+    let plan = oxibrain::migrate::preflight(&models);
+    match plan.state {
+        oxibrain::migrate::PlanState::NothingToDo => println!("legacy models: none"),
+        oxibrain::migrate::PlanState::Ready => println!(
+            "legacy models: {} file(s), {} byte(s) pending — run `oxibrain admin migrate --dry-run`",
+            plan.files_to_copy, plan.bytes_to_copy
+        ),
+        oxibrain::migrate::PlanState::AlreadyMigrated => println!(
+            "legacy models: already migrated (backup at {})",
+            models.source.display()
+        ),
+        oxibrain::migrate::PlanState::Conflict => println!(
+            "legacy models: CONFLICT between {} and {} — resolve by hand",
+            models.source.display(),
+            models.destination.display()
+        ),
+    }
+    if let Some(status) = oxibrain::migrate::journal_status(&models.journal) {
+        println!("migration journal: {status}");
+    }
+
     let brain = Brain::open(BrainConfig::at(dir)).await?;
-    println!("ok: store at {}", dir.display());
     println!("episode count: {}", brain.episode_count().await?);
 
     // Documents plane: configured roots + cached files, then a reconcile

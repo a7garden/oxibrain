@@ -8,7 +8,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 use oxibrain::{Brain, BrainConfig, Capability, Scope};
-use oxibrain_client::{BrainClient, DocumentHitDto};
+use oxibrain_client::{BrainClient, DocumentHitDto, RegisterDocumentRootRequest};
 use oxibrain_mcp::{BrainServer, run_session, run_session_gated};
 use oxibrain_ports::TIME_MAX;
 use serde_json::json;
@@ -289,4 +289,42 @@ async fn client_search_returns_both_planes_and_native_methods() {
         .document_history("personal", "vault", "note.md", 5)
         .await;
     assert!(history.is_err(), "plain root has no git history");
+}
+
+#[tokio::test]
+async fn client_registers_document_root_over_stdio_boundary() {
+    let (dir, mut client) = spawn_server().await;
+    let vault = tempfile::TempDir::new().unwrap();
+    let path = vault.path().join("vault").display().to_string();
+    let request = RegisterDocumentRootRequest {
+        space: "personal".into(),
+        alias: "vault".into(),
+        path: path.clone(),
+        include: None,
+        exclude: None,
+        max_file_bytes: None,
+    };
+    let outcome = client
+        .register_document_root(request.clone())
+        .await
+        .expect("register");
+    assert_eq!(outcome.outcome, "added", "{outcome:?}");
+    assert_eq!(outcome.root.alias, "vault");
+    assert_eq!(outcome.root.path, path);
+    // Omitted rules land on the connector defaults, like a hand-written
+    // entry with missing fields.
+    assert!(outcome.root.include.contains(&"**/*.md".to_string()));
+
+    // Idempotent replay through the same client: unchanged, no duplicate.
+    let outcome = client
+        .register_document_root(request)
+        .await
+        .expect("re-register");
+    assert_eq!(outcome.outcome, "unchanged");
+
+    // Exactly one root, persisted by the brain (the client never touched
+    // the file itself — only the JSON-RPC boundary).
+    let text = std::fs::read_to_string(dir.path().join("documents.toml")).unwrap();
+    assert_eq!(text.matches("[[root]]").count(), 1);
+    assert!(text.contains(&path));
 }

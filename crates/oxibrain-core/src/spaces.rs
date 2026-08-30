@@ -3,7 +3,7 @@
 use oxibrain_ports::BrainError;
 
 /// A space name is an identifier: it becomes a directory name under
-/// `~/.oxi/vault/` and a token in config. Letters (any script), digits,
+/// `~/.oxi/spaces/<name>/vault/` and a token in config. Letters (any script), digits,
 /// `-`, `_`; length 1..=64 after trimming. Spec §4.2.
 pub fn validate_space_name(raw: &str) -> Result<String, BrainError> {
     let name = raw.trim();

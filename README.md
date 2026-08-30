@@ -4,13 +4,16 @@ A standalone, local-first second brain for humans and agents: an immutable
 episode ledger plus a knowledge projection that can be rebuilt from it,
 byte for byte.
 
+## Highlights
+
 - **No account, no API key, no external services.** Extraction and embeddings
   run on local GGUF models by default; HTTP providers are an optional quality
   tier. A default build pulls zero oxi-ecosystem crates.
 - **One engine, three shapes** — a Rust library (`oxibrain`), one binary
-  (`oxibrain`: CLI + MCP server + daemon), and a desktop brain UI.
-- **Agent-native.** Fifteen MCP tools (capped) over stdio or a Unix-domain
-  socket. Anything reachable over MCP is reachable in-process, and vice versa.
+  (`oxibrain`: CLI + caller-owned server), and a desktop brain UI.
+- **Agent-native.** Fifteen MCP tools (capped) over caller-owned stdio or a
+  foreground loopback HTTP session. Anything reachable over MCP is reachable
+  in-process, and vice versa.
 - **Assertions, not facts.** The ledger records who claimed what, over which
   interval; knowledge is folded from assertions, and every derived summary
   carries its sources and uncertainty.
@@ -18,36 +21,56 @@ byte for byte.
   no stemmers, no stopword lists, no script checks. Retrieval and resolution
   quality is held to parity across writing systems.
 
+## Table of contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Architecture](#architecture)
+- [Project structure](#project-structure)
+- [Oxi ecosystem](#oxi-ecosystem)
+- [Documentation](#documentation)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Install
 
 ```bash
 cargo install oxibrain-cli
 ```
 
-The binary is named `oxibrain`. macOS and Linux (Unix-domain sockets).
+The binary is named `oxibrain`.
 
 ## Quick start
 
 ```bash
-oxibrain init                        # create the store — instant, offline
-oxibrain model pull                  # fetch local models (resumable, digest-verified)
-oxibrain sync ~/notes                # ingest a directory of markdown notes
-oxibrain ask "who works at Acme?"    # hybrid query (lexical + vector + graph)
-oxibrain page <entity-id>            # brief with followable links
-oxibrain serve                       # MCP server on stdio (Claude Desktop etc.)
-oxibrain serve --daemon              # daemon on ~/.oxi/brain/oxibrain.sock
+# Create a local brain space and document root.
+oxibrain admin init --space personal
+oxibrain admin space add dev
+
+# Reconcile configured document roots.
+oxibrain admin index --documents
+
+# Search a space from the CLI.
+oxibrain search --json '{"space":"personal","query":"database decision","planes":["documents"],"limit":5}'
+
+# Serve caller-owned JSON-RPC over stdio for an agent integration.
+oxibrain admin serve --stdio
 ```
 
-Agents connect through MCP (`serve`) or the client SDK (`oxibrain-client`,
-typed handshake over `~/.oxi/brain/oxibrain.sock`, override with
-`$OXIBRAIN_SOCKET`). Scoped tokens: `oxibrain token issue --caps Read`.
+Agents use CLI operations directly or launch a caller-owned `admin serve --stdio`
+child through `oxibrain-client`. The foreground `admin serve --http <address>`
+variant exposes the local operations console.
 
-Local model defaults: Qwen2.5-1.5B-Instruct (grammar-constrained extraction)
-and BGE-M3 (multilingual embeddings). `OXIBRAIN_MODELS_DIR` points at a
-pre-pulled directory for air-gapped installs. Oxi Foundation profiles and
-OpenAI/Anthropic-compatible env keys select stronger extractors when present.
+## Architecture
 
-## Workspace
+The immutable episode ledger is the durable source of truth. The knowledge
+projection — entities, assertions, search indexes, vectors, and rendered views
+— is derived from that ledger and can be rebuilt. The core engine stays free of
+transport and provider dependencies; CLI, MCP, and desktop surfaces compose it
+at the boundary. [ARCHITECTURE.md](doc/ARCHITECTURE.md) is authoritative.
+
+## Project structure
 
 | Crate | Role |
 |---|---|
@@ -61,9 +84,18 @@ OpenAI/Anthropic-compatible env keys select stronger extractors when present.
 | `oxibrain-llm-http` | HTTP LLM adapter (OpenAI-compatible) |
 | `oxibrain-embed-local` | Multilingual embedding adapter |
 | `oxibrain-connectors` | Source connectors — vault readers, file ingest |
-| `oxibrain-client` | Client SDK — typed handshake over the socket |
+| `oxibrain-client` | Client SDK — caller-owned stdio session |
 | `oxibrain-mcp` | MCP server tools — fifteen-tool cap |
-| `oxibrain-cli` | The `oxibrain` binary: CLI + MCP server + daemon |
+| `oxibrain-cli` | The `oxibrain` binary: CLI + caller-owned server |
+
+## Oxi ecosystem
+
+oxibrain is intentionally standalone: it owns its ledger, projection, and local
+storage. [oxicode](https://github.com/project-oxi/oxicode),
+[oxios](https://github.com/project-oxi/oxios), and
+[oximemo](https://github.com/project-oxi/oximemo) use its public CLI or client
+contracts for durable memory rather than depending on its storage internals. See
+[the ecosystem guide](doc/ECOSYSTEM.md) for the boundary map.
 
 ## Documentation
 
@@ -78,9 +110,9 @@ OpenAI/Anthropic-compatible env keys select stronger extractors when present.
 
 ```bash
 cargo build
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
 
 # The standalone guarantee — no oxi crates in the tree
 cargo build -p oxibrain --no-default-features --features http-llm
@@ -89,6 +121,11 @@ cargo tree -p oxibrain | grep -E 'oxios-|oxicode-' && exit 1
 
 Releases: tag `v*` publishes all crates in dependency order and creates the
 GitHub release (`.github/workflows/publish.yml`, `scripts/publish.sh`).
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) before contributing. It defines the architectural
+invariants, quality gates, and documentation authority for this repository.
 
 ## License
 

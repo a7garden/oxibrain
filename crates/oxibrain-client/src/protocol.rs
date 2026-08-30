@@ -24,6 +24,11 @@ use std::fmt;
 /// surface.
 pub const HANDSHAKE_METHOD: &str = "handshake";
 
+/// Native (non-tool) method for the unified-home root registration: other
+/// apps declare a document root through this method instead of editing the
+/// brain's `documents.toml` directly (unified-home ownership contract).
+pub const REGISTER_DOCUMENT_ROOT_METHOD: &str = "register_document_root";
+
 /// The Oxi Foundation protocol range this crate speaks.
 ///
 /// The daemon advertises its `min_compatible` and `max_compatible` in

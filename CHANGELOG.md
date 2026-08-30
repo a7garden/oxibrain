@@ -4,6 +4,36 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [0.12.0] — 2026-08-30
+
+Unified Oxi home (ARCHITECTURE.md v2.15, ADR-015): one discoverable root with
+strict per-app ownership, no shared config, and a real migration path.
+
+### Added
+
+- **Document-root registration boundary** — other apps declare a vault root
+  through `Brain::register_document_root` (idempotent upsert keyed by alias:
+  added / replaced / unchanged), the native JSON-RPC method
+  `register_document_root`, and `BrainClient::register_document_root`.
+  `documents.toml` is now written only by oxibrain, atomically (temp +
+  rename).
+- **`oxibrain admin migrate [--dry-run]`** — journaled, resumable,
+  copy-verify migration of `~/.oxi/models` into `~/.oxi/brain/models`.
+  Preflight reports source/destination/bytes/conflicts; a conflicting
+  old/new pair aborts with both paths and touches nothing; the legacy
+  source is always retained as a backup. `admin doctor` prints the active
+  OXI_HOME, store dir, legacy state, and journal status.
+
+### Changed
+
+- Legacy `~/.oxi/models` is read read-only during the compatibility window
+  when `~/.oxi/brain/models` is absent; the canonical location wins once
+  populated.
+- Stale references removed: no doc or code claims a shared
+  `~/.oxi/config.toml` or a global default space; the canonical layout is
+  `spaces/<space>/vault` + app-private subtrees (`oxibrain/`, `oxios/`,
+  `oxicode/`, `oximemo/`).
+
 ## [0.11.0] — 2026-08-29
 
 Storage footprint (ADR-014, ARCHITECTURE.md v2.14): the ranking half no

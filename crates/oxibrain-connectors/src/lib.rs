@@ -9,7 +9,9 @@ pub mod oxios;
 pub mod scan;
 pub mod watch;
 pub use decode::{DECODER_VERSION, DecodedDocument, MediaType, decode};
-pub use documents_config::{CONFIG_FILE_NAME, ConfigError, DocumentsConfig, RootEntry};
+pub use documents_config::{
+    CONFIG_FILE_NAME, ConfigError, DocumentsConfig, RootEntry, UpsertOutcome,
+};
 pub use git_docs::{DocumentRevision, GitBlob, GitDocumentReader, GitSnapshot};
 pub use html::{HtmlFrontmatterSplit, html_note_to_text, html_to_text, split_frontmatter};
 pub use markdown::{MarkdownFile, scan_directory};

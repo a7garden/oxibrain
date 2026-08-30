@@ -11,9 +11,9 @@ use crate::protocol::{
 };
 use include_dir::{Dir, include_dir};
 use oxibrain::{
-    Brain, BrainConfig, BrainError, BriefTarget, Capability, DeclObject, Declaration, EntityRef,
-    IngestAttachment, RedactTarget, RedactionClosure, Scope, SourceRef, SpaceInfo, Timestamp,
-    TrustTier,
+    Brain, BrainConfig, BrainError, BriefTarget, Capability, DeclObject, Declaration,
+    DocumentRootSpec, EntityRef, IngestAttachment, RedactTarget, RedactionClosure, Scope,
+    SourceRef, SpaceInfo, Timestamp, TrustTier,
 };
 use oxibrain_client::protocol::{ClientHello, ClientOperation};
 use oxibrain_core::context::LayerKind;
@@ -22,6 +22,7 @@ use oxibrain_core::retrieval::{
 };
 use oxibrain_ports::{ClockPort, SystemClock};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
@@ -425,6 +426,13 @@ impl BrainServer {
             },
             "extract_uncached" => match msg.id {
                 Some(id) => match self.rpc_extract_uncached(msg.params.as_ref()).await {
+                    Ok(v) => Some(success(id, v)),
+                    Err((code, m)) => Some(error(id, code, m)),
+                },
+                None => None,
+            },
+            "register_document_root" => match msg.id {
+                Some(id) => match self.rpc_register_document_root(msg.params.as_ref()).await {
                     Ok(v) => Some(success(id, v)),
                     Err((code, m)) => Some(error(id, code, m)),
                 },
@@ -1263,6 +1271,79 @@ impl BrainServer {
             })
             .collect();
         Ok(json!({ "revisions": entries }))
+    }
+
+    /// Native method `register_document_root` — the unified-home boundary:
+    /// other apps (oximemo, oxios) declare a document root here instead of
+    /// editing `documents.toml` themselves. Idempotent upsert keyed by
+    /// alias (added / replaced / unchanged). Scope-gated exactly like a
+    /// `declare` on the target space: Write capability + membership +
+    /// expiry, enforced through the same `enforce_scope` path (no drift).
+    async fn rpc_register_document_root(
+        &self,
+        args: Option<&Value>,
+    ) -> Result<Value, (i64, String)> {
+        let params = args.ok_or((INVALID_PARAMS, "missing 'params'".into()))?;
+        self.enforce_scope("declare", params).await?;
+        let field = |name: &str| -> Result<String, (i64, String)> {
+            params
+                .get(name)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or((INVALID_PARAMS, format!("missing or non-string '{name}'")))
+        };
+        let space = field("space")?;
+        let alias = field("alias")?;
+        let path = field("path")?;
+        let string_list = |name: &str| -> Result<Option<Vec<String>>, (i64, String)> {
+            match params.get(name) {
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::Array(items)) => {
+                    let mut out = Vec::with_capacity(items.len());
+                    for item in items {
+                        out.push(
+                            item.as_str()
+                                .ok_or((
+                                    INVALID_PARAMS,
+                                    format!("'{name}' entries must be strings"),
+                                ))?
+                                .to_string(),
+                        );
+                    }
+                    Ok(Some(out))
+                }
+                Some(_) => Err((
+                    INVALID_PARAMS,
+                    format!("'{name}' must be an array of strings"),
+                )),
+            }
+        };
+        let include = string_list("include")?;
+        let exclude = string_list("exclude")?;
+        let max_file_bytes = match params.get("max_file_bytes") {
+            None | Some(Value::Null) => None,
+            Some(v @ Value::Number(_)) => Some(v.as_u64().unwrap_or(0)),
+            Some(_) => {
+                return Err((
+                    INVALID_PARAMS,
+                    "'max_file_bytes' must be a non-negative integer".into(),
+                ));
+            }
+        };
+        let result = self
+            .brain
+            .register_document_root(DocumentRootSpec {
+                space,
+                alias,
+                path: PathBuf::from(path),
+                include,
+                exclude,
+                max_file_bytes,
+            })
+            .await
+            .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+        let value = serde_json::to_value(&result).map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
+        Ok(value)
     }
 
     /// Native method `pending_stats` — memory-plane extraction backlog
@@ -3227,6 +3308,90 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn native_register_document_root_is_idempotent() {
+        let (dir, server) = fresh_server().await;
+        let vault = tempfile::TempDir::new().unwrap();
+        let path = vault.path().join("vault").display().to_string();
+        let params = json!({
+            "space": "personal",
+            "alias": "vault",
+            "path": path,
+        });
+        let resp = server
+            .handle(msg(1, "register_document_root", Some(params.clone())))
+            .await
+            .unwrap();
+        assert_eq!(resp["result"]["outcome"], "added", "{resp}");
+        assert_eq!(resp["result"]["root"]["alias"], "vault");
+        // Idempotent re-registration: unchanged, not a duplicate.
+        let resp = server
+            .handle(msg(2, "register_document_root", Some(params.clone())))
+            .await
+            .unwrap();
+        assert_eq!(resp["result"]["outcome"], "unchanged", "{resp}");
+        // Different rules under the same alias replace in place.
+        let mut changed = params.clone();
+        changed["max_file_bytes"] = json!(2048);
+        let resp = server
+            .handle(msg(3, "register_document_root", Some(changed)))
+            .await
+            .unwrap();
+        assert_eq!(resp["result"]["outcome"], "replaced", "{resp}");
+        assert_eq!(resp["result"]["root"]["max_file_bytes"], 2048);
+        // Persisted exactly once through the brain-owned write path.
+        let text = std::fs::read_to_string(dir.path().join("documents.toml")).unwrap();
+        assert_eq!(text.matches("[[root]]").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn native_register_document_root_requires_space_and_valid_rules() {
+        let (_dir, server) = fresh_server().await;
+        let resp = server
+            .handle(msg(
+                1,
+                "register_document_root",
+                Some(json!({"alias": "v"})),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], INVALID_PARAMS);
+        let resp = server
+            .handle(msg(
+                2,
+                "register_document_root",
+                Some(json!({
+                    "space": "t", "alias": "", "path": "/tmp/x",
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], INTERNAL_ERROR);
+        let message = resp["error"]["message"].as_str().unwrap();
+        assert!(message.contains("alias"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn native_register_document_root_is_write_gated() {
+        let (dir, server) = fresh_scoped(&[Capability::Read], &["t"]).await;
+        server.brain.ensure_space("t").await.unwrap();
+        let vault = tempfile::TempDir::new().unwrap();
+        let resp = server
+            .handle(msg(
+                1,
+                "register_document_root",
+                Some(json!({
+                    "space": "t",
+                    "alias": "vault",
+                    "path": vault.path().display().to_string(),
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp["error"]["code"], UNAUTHORIZED, "{resp}");
+        // Nothing was written behind the denied call.
+        assert!(!dir.path().join("documents.toml").exists());
+    }
     async fn fresh_scoped(
         caps: &[Capability],
         spaces: &[&str],

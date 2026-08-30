@@ -7,12 +7,15 @@ pub mod config;
 pub mod document_plane;
 mod extraction;
 mod ingest;
+pub mod migrate;
 pub mod models;
+pub mod paths;
 pub mod pull_plan;
 mod render;
 pub use config::BrainConfig;
 pub use document_plane::{
-    DocumentFreshness, DocumentHit, IndexOptions, PendingStats, SearchResponse,
+    DocumentFreshness, DocumentHit, DocumentRootSpec, IndexOptions, PendingStats,
+    RegisterRootOutcome, RegistrationResult, SearchResponse,
 };
 
 pub use models::SpaceInfo;

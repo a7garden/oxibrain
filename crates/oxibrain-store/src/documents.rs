@@ -135,7 +135,7 @@ pub struct DocumentCache {
 /// freshly created file, silently breaking mutual exclusion. Same
 /// discipline as `crate::lock::AdvisoryLock`.
 #[derive(Debug)]
-pub(crate) struct DocumentsLock {
+pub struct DocumentsLock {
     _file: File,
     #[allow(dead_code)] // kept for debug/inspection symmetry with the path
     _path: std::path::PathBuf,
@@ -148,7 +148,7 @@ impl Drop for DocumentsLock {
 }
 
 impl DocumentsLock {
-    fn acquire(dir: &Path) -> Result<Self, BrainError> {
+    pub fn acquire(dir: &Path) -> Result<Self, BrainError> {
         std::fs::create_dir_all(dir).map_err(io_err)?;
         let lock_path = dir.join("documents.lock");
         let file = OpenOptions::new()

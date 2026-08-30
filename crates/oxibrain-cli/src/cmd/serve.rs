@@ -13,9 +13,8 @@
 //! There is no socket, no daemon, and no PID file. Diagnostics go to stderr
 //! — stdout is the protocol channel.
 
-// §4.6: tools omitting `space` resolve the configured default from
-// `~/.oxi/config.toml`. A malformed config fails serve loudly rather than
-// silently landing data in a different space.
+// ADR-013: `space` is a required argument on every space-scoped call —
+// there is no config-file default and serve loads no user config.
 
 use anyhow::Context;
 use oxibrain::{Brain, BrainConfig};

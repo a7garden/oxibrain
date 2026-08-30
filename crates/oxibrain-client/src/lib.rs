@@ -167,6 +167,39 @@ pub struct PendingStatsDto {
     pub oldest_seq: Option<u64>,
 }
 
+/// Request payload for [`BrainClient::register_document_root`] — `None`
+/// rules fall back to the brain's connector defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterDocumentRootRequest {
+    pub space: String,
+    pub alias: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_file_bytes: Option<u64>,
+}
+
+/// The effective root entry as persisted in the brain's `documents.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootEntryDto {
+    pub alias: String,
+    pub path: String,
+    pub space: String,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+    pub max_file_bytes: u64,
+}
+
+/// Idempotent registration result: `added` | `replaced` | `unchanged`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterDocumentRootOutcome {
+    pub outcome: String,
+    pub root: RootEntryDto,
+}
+
 impl BrainClient {
     /// Attach to an existing read/write JSON-RPC stream (newline-delimited).
     ///
@@ -604,6 +637,23 @@ impl BrainClient {
     pub async fn pending_stats(&mut self) -> Result<PendingStatsDto> {
         let v = self.call_rpc_json("pending_stats", json!({})).await?;
         serde_json::from_value(v).context("parse pending_stats result")
+    }
+
+    /// Native method: idempotently register a document root on the brain
+    /// (the unified-home boundary — the calling app never edits
+    /// `documents.toml` itself). Returns `added`, `replaced`, or
+    /// `unchanged` plus the effective entry now persisted.
+    pub async fn register_document_root(
+        &mut self,
+        request: RegisterDocumentRootRequest,
+    ) -> Result<RegisterDocumentRootOutcome> {
+        let v = self
+            .call_rpc_json(
+                protocol::REGISTER_DOCUMENT_ROOT_METHOD,
+                serde_json::to_value(&request)?,
+            )
+            .await?;
+        serde_json::from_value(v).context("parse register_document_root result")
     }
 
     /// Native method: drain up to `limit` uncached memory-plane episodes

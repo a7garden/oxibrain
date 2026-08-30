@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use oxibrain_connectors::{ConfigError, DocumentsConfig, RootEntry};
+use oxibrain_connectors::{ConfigError, DocumentsConfig, RootEntry, UpsertOutcome};
 use tempfile::tempdir;
 
 const SAMPLE: &str = r#"
@@ -160,4 +160,56 @@ fn root_lookup_helpers() {
     let cfg = DocumentsConfig { roots: entries };
     assert!(cfg.root("alias-a").is_some());
     assert!(cfg.root("missing").is_none());
+}
+
+fn entry(alias: &str, space: &str, path: &str, max_file_bytes: u64) -> RootEntry {
+    RootEntry {
+        alias: alias.into(),
+        path: path.into(),
+        space: space.into(),
+        include: vec!["**/*.md".into()],
+        exclude: vec!["**/.git/**".into()],
+        max_file_bytes,
+    }
+}
+
+#[test]
+fn upsert_added_replaced_unchanged() {
+    let mut cfg = DocumentsConfig::default();
+    let first = entry("vault", "personal", "/tmp/vault", 42);
+    assert_eq!(cfg.upsert(first.clone()), UpsertOutcome::Added);
+    // Identical re-registration is a no-op (idempotence).
+    assert_eq!(cfg.upsert(first.clone()), UpsertOutcome::Unchanged);
+    assert_eq!(cfg.roots.len(), 1);
+    // Different rules under the same alias replace in place — no duplicate.
+    let changed = entry("vault", "personal", "/tmp/vault", 1024);
+    assert_eq!(cfg.upsert(changed), UpsertOutcome::Replaced);
+    assert_eq!(cfg.roots.len(), 1);
+    assert_eq!(cfg.roots[0].max_file_bytes, 1024);
+    // A second alias appends.
+    assert_eq!(
+        cfg.upsert(entry("docs", "work", "/tmp/docs", 42)),
+        UpsertOutcome::Added
+    );
+    assert_eq!(cfg.roots.len(), 2);
+}
+
+#[test]
+fn save_round_trips_upsert_and_is_atomic() {
+    let dir = tempdir().unwrap();
+    let mut cfg = DocumentsConfig::default();
+    assert_eq!(
+        cfg.upsert(entry("vault", "personal", "/tmp/vault", 42)),
+        UpsertOutcome::Added
+    );
+    DocumentsConfig::save(dir.path(), &cfg).unwrap();
+    // No temp file residue after a completed save.
+    let leftovers: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .filter(|n| n.to_string_lossy().contains(".tmp-"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+    let reloaded = DocumentsConfig::load(dir.path()).unwrap();
+    assert_eq!(reloaded, cfg);
 }

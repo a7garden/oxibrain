@@ -11,6 +11,7 @@ pub mod import_oxios;
 pub mod index;
 pub mod init;
 pub mod llm;
+pub mod migrate;
 pub mod model;
 pub mod predicate;
 pub mod provision;
