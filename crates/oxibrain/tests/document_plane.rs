@@ -569,3 +569,73 @@ async fn concurrent_registrations_all_persist() {
         "both roots persisted exactly once each: {text}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn registration_repairs_duplicate_alias_pollution() {
+    // Flat-era configs can hold several [[root]] blocks sharing one
+    // alias (and hundreds of dead test roots). Registration must repair
+    // the duplicates instead of failing validation forever, and keep
+    // the operator's original entry per alias.
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    fs::write(
+        brain_dir.path().join("documents.toml"),
+        format!(
+            r#"[[root]]
+alias = "vault"
+path = "{}"
+space = "personal"
+
+[[root]]
+alias = "vault"
+path = "/tmp/gone-1"
+space = "vault"
+
+[[root]]
+alias = "vault"
+path = "/tmp/gone-2"
+space = "vault"
+
+[[root]]
+alias = "knowledge"
+path = "/tmp/also-gone"
+space = "knowledge"
+"#,
+            vault.path().display()
+        ),
+    )
+    .unwrap();
+    let brain = make_brain(brain_dir.path()).await;
+    let personal = TempDir::new().unwrap();
+    let result = brain
+        .register_document_root(oxibrain::document_plane::DocumentRootSpec {
+            space: "personal".into(),
+            alias: "personal".into(),
+            path: personal.path().to_path_buf(),
+            include: None,
+            exclude: None,
+            max_file_bytes: None,
+        })
+        .await
+        .expect("registration must repair the polluted config");
+    assert_eq!(
+        result.outcome,
+        oxibrain::document_plane::RegisterRootOutcome::Added
+    );
+    let text = fs::read_to_string(brain_dir.path().join("documents.toml")).unwrap();
+    assert_eq!(
+        text.matches("alias = \"vault\"").count(),
+        1,
+        "duplicate vault aliases collapsed to the first: {text}"
+    );
+    assert!(
+        !text.contains("/tmp/gone-1") && !text.contains("/tmp/gone-2"),
+        "later duplicates dropped: {text}"
+    );
+    assert!(text.contains("alias = \"personal\""), "{text}");
+    assert_eq!(
+        text.matches("[[root]]").count(),
+        3,
+        "vault + knowledge + personal: {text}"
+    );
+}

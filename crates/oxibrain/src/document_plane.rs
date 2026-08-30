@@ -1027,10 +1027,14 @@ impl Brain {
                 return Err(last_err.unwrap_or_else(|| BrainError::Busy("documents.lock".into())));
             };
             let mut cfg = load_documents_config(&dir)?;
+            // Legacy configs may hold duplicate-alias blocks (flat-era
+            // pollution). Repair toward the validate() invariant first,
+            // keeping the operator's original entry per alias.
+            let dropped = cfg.dedupe();
             let outcome = cfg.upsert(entry.clone());
             cfg.validate()
                 .map_err(|e| BrainError::Config(e.to_string()))?;
-            if outcome != UpsertOutcome::Unchanged {
+            if outcome != UpsertOutcome::Unchanged || dropped > 0 {
                 DocumentsConfig::save(&dir, &cfg).map_err(|e| BrainError::Config(e.to_string()))?;
             }
             let outcome = match outcome {

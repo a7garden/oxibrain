@@ -4,6 +4,53 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [0.13.1] — 2026-08-30
+
+Flat-era home repair + test-isolation hardening.
+
+### Fixed
+
+- **Flat-era `~/.oxi/settings.json` now migrates** into oximemo's
+  private dir alongside the pre-flat application-support copy. Without
+  it the operator's theme, thinking level, and other preferences were
+  orphaned by the spaces layout. Candidate order is recency-first:
+  flat, then app-support; an existing private-dir file still wins.
+- **Pending registrations are a list, not a single request.** The
+  `flat → spaces` migration records one request per moved space
+  (`knowledge/`, `dev/`, `daily/`, …), not just the personal vault,
+  so every stale flat-era brain root is repaired in place. Records
+  dedupe by alias — boot-time re-records replace just the matching
+  entry. The on-disk file format is backward-compatible with 0.13.0's
+  single-request shape.
+- **Test isolation stops leaking into the real home.** CLI integration
+  tests build `oximemo-core` as a plain dependency where the
+  `cfg(test)` pending gate doesn't exist; opening a vault in those tests
+  now redirects `app_support_dir()` into a per-PID tempdir via
+  `isolate_app_support_for_tests()` (mirroring the existing
+  `isolate_index_root_for_tests`). The real home no longer accumulates
+  `oximemo-cli-test-*` pending registrations or index namespaces every
+  `cargo test` run.
+- **Flush failures now log the full anyhow chain** (`error = {:#}`),
+  so transient RPC errors (the most common being stale-document
+  validation against a flat-era `documents.toml`) are no longer a
+  one-word mystery.
+
+## [0.12.1] — 2026-08-30
+
+Repair release for real-world flat-era `documents.toml` files.
+
+### Fixed
+
+- **Registration repairs duplicate-alias pollution.** Flat-era configs can
+  hold several `[[root]]` blocks sharing one alias (and hundreds of dead
+  test roots). `register_document_root` now collapses duplicate aliases to
+  the first occurrence (`DocumentsConfig::dedupe`) before the alias-keyed
+  upsert (`DocumentsConfig::upsert` also drops every non-identical
+  same-alias entry), so a polluted config becomes valid and reparable
+  through the registration boundary instead of failing
+  `duplicate root alias` validation forever.
+
+
 ## [0.12.0] — 2026-08-30
 
 Unified Oxi home (ARCHITECTURE.md v2.15, ADR-015): one discoverable root with

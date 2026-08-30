@@ -176,7 +176,7 @@ impl DocumentsConfig {
         Ok(())
     }
 
-    /// Lookup by alias.
+    /// Alias lookup — the read side of [`Self::upsert`]'s key.
     pub fn root(&self, alias: &str) -> Option<&RootEntry> {
         self.roots.iter().find(|r| r.alias == alias)
     }
@@ -184,19 +184,51 @@ impl DocumentsConfig {
     /// Idempotent upsert keyed by `alias`: append the entry when the alias
     /// is new, replace it in place when its rules differ, and report
     /// [`UpsertOutcome::Unchanged`] when an identical entry already exists.
-    /// This is the pure decision behind the facade's `register_document_root`
-    /// operation — duplicate and replacement semantics live here and nowhere
-    /// else, so every caller (facade, server, tests) agrees on them.
+    ///
+    /// Duplicate aliases (legacy pollution from the flat era — several
+    /// `[[root]]` blocks sharing one alias) are collapsed to the single
+    /// incoming entry: `validate()` rejects duplicate aliases, so without
+    /// the collapse a polluted config could never be repaired through the
+    /// registration boundary. This is the pure decision behind the facade's
+    /// `register_document_root` operation — duplicate and replacement
+    /// semantics live here and nowhere else, so every caller (facade,
+    /// server, tests) agrees on them.
     pub fn upsert(&mut self, entry: RootEntry) -> UpsertOutcome {
-        if let Some(existing) = self.roots.iter_mut().find(|r| r.alias == entry.alias) {
-            if *existing == entry {
-                return UpsertOutcome::Unchanged;
+        let mut kept_identical = false;
+        let mut had_alias = false;
+        self.roots.retain(|existing| {
+            if existing.alias != entry.alias {
+                return true;
             }
-            *existing = entry;
-            return UpsertOutcome::Replaced;
+            had_alias = true;
+            if !kept_identical && *existing == entry {
+                kept_identical = true;
+                return true;
+            }
+            false
+        });
+        if kept_identical {
+            return UpsertOutcome::Unchanged;
         }
         self.roots.push(entry);
-        UpsertOutcome::Added
+        if had_alias {
+            UpsertOutcome::Replaced
+        } else {
+            UpsertOutcome::Added
+        }
+    }
+
+    /// Collapse duplicate-alias entries, keeping the FIRST occurrence
+    /// per alias (the operator-provisioned original; later blocks are
+    /// pollution). Returns the number of entries dropped. Pure repair
+    /// toward the `validate()` invariant: without it, a polluted config
+    /// could never be brought back in bounds through the registration
+    /// boundary, because `validate()` runs on the whole file.
+    pub fn dedupe(&mut self) -> usize {
+        let before = self.roots.len();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        self.roots.retain(|root| seen.insert(root.alias.clone()));
+        before - self.roots.len()
     }
 }
 

@@ -213,3 +213,38 @@ fn save_round_trips_upsert_and_is_atomic() {
     let reloaded = DocumentsConfig::load(dir.path()).unwrap();
     assert_eq!(reloaded, cfg);
 }
+
+#[test]
+fn upsert_collapses_duplicate_alias_pollution() {
+    // Flat-era pollution: several [[root]] blocks share the alias
+    // "vault". Registration must repair them down to one entry instead
+    // of failing validation forever.
+    fn root(alias: &str, path: &str) -> RootEntry {
+        RootEntry {
+            alias: alias.into(),
+            path: path.into(),
+            space: "personal".into(),
+            include: oxibrain_connectors::documents_config::default_include(),
+            exclude: oxibrain_connectors::documents_config::default_exclude(),
+            max_file_bytes: oxibrain_connectors::documents_config::DEFAULT_MAX_FILE_BYTES,
+        }
+    }
+    let mut cfg = DocumentsConfig {
+        roots: vec![
+            root("vault", "/old/wrong"),
+            root("other", "/tmp/other"),
+            root("vault", "/tmp/gone"),
+        ],
+    };
+    let incoming = root("vault", "/new/vault");
+    assert_eq!(cfg.upsert(incoming.clone()), UpsertOutcome::Replaced);
+    cfg.validate().expect("duplicates collapsed");
+    assert_eq!(cfg.roots.len(), 2, "other alias survives: {:?}", cfg.roots);
+    let vaults: Vec<&RootEntry> = cfg.roots.iter().filter(|r| r.alias == "vault").collect();
+    assert_eq!(vaults.len(), 1);
+    assert_eq!(vaults[0].path, incoming.path);
+    // The collapsed config still round-trips through save/load.
+    let dir = tempdir().unwrap();
+    DocumentsConfig::save(dir.path(), &cfg).unwrap();
+    assert_eq!(DocumentsConfig::load(dir.path()).unwrap(), cfg);
+}
