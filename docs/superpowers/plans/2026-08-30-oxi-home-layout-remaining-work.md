@@ -4,10 +4,11 @@
 **Parent design:** [`2026-08-29-oxi-home-layout-design.md`](../specs/2026-08-29-oxi-home-layout-design.md)  
 **Implementation plan:** [`2026-08-29-oxi-home-layout.md`](./2026-08-29-oxi-home-layout.md)
 
-This document records the work that is still required to make the approved
-layout production-ready. It is intentionally separate from the design: a task
-is not complete because a path string was changed; it is complete only when
-ownership, migration, compatibility, tests, and release checks all pass.
+**Status:** Implemented 2026-08-30. oxibrain v0.12.0, oximemo v0.13.0,
+oxicode v0.79.0 released (compatibility window open; legacy fallbacks
+removed only in a later cutover release). oxios work landed on
+`feat/brain-chat-binding` untagged — its compatibility release rides the
+branch's merge to main.
 
 ## Target contract
 
