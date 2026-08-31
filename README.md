@@ -41,6 +41,20 @@ cargo install oxibrain-cli
 
 The binary is named `oxibrain`.
 
+### Managed install (ecosystem standard)
+
+Hosts that supervise the binary (oxios `BrainInstaller`, or
+`oxios brain install`) place it at the ecosystem-standard location:
+
+```text
+~/.oxi/oxibrain/bin/oxibrain        # launcher symlink → ../versions/<v>/oxibrain
+~/.oxi/oxibrain/versions/<v>/       # one directory per release (newest 2 kept)
+```
+
+`cargo install oxibrain-cli` (→ `~/.cargo/bin/oxibrain`) stays a fully
+supported channel; managed and cargo installs coexist, with the managed
+launcher taking precedence in hosts that resolve both.
+
 ## Quick start
 
 ```bash
