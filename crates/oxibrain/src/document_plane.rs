@@ -429,25 +429,39 @@ impl Brain {
     // ─── memory-plane backlog stats ────────────────────────────────────────
 
     /// Memory-plane backlog stats (the queue-less `extract_uncached` view,
-    /// across all spaces): how many primary non-document episodes have no
-    /// extraction row, and the oldest backlog seq.
+    /// across all spaces): how many primary non-document episodes the drain
+    /// would attempt now — no extraction row for the current extractor and
+    /// no failure for it within [`FAILURE_RETRY_COOLDOWN`] — and the oldest
+    /// backlog seq. Must mirror `uncached_memory_episodes` exactly so
+    /// schedulers see the retry schedule, not a number that never moves.
     pub async fn pending_extraction_stats(&self) -> Result<PendingStats, BrainError> {
         const FILTER: &str = "WHERE e.kind = 'primary'
                          AND e.source_kind NOT IN ('document', 'document_revision')
                          AND e.redacted_at IS NULL
-                         AND NOT EXISTS (SELECT 1 FROM extractions x WHERE x.episode_id = e.id)";
+                         AND NOT EXISTS (SELECT 1 FROM extractions x
+                                         WHERE x.episode_id = e.id
+                                           AND x.extractor_id = ?1)
+                         AND NOT EXISTS (SELECT 1 FROM extraction_failures f
+                                         WHERE f.episode_id = e.id
+                                           AND f.extractor_id = ?1
+                                           AND f.created_at >= ?2)";
+        let extractor_id = crate::extraction::default_extractor_config().id();
+        let cutoff = Timestamp::from_millis(
+            self.clock.now().millis() - crate::extraction::FAILURE_RETRY_COOLDOWN.as_millis()
+                as i64,
+        );
         self.read(move |conn| {
             let count: i64 = conn
                 .query_row(
                     &format!("SELECT COUNT(*) FROM episodes e {FILTER}"),
-                    [],
+                    rusqlite::params![extractor_id, cutoff.millis()],
                     |r| r.get(0),
                 )
                 .map_err(|e| BrainError::Storage(format!("pending count: {e}")))?;
             let oldest_seq: Option<i64> = conn
                 .query_row(
                     &format!("SELECT MIN(e.seq) FROM episodes e {FILTER}"),
-                    [],
+                    rusqlite::params![extractor_id, cutoff.millis()],
                     |r| r.get(0),
                 )
                 .ok();

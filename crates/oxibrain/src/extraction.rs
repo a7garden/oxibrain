@@ -21,6 +21,17 @@ pub(crate) fn default_extractor_config() -> oxibrain_core::extraction::Extractor
     }
 }
 
+/// How long after an extraction failure the backlog walker skips the
+/// episode. Without this, a validation-poison episode (content the
+/// extractor can never turn into valid claims — e.g. the local 1.5 B model
+/// paraphrasing quotes on oxios hook captures) re-runs its full
+/// `max_tokens` generation on every drain — minutes of GPU time each —
+/// while `pending` never reaches zero, so the oxios kernel timer respawns a
+/// drain every 30 min forever (2026-09-01 incident: 26+ failed attempts on
+/// one episode, two concurrent drains burning the GPU).
+pub(crate) const FAILURE_RETRY_COOLDOWN: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
 impl Brain {
     /// Extract a single episode synchronously with an explicit LLM provider.
     ///
@@ -226,12 +237,17 @@ impl Brain {
     /// (successes + failures) — a provider failure still counts as work
     /// done, matching `ExtractSummary::episodes_done + episodes_failed`.
     ///
-    /// Each episode runs read → LLM (no store open) → write, so the model
-    /// call is never inside a transaction (§7.2).
+    /// Episodes that failed for this extractor within
+    /// [`FAILURE_RETRY_COOLDOWN`] are skipped, not attempted. Each episode
+    /// runs read → LLM (no store open) → write, so the model call is never
+    /// inside a transaction (§7.2).
     pub async fn extract_uncached(&self, limit: usize) -> Result<usize, BrainError> {
         let _llm = self.require_llm()?;
         let config = default_extractor_config();
         let extractor_id = config.id();
+        let failure_cutoff = oxibrain_ports::Timestamp::from_millis(
+            self.clock.now().millis() - FAILURE_RETRY_COOLDOWN.as_millis() as i64,
+        );
 
         // 1. List spaces, then take the backlog per space under one global
         //    limit (read-only connection).
@@ -256,6 +272,7 @@ impl Brain {
                         conn,
                         &space,
                         &extractor_id,
+                        failure_cutoff,
                     )?;
                     out.extend(
                         ids.into_iter()
@@ -279,7 +296,9 @@ impl Brain {
     }
 
     /// Re-extract all primary episodes with a new extractor config.
-    /// Old cache entries are preserved (different extractor_id = different PK).
+    /// Old cache entries are preserved (different extractor_id = different
+    /// PK). The operator asked for this explicitly, so the failure-retry
+    /// cooldown does not apply (`TIME_MAX` bypass).
     pub(crate) async fn reextract_impl(
         &self,
         space: &str,
@@ -296,6 +315,7 @@ impl Brain {
                     conn,
                     &query_space,
                     &extractor_id,
+                    oxibrain_ports::TIME_MAX,
                 )
             })
             .await?;

@@ -4,6 +4,22 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [Unreleased]
+
+### Fixed
+
+- **Failed extractions enter a 24 h retry cooldown.** A validation-poison
+  episode (content the extractor can never turn into valid claims) used to
+  re-run its full `max_tokens` generation on every drain — minutes of GPU
+  time per attempt — while `pending_extraction_stats` never reached zero, so
+  the oxios kernel timer respawned a drain every 30 min forever
+  (2026-09-01: one episode had 26+ failed attempts and two concurrent drains
+  each held a Metal context at 30 % CPU). `uncached_memory_episodes` and
+  `pending_extraction_stats` now exclude episodes whose latest same-extractor
+  failure is within `FAILURE_RETRY_COOLDOWN`, so the backlog view shows the
+  retry schedule instead of a number that never moves. The explicit
+  `reextract` operator repair path bypasses the cooldown (`TIME_MAX`).
+
 ## [0.13.1] — 2026-08-30
 
 Flat-era home repair + test-isolation hardening.

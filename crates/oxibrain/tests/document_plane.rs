@@ -50,6 +50,34 @@ impl LlmPort for AlwaysFail {
     }
 }
 
+/// Returns a syntactically invalid extraction response — the parse-failure
+/// path, which records an `extraction_failures` row.
+#[derive(Debug)]
+struct NotJson;
+
+#[async_trait::async_trait]
+impl LlmPort for NotJson {
+    async fn complete(&self, _: LlmRequest) -> Result<LlmResponse, BrainError> {
+        Ok(LlmResponse {
+            text: "{not json".into(),
+            raw: serde_json::Value::Null,
+        })
+    }
+    async fn generate_constrained(
+        &self,
+        _: LlmRequest,
+        _grammar: &str,
+    ) -> Result<LlmResponse, BrainError> {
+        Ok(LlmResponse {
+            text: "{not json".into(),
+            raw: serde_json::Value::Null,
+        })
+    }
+    fn capabilities(&self) -> oxibrain_ports::LlmCapabilities {
+        oxibrain_ports::LlmCapabilities::default()
+    }
+}
+
 fn write_file(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
     if let Some(parent) = path.parent() {
@@ -396,6 +424,41 @@ async fn pending_extraction_stats_reports_count() {
         .unwrap();
     let stats = brain.pending_extraction_stats().await.unwrap();
     assert_eq!(stats.count, 2);
+}
+
+/// A validation-poison episode (parse failure recorded at `now`) must not
+/// re-run on the next drain: the retry cooldown hides it from both the
+/// walker and `pending_extraction_stats`. 2026-09-01 oxios drain incident:
+/// the poison re-ran a full generation every 30 min forever.
+#[tokio::test]
+async fn failed_extraction_enters_retry_cooldown() {
+    let brain_dir = TempDir::new().unwrap();
+    let clock = Arc::new(FakeClock(Timestamp::from_millis(1_700_000_000_000)));
+    let llm: Arc<dyn LlmPort> = Arc::new(NotJson);
+    let brain = Brain::with_llm(
+        BrainConfig::at(brain_dir.path().to_str().unwrap()),
+        clock,
+        llm,
+    )
+    .await
+    .unwrap();
+    brain.ensure_space("personal").await.unwrap();
+    let outcome: CaptureOutcome = brain
+        .remember(
+            "personal",
+            "a.md".into(),
+            "Alice works at Acme".into(),
+            Timestamp::from_millis(1_700_000_000_000),
+        )
+        .await
+        .unwrap();
+    // Inline extraction failed on the garbage response, so the episode is
+    // uncached — but the fresh failure puts it inside the cooldown.
+    assert!(matches!(outcome, CaptureOutcome::CapturedPending { .. }));
+    let stats = brain.pending_extraction_stats().await.unwrap();
+    assert_eq!(stats.count, 0, "recent failure must be inside the cooldown");
+    let processed = brain.extract_uncached(10).await.unwrap();
+    assert_eq!(processed, 0, "drain must not re-attempt within the cooldown");
 }
 
 #[tokio::test]

@@ -286,12 +286,21 @@ fn parse_claim_literal(lt: &str, value: &str) -> Result<TypedValue, BrainError> 
 }
 
 /// Eligible memory-plane backlog (two-plane design §11.1): primary,
-/// non-document, not redacted, and no extraction row for this extractor,
+/// non-document, not redacted, no extraction row for this extractor, and no
+/// extraction failure for this extractor at or after `failure_cutoff`,
 /// ordered by seq. This query replaces the retired `ingest_jobs` queue.
+///
+/// `failure_cutoff` is the retry cooldown: a validation-poison episode
+/// (content the extractor can never parse into valid claims) otherwise
+/// re-runs its full `max_tokens` generation on every drain — minutes of GPU
+/// time per attempt — while the backlog never reaches zero. Pass
+/// [`TIME_MAX`] to ignore failures entirely (the explicit `reextract`
+/// operator repair path).
 pub fn uncached_memory_episodes(
     conn: &Connection,
     space: &str,
     extractor_id: &str,
+    failure_cutoff: Timestamp,
 ) -> Result<Vec<String>, BrainError> {
     let mut stmt = conn
         .prepare(
@@ -303,11 +312,19 @@ pub fn uncached_memory_episodes(
                  SELECT 1 FROM extractions x
                  WHERE x.episode_id = e.id AND x.extractor_id = ?2
                )
+               AND NOT EXISTS (
+                 SELECT 1 FROM extraction_failures f
+                 WHERE f.episode_id = e.id AND f.extractor_id = ?2
+                   AND f.created_at >= ?3
+               )
              ORDER BY e.seq ASC",
         )
         .map_err(sql_err)?;
     let ids: Vec<String> = stmt
-        .query_map(rusqlite::params![space, extractor_id], |r| r.get(0))
+        .query_map(
+            rusqlite::params![space, extractor_id, failure_cutoff.millis()],
+            |r| r.get(0),
+        )
         .map_err(sql_err)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(sql_err)?;
@@ -544,12 +561,66 @@ mod tests {
             EpisodeKind::Primary,
         );
 
-        let ids = uncached_memory_episodes(&conn, &space, "ext1").unwrap();
+        let ids = uncached_memory_episodes(&conn, &space, "ext1", TIME_MAX).unwrap();
         assert_eq!(
             ids,
             vec![note.clone(), other_ext],
             "only uncached memory-plane primary episodes, ordered by seq"
         );
+    }
+
+    /// A same-extractor failure inside the cooldown hides the episode from
+    /// the backlog; an older failure (or [`TIME_MAX`]) does not. This is the
+    /// store half of the retry-cooldown contract (2026-09-01 drain incident:
+    /// a validation-poison episode re-ran a full generation on every drain).
+    #[test]
+    fn uncached_memory_episodes_respects_failure_cooldown() {
+        let (_dir, conn, space) = test_store();
+        let failed_recent = episode_with(
+            &conn,
+            &space,
+            "recent failure",
+            SourceRef::Note {
+                path: "a.md".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        let failed_old = episode_with(
+            &conn,
+            &space,
+            "old failure",
+            SourceRef::Note {
+                path: "b.md".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        crate::quarantine::record_failure(
+            &conn,
+            &failed_recent,
+            "ext1",
+            r#"{}"#,
+            "[]",
+            Timestamp::from_millis(20_000),
+        )
+        .unwrap();
+        crate::quarantine::record_failure(
+            &conn,
+            &failed_old,
+            "ext1",
+            r#"{}"#,
+            "[]",
+            Timestamp::from_millis(5_000),
+        )
+        .unwrap();
+
+        // Cutoff between the two failures: only the older failure retries.
+        let cutoff = Timestamp::from_millis(10_000);
+        let ids = uncached_memory_episodes(&conn, &space, "ext1", cutoff).unwrap();
+        assert_eq!(ids, vec![failed_old.clone()]);
+
+        // TIME_MAX ignores failures entirely (operator repair path).
+        let ids = uncached_memory_episodes(&conn, &space, "ext1", TIME_MAX).unwrap();
+        assert_eq!(ids, vec![failed_recent, failed_old]);
     }
 
     #[test]
