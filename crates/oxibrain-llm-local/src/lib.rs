@@ -316,13 +316,13 @@ fn generate_blocking(
                 .map_err(|e| BrainError::Model(format!("grammar init: {e}")))?;
             LlamaSampler::chain_simple([
                 gs,
-                LlamaSampler::penalties(64, opts.repetition_penalty, 0.0, 0.0),
+                LlamaSampler::penalties(model.n_vocab(), 64, opts.repetition_penalty, 0.0, 0.0),
                 LlamaSampler::temp(opts.temperature),
                 LlamaSampler::greedy(),
             ])
         }
         None => LlamaSampler::chain_simple([
-            LlamaSampler::penalties(64, opts.repetition_penalty, 0.0, 0.0),
+            LlamaSampler::penalties(model.n_vocab(), 64, opts.repetition_penalty, 0.0, 0.0),
             LlamaSampler::temp(opts.temperature),
             LlamaSampler::greedy(),
         ]),
