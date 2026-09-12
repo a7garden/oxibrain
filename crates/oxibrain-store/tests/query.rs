@@ -169,3 +169,62 @@ fn contradiction_details_carries_surfaces_and_episodes() {
     let values: Vec<&str> = details.iter().map(|d| d.object_value.as_str()).collect();
     assert!(values.contains(&"Seoul") && values.contains(&"Busan"));
 }
+
+fn memory_query(text: &str) -> oxibrain_core::retrieval::Query {
+    use oxibrain_core::retrieval::{Query, QueryMode, SearchPlane};
+    use std::collections::BTreeSet;
+    Query {
+        text: text.into(),
+        mode: QueryMode::Lexical,
+        space: "s1".into(),
+        as_of: None,
+        limit: 10,
+        min_confidence: 0.0,
+        planes: BTreeSet::from([SearchPlane::Memory]),
+    }
+}
+
+#[test]
+fn entity_surface_hits_carry_belief_snippet() {
+    let (conn, clock) = setup();
+    declare_employed(&conn, &clock, "Alice", "Acme", TIME_MIN.millis());
+
+    let ranking = query::hybrid_query(&conn, &memory_query("Alice"), None).unwrap();
+    let hits = query::search_results(&conn, "s1", &ranking).unwrap();
+    let alice = hits
+        .iter()
+        .find(|h| h.entity_surface == "Alice")
+        .expect("lexical channel must surface the Alice entity hit");
+    assert_eq!(
+        alice.snippet, "employed_by Acme",
+        "a surface hit quotes the entity's strongest active belief: {hits:?}"
+    );
+
+    // The cue is deterministic: repeated identical queries produce the
+    // identical snippet.
+    for _ in 0..3 {
+        let ranking = query::hybrid_query(&conn, &memory_query("Alice"), None).unwrap();
+        let hits = query::search_results(&conn, "s1", &ranking).unwrap();
+        let again = hits
+            .iter()
+            .find(|h| h.entity_surface == "Alice")
+            .expect("repeat hit");
+        assert_eq!(again.snippet, "employed_by Acme");
+    }
+}
+
+#[test]
+fn object_only_entity_keeps_empty_snippet() {
+    let (conn, clock) = setup();
+    declare_employed(&conn, &clock, "Alice", "Acme", TIME_MIN.millis());
+
+    // "Acme" is only ever an object: it has no subject statements, hence no
+    // active belief to quote. The cue stays empty rather than inventing one.
+    let ranking = query::hybrid_query(&conn, &memory_query("Acme"), None).unwrap();
+    let hits = query::search_results(&conn, "s1", &ranking).unwrap();
+    let acme = hits
+        .iter()
+        .find(|h| h.entity_surface == "Acme")
+        .expect("lexical channel must surface the Acme entity hit");
+    assert_eq!(acme.snippet, "", "no active belief, no cue: {hits:?}");
+}

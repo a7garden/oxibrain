@@ -447,8 +447,8 @@ impl Brain {
                                            AND f.created_at >= ?2)";
         let extractor_id = crate::extraction::default_extractor_config().id();
         let cutoff = Timestamp::from_millis(
-            self.clock.now().millis() - crate::extraction::FAILURE_RETRY_COOLDOWN.as_millis()
-                as i64,
+            self.clock.now().millis()
+                - crate::extraction::FAILURE_RETRY_COOLDOWN.as_millis() as i64,
         );
         self.read(move |conn| {
             let count: i64 = conn

@@ -18,7 +18,7 @@ use oxibrain_index::adjacency::{AdjacencyGraph, BfsSpec};
 use oxibrain_index::{KnnIndex, TfIdfModel, TfIdfVector};
 
 use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 /// Batch-fetch salience values for a set of entity IDs.
 /// Returns a map of entity_id → salience (default 1.0 if not found).
@@ -332,9 +332,12 @@ pub fn retract_parts(
 /// `entity_id` is the canonical entity id; `entity_surface` and
 /// `entity_type` come from the entities + entity_keys tables (falling
 /// back to the id / "Unknown" if the row was deleted between rank and
-/// projection). `score` is the ranker's fused score. `snippet` carries
-/// the matched predicate as a one-line cue — the UI uses it as a stand-in
-/// for the full snippet line until the user expands the result.
+/// projection). `score` is the ranker's fused score. `snippet` is a one-line
+/// cue: `matched: <predicate>` when the hit arrived through a statement,
+/// otherwise the entity's strongest current active belief rendered as
+/// `<predicate> <object>` — empty only when the entity has no active belief
+/// (P10: a hit explains itself). The UI uses it as a stand-in for the full
+/// snippet line until the user expands the result.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
     pub entity_id: String,
@@ -361,7 +364,12 @@ pub fn search_results(
             _ => continue,
         };
         let snippet = if item.facts.predicate.is_empty() {
-            String::new()
+            // Entity-surface hit: the candidate matched on its own surface
+            // via an entity channel (FTS / vector / graph / community), so
+            // the facts carry no predicate. Fall back to the entity's
+            // strongest current active belief as the one-line cue; entities
+            // with no active belief keep an empty snippet.
+            top_belief_cue(conn, space, &entity_id)?.unwrap_or_default()
         } else {
             format!("matched: {}", item.facts.predicate)
         };
@@ -388,6 +396,53 @@ pub fn search_results(
         });
     }
     Ok(out)
+}
+
+/// Strongest current active belief of an entity, as a one-line cue:
+/// `<predicate> <object>` with the object rendered as a surface (entity)
+/// or plain value (literal). Only the current slice per statement (max
+/// `valid_from`) competes; ties on confidence break by statement id so
+/// the cue is deterministic. `None` when the entity has no active belief.
+fn top_belief_cue(
+    conn: &Connection,
+    space: &str,
+    entity: &str,
+) -> Result<Option<String>, BrainError> {
+    let row = conn
+        .query_row(
+            "SELECT s.predicate, s.object_entity, s.object_literal
+             FROM statements s
+             JOIN beliefs b ON b.statement_id = s.id
+             WHERE s.space_id = ?1 AND s.subject_id = ?2 AND b.status = 'active'
+               AND b.valid_from = (
+                   SELECT MAX(b2.valid_from) FROM beliefs b2
+                   WHERE b2.statement_id = s.id)
+             ORDER BY b.confidence DESC, s.id
+             LIMIT 1",
+            params![space, entity],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_err)?;
+    let Some((predicate, object_entity, object_literal)) = row else {
+        return Ok(None);
+    };
+    let object = match (object_entity, object_literal) {
+        (Some(eid), _) => crate::brief::surface_of(conn, &eid).unwrap_or(eid),
+        (None, Some(lit)) => {
+            let tv: oxibrain_core::knowledge::TypedValue =
+                serde_json::from_str(&lit).expect("valid literal");
+            crate::brief::literal_repr(&tv)
+        }
+        _ => unreachable!("CHECK constraint"),
+    };
+    Ok(Some(format!("{predicate} {object}")))
 }
 
 /// Collect all entity ids in the merge group of `entity` (the entity itself

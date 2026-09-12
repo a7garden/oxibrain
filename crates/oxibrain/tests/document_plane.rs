@@ -458,7 +458,10 @@ async fn failed_extraction_enters_retry_cooldown() {
     let stats = brain.pending_extraction_stats().await.unwrap();
     assert_eq!(stats.count, 0, "recent failure must be inside the cooldown");
     let processed = brain.extract_uncached(10).await.unwrap();
-    assert_eq!(processed, 0, "drain must not re-attempt within the cooldown");
+    assert_eq!(
+        processed, 0,
+        "drain must not re-attempt within the cooldown"
+    );
 }
 
 #[tokio::test]
