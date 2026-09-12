@@ -91,11 +91,33 @@ impl LocalEmbedder {
 }
 
 /// Shared llama.cpp backend — initialized once per process.
+///
+/// llama.cpp logs through a process-global C callback that defaults to
+/// `fputs(…, stderr)`; left alone, every model load spams Metal device init,
+/// model metadata dumps, `sched_reserve`, and compute-buffer notes. Unless
+/// `OXIBRAIN_VERBOSE=1`, install the upstream disabled log sink before
+/// `llama_backend_init` so init-time device logs are swallowed too. The sink
+/// checks its disabled flag before touching `tracing`, so a subscriber
+/// installed elsewhere in the process cannot resurrect the noise. When the
+/// env var is set, the default callback is left in place: byte-identical
+/// stderr passthrough, as before this hook existed.
 fn llama_backend() -> &'static llama_cpp_2::llama_backend::LlamaBackend {
     use llama_cpp_2::llama_backend::LlamaBackend;
-    use std::sync::OnceLock;
-    static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
-    BACKEND.get_or_init(|| LlamaBackend::init().expect("llama.cpp backend init failed"))
+    use std::sync::LazyLock;
+    static BACKEND: LazyLock<LlamaBackend> = LazyLock::new(|| {
+        if !verbose_c_logs() {
+            llama_cpp_2::send_logs_to_tracing(
+                llama_cpp_2::LogOptions::default().with_logs_enabled(false),
+            );
+        }
+        LlamaBackend::init().expect("llama.cpp backend init failed")
+    });
+    &BACKEND
+}
+
+/// `OXIBRAIN_VERBOSE=1` opts back into llama.cpp's default stderr logging.
+fn verbose_c_logs() -> bool {
+    std::env::var("OXIBRAIN_VERBOSE").is_ok_and(|v| v == "1")
 }
 
 // ─── EmbeddingPort ──────────────────────────────────────────────────────────
