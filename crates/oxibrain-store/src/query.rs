@@ -520,6 +520,38 @@ pub fn fts_search(
     Ok(results)
 }
 
+/// Whitespace query terms, the unit of the per-term lexical channels
+/// (`split_whitespace` is script-neutral — P11 allows no language branch).
+fn query_tokens(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Entity hits for graph/community seeding, unioned per term. Seeding from
+/// the whole query text would inherit FTS5's row-level AND and starve
+/// expansion whenever one query term matches no indexed row.
+fn entity_seed_hits(
+    conn: &Connection,
+    space: &str,
+    text: &str,
+    limit: usize,
+) -> Result<Vec<SearchHit>, BrainError> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<SearchHit> = Vec::new();
+    for term in query_tokens(text) {
+        for hit in fts_search(conn, space, &term, limit, FtsIndex::Word)? {
+            if let SearchTarget::Entity { id } = &hit.target
+                && seen.insert(id.clone())
+            {
+                out.push(hit);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Load the TF-IDF model for a space, fitted on the live (non-redacted)
 /// episode contents. Statement rendering is kept out of the model so the
 /// model is cheap to rebuild on each query.
@@ -696,30 +728,35 @@ pub fn hybrid_query(
     // mechanical; rank decides.
     let fetch_cap = limit.saturating_mul(4).max(limit);
     if run_lexical {
-        let word = fts_search(conn, &space, &q.text, fetch_cap, FtsIndex::Word)?;
-        let ngram = fts_search(conn, &space, &q.text, fetch_cap, FtsIndex::Ngram)?;
-        input.channels.push(ChannelResult {
-            channel: next_channel,
-            hits: word
-                .iter()
-                .map(|h| (search_target_to_target_id(&h.target), h.score))
-                .collect(),
-        });
-        channels_used.push(RankChannel::Lexical {
-            index: LexIndex::Word,
-        });
-        next_channel += 1;
-        input.channels.push(ChannelResult {
-            channel: next_channel,
-            hits: ngram
-                .iter()
-                .map(|h| (search_target_to_target_id(&h.target), h.score))
-                .collect(),
-        });
-        channels_used.push(RankChannel::Lexical {
-            index: LexIndex::Ngram,
-        });
-        next_channel += 1;
+        // Soft-AND lexical fetch (§7.4): one channel per (term, index)
+        // instead of one channel per index over an FTS5 implicit-AND query.
+        // A row-level conjunction requires every query term to co-occur in
+        // a single indexed row; the declare path indexes one row per
+        // entity surface (index_entities_fts) and no statement rows, so a
+        // single unmatched term would zero both channels and leave `rank`
+        // an empty candidate union. Per-term channels feed RRF instead:
+        // rows matching more terms appear in more channels and rank
+        // higher; single-term hits survive with proportionally less
+        // evidence. Store stays mechanical — fusion remains rank's call.
+        for term in query_tokens(&q.text) {
+            for index in [FtsIndex::Word, FtsIndex::Ngram] {
+                let hits = fts_search(conn, &space, &term, fetch_cap, index)?;
+                input.channels.push(ChannelResult {
+                    channel: next_channel,
+                    hits: hits
+                        .iter()
+                        .map(|h| (search_target_to_target_id(&h.target), h.score))
+                        .collect(),
+                });
+                channels_used.push(RankChannel::Lexical {
+                    index: match index {
+                        FtsIndex::Word => LexIndex::Word,
+                        FtsIndex::Ngram => LexIndex::Ngram,
+                    },
+                });
+                next_channel += 1;
+            }
+        }
     }
     if matches!(q.mode, QueryMode::Hybrid | QueryMode::LexicalVector) {
         let hits = lexical_vector_search(conn, &space, &q.text, fetch_cap)?;
@@ -758,10 +795,9 @@ pub fn hybrid_query(
     }
     if run_graph {
         // Graph mode: seed from lexical entity hits, BFS expand to neighbors.
-        let seed_hits = fts_search(conn, &space, &q.text, limit / 2, FtsIndex::Word)?
-            .into_iter()
-            .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
-            .collect::<Vec<_>>();
+        // Seeds union across query terms so one unmatched term cannot starve
+        // expansion (see the soft-AND note in the lexical channels above).
+        let seed_hits = entity_seed_hits(conn, &space, &q.text, limit / 2)?;
         let seeds: Vec<String> = seed_hits
             .iter()
             .filter_map(|h| match &h.target {
@@ -828,10 +864,7 @@ pub fn hybrid_query(
         }
     }
     if run_community {
-        let seed_hits = fts_search(conn, &space, &q.text, limit / 2, FtsIndex::Word)?
-            .into_iter()
-            .filter(|h| matches!(h.target, SearchTarget::Entity { .. }))
-            .collect::<Vec<_>>();
+        let seed_hits = entity_seed_hits(conn, &space, &q.text, limit / 2)?;
         let seeds: Vec<String> = seed_hits
             .iter()
             .filter_map(|h| match &h.target {

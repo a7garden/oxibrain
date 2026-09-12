@@ -92,6 +92,69 @@ async fn hybrid_query_finds_declared_knowledge() {
     // The smoke assertion here is that the call completes successfully.
 }
 
+/// Regression: the declare path indexes one FTS row per entity surface and
+/// no statement rows, so the old whole-query implicit-AND channel returned
+/// zero memory hits the moment any query term matched nothing ("Alice
+/// nonexistent토큰"). Per-term channels must keep single-term hits alive.
+/// Fails pre-fix, passes post-fix; mirrors the live declare path (no
+/// rebuild_indexes, exactly as production leaves the projection).
+#[tokio::test]
+async fn lexical_memory_recall_survives_unmatched_query_terms() {
+    let dir = tempdir().expect("tempdir");
+    let clock = std::sync::Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
+    let brain = Brain::with_clock(
+        oxibrain::BrainConfig::at(dir.path().to_str().unwrap()),
+        clock,
+    )
+    .await
+    .expect("open");
+
+    let space = brain.ensure_space("test").await.expect("space");
+    brain
+        .declare(
+            &space,
+            decl_add("Alice", "Person", "works_on", "Acme", "Organization"),
+        )
+        .await
+        .expect("declare");
+
+    async fn memory_surfaces(brain: &Brain, space: &str, text: &str) -> Vec<String> {
+        let q = Query {
+            text: text.into(),
+            mode: QueryMode::Hybrid,
+            space: space.into(),
+            as_of: None,
+            limit: 10,
+            min_confidence: 0.0,
+            planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
+        };
+        brain
+            .search(q)
+            .await
+            .expect("search")
+            .memory
+            .into_iter()
+            .map(|hit| hit.entity_surface)
+            .collect()
+    }
+
+    let mixed = memory_surfaces(&brain, &space, "Alice nonexistent토큰").await;
+    assert!(
+        mixed.iter().any(|s| s == "Alice"),
+        "unmatched term must not kill the memory channel: {mixed:?}"
+    );
+
+    let both = memory_surfaces(&brain, &space, "Alice Acme").await;
+    assert!(
+        both.iter().any(|s| s == "Alice"),
+        "two-term query must still hit the subject: {both:?}"
+    );
+    assert!(
+        both.iter().any(|s| s == "Acme"),
+        "two-term query must hit the object: {both:?}"
+    );
+}
+
 #[tokio::test]
 async fn traversal_finds_multihop() {
     let dir = tempdir().expect("tempdir");
