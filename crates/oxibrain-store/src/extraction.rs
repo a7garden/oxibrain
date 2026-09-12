@@ -75,6 +75,48 @@ pub fn get_cached_response(
     Ok(result)
 }
 
+/// Outcome counts for one extraction run window (the `extract --pending`
+/// drain summary). `accepted` counts extraction cache rows written in
+/// `[since, until]` — a drained episode that validates and projects writes
+/// exactly one; `rejected_episodes` counts distinct episodes with a failure
+/// row in the window; `failure_rows` counts those rows (one per
+/// repair-exhausted LLM response). Plain counts over a time window:
+/// classification and wording live in the caller (P9).
+pub struct ExtractionRunCounts {
+    pub accepted: u64,
+    pub rejected_episodes: u64,
+    pub failure_rows: u64,
+}
+
+/// Summarize extraction outcomes recorded in `[since, until]`, across all
+/// extractors. Read-only; safe next to the writer (WAL).
+pub fn extraction_run_counts(
+    conn: &Connection,
+    since: Timestamp,
+    until: Timestamp,
+) -> Result<ExtractionRunCounts, BrainError> {
+    let count = |sql: &str| -> Result<i64, BrainError> {
+        conn.query_row(
+            sql,
+            rusqlite::params![since.millis(), until.millis()],
+            |r| r.get(0),
+        )
+        .map_err(sql_err)
+    };
+    Ok(ExtractionRunCounts {
+        accepted: count(
+            "SELECT COUNT(*) FROM extractions WHERE created_at >= ?1 AND created_at <= ?2",
+        )? as u64,
+        rejected_episodes: count(
+            "SELECT COUNT(DISTINCT episode_id) FROM extraction_failures
+             WHERE created_at >= ?1 AND created_at <= ?2",
+        )? as u64,
+        failure_rows: count(
+            "SELECT COUNT(*) FROM extraction_failures WHERE created_at >= ?1 AND created_at <= ?2",
+        )? as u64,
+    })
+}
+
 // ─── project_extraction: claims → assertions ─────────────────────────────────
 
 /// Project valid claims from an extraction into assertions + mentions.
@@ -644,5 +686,47 @@ mod tests {
 
         let missing = get_cached_response(&conn, &ep, "ext2").unwrap();
         assert!(missing.is_none());
+    }
+
+    /// Window bucketing for the drain summary: cache rows and failure rows
+    /// count only inside `[since, until]`; two failures on one episode fold
+    /// into one rejected episode.
+    #[test]
+    fn extraction_run_counts_bucket_by_window() {
+        let (_dir, conn, space) = test_store();
+        let in_window = Timestamp::from_millis(20_000);
+        let before_window = Timestamp::from_millis(5_000);
+        let note = |path: &str, content: &str| {
+            episode_with(
+                &conn,
+                &space,
+                content,
+                SourceRef::Note { path: path.into() },
+                EpisodeKind::Primary,
+            )
+        };
+        let accepted = note("a.md", "accepted note");
+        let rejected = note("b.md", "rejected note");
+        let stale = note("c.md", "stale note");
+
+        cache_response(&conn, &accepted, "ext1", r#"{"claims":[]}"#, in_window).unwrap();
+        crate::quarantine::record_failure(&conn, &rejected, "ext1", r#"{}"#, "[]", in_window)
+            .unwrap();
+        crate::quarantine::record_failure(&conn, &rejected, "ext1", r#"{}"#, "[]", in_window)
+            .unwrap();
+        // Outside the window: must not leak into the run's counts.
+        cache_response(&conn, &stale, "ext1", r#"{"claims":[]}"#, before_window).unwrap();
+        crate::quarantine::record_failure(&conn, &stale, "ext1", r#"{}"#, "[]", before_window)
+            .unwrap();
+
+        let counts = extraction_run_counts(
+            &conn,
+            Timestamp::from_millis(10_000),
+            Timestamp::from_millis(30_000),
+        )
+        .unwrap();
+        assert_eq!(counts.accepted, 1);
+        assert_eq!(counts.rejected_episodes, 1, "two failures, one episode");
+        assert_eq!(counts.failure_rows, 2);
     }
 }
