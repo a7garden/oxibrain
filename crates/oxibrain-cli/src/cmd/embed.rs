@@ -6,8 +6,8 @@
 //! unreachable from every shipped binary. This module attaches the
 //! manifest's `embed`-role model (default: bge-m3) to a `Brain`.
 
-use oxibrain::models::{ModelRole, load_manifest_at, model_dir};
 use oxibrain::Brain;
+use oxibrain::models::{ModelRole, load_manifest_at, model_dir};
 use oxibrain_embed_local::{LocalEmbedder, LocalEmbedderOptions};
 use std::sync::Arc;
 
