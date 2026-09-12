@@ -11,7 +11,7 @@ byte for byte.
   tier. A default build pulls zero oxi-ecosystem crates.
 - **One engine, three shapes** — a Rust library (`oxibrain`), one binary
   (`oxibrain`: CLI + caller-owned server), and a desktop brain UI.
-- **Agent-native.** Fifteen MCP tools (capped) over caller-owned stdio or a
+- **Agent-native.** Fourteen MCP tools (capped) over caller-owned stdio or a
   foreground loopback HTTP session. Anything reachable over MCP is reachable
   in-process, and vice versa.
 - **Assertions, not facts.** The ledger records who claimed what, over which
@@ -58,19 +58,32 @@ launcher taking precedence in hosts that resolve both.
 ## Quick start
 
 ```bash
-# Create a local brain space and document root.
+# Create the store and a brain space (more spaces: oxibrain admin space add <name>).
 oxibrain admin init --space personal
-oxibrain admin space add dev
 
-# Reconcile configured document roots.
-oxibrain admin index --documents
+# Pull the local GGUF model set (otherwise pulled lazily on first extraction).
+oxibrain admin model pull
 
-# Search a space from the CLI.
+# Register a document root by editing ~/.oxi/brain/documents.toml (there is no
+# CLI verb for registration), then reconcile the documents cache and embed
+# missing chunks.
+oxibrain admin index --embed
+
+# Drain uncached memory-plane episodes through the configured extractor.
+oxibrain admin extract --pending
+
+# Query the op surface: every op takes its JSON payload via --json or stdin.
 oxibrain search --json '{"space":"personal","query":"database decision","planes":["documents"],"limit":5}'
+echo '{"space":"personal","query":"database decision","limit":5}' | oxibrain search
 
-# Serve caller-owned JSON-RPC over stdio for an agent integration.
+# Serve caller-owned JSON-RPC over stdio for an MCP client integration.
 oxibrain admin serve --stdio
 ```
+
+The store lives under `~/.oxi`; every subcommand accepts `--dir <DIR>` (env
+`OXIBRAIN_DIR`) to relocate it. `admin space add` provisions each space's
+vault directory and document root. `oxibrain describe` and `oxibrain schema`
+are the orientation and introspection entries into the op surface.
 
 Agents use CLI operations directly or launch a caller-owned `admin serve --stdio`
 child through `oxibrain-client`. The foreground `admin serve --http <address>`
@@ -99,7 +112,7 @@ at the boundary. [ARCHITECTURE.md](doc/ARCHITECTURE.md) is authoritative.
 | `oxibrain-embed-local` | Multilingual embedding adapter |
 | `oxibrain-connectors` | Source connectors — vault readers, file ingest |
 | `oxibrain-client` | Client SDK — caller-owned stdio session |
-| `oxibrain-mcp` | MCP server tools — fifteen-tool cap |
+| `oxibrain-mcp` | MCP server tools — fourteen-tool cap |
 | `oxibrain-cli` | The `oxibrain` binary: CLI + caller-owned server |
 
 ## Oxi ecosystem
