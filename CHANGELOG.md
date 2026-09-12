@@ -4,10 +4,37 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
-## [Unreleased]
+## [0.13.0] — 2026-09-12
+
+The local embedder reaches the shipped binaries; recall and drain-reporting repairs.
+
+### Added
+
+- **The local embedder is wired into CLI and MCP surfaces.** `admin index
+  --embed` now resolves the manifest's embed-role model and attaches it
+  (required there — a silent skip would report dense coverage as if nothing
+  were wrong); best-effort at `serve` and the agent op surface, where lexical
+  and graph channels must keep working without the model. Previously
+  `with_embedder` had no production caller and the dense retrieval channel
+  was unreachable from every shipped binary.
 
 ### Fixed
 
+- **One unmatched query term no longer kills memory recall.** The memory
+  plane ran the whole query text through FTS5's implicit-AND `MATCH`, so
+  `Alice nonexistent토큰` returned zero candidates from both lexical channels
+  and rank had nothing to fuse. One lexical channel per (term, index) now
+  lets RRF reward rows matching more terms while single-term hits survive
+  with less evidence. Query-time only — no schema or rank contract change.
+- **`admin extract --pending` reports accepted vs rejected episodes.** The
+  summary printed "extracted N episode(s)" even when every attempt was
+  rejected by the validators. It now counts cache rows written (accepted),
+  distinct episodes with a failure row (rejected), and failure rows over the
+  run's clock window, so a drain that yielded nothing is visible.
+- **llama.cpp C logs are silent unless `OXIBRAIN_VERBOSE=1`.** Model loads
+  no longer spam Metal device init, metadata dumps, and compute-buffer notes
+  to stderr; the disabled log sink installs before backend init in the
+  shared-backend `LazyLock`, so init-time device logs are swallowed too.
 - **Failed extractions enter a 24 h retry cooldown.** A validation-poison
   episode (content the extractor can never turn into valid claims) used to
   re-run its full `max_tokens` generation on every drain — minutes of GPU
