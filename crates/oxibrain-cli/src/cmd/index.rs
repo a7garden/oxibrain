@@ -15,6 +15,11 @@ use std::path::Path;
 pub async fn run(dir: &Path, documents: bool, embed: bool) -> anyhow::Result<()> {
     let _ = documents; // accepted for the spec's canonical spelling; default on
     let brain = Brain::open(BrainConfig::at(dir)).await?;
+    let brain = if embed {
+        super::embed::require_local_embedder(brain)?
+    } else {
+        brain
+    };
     let freshness = brain
         .index_documents(IndexOptions {
             embed,

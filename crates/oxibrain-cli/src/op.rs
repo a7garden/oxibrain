@@ -196,6 +196,7 @@ pub async fn run(dir: &Path, args: &[String]) -> i32 {
             return code;
         }
     };
+    let brain = super::cmd::embed::try_attach_local_embedder(brain);
 
     // v2.13 (ADR-013): no default-space fallback — the server enforces the
     // required `space` argument and enumerates available spaces in the

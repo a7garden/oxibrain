@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod doctor;
+pub mod embed;
 pub mod entity_split;
 pub mod eval;
 pub mod export_cmd;

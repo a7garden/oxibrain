@@ -37,6 +37,7 @@ oxibrain-client.workspace = true
 serde.workspace = true
 oxibrain-llm-http.workspace = true
 oxibrain-llm-local.workspace = true
+oxibrain-embed-local.workspace = true
 oxibrain-ports.workspace = true
 oxibrain-ops.workspace = true
 oxibrain-connectors.workspace = true
