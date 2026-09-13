@@ -4,6 +4,14 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [Unreleased]
+
+### Docs
+
+- The README documents the generated agent skill (`admin skill install`):
+  install targets, what the `SKILL.md`/`CONTEXT.md` pair teaches, and why the
+  pair is derived from the op registry instead of shipped as a static file.
+
 ## [0.14.1] — 2026-09-13
 
 ### Fixed

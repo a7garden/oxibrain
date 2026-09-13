@@ -25,6 +25,7 @@ byte for byte.
 
 - [Install](#install)
 - [Quick start](#quick-start)
+- [Agent skill](#agent-skill)
 - [Architecture](#architecture)
 - [Project structure](#project-structure)
 - [Oxi ecosystem](#oxi-ecosystem)
@@ -88,6 +89,24 @@ are the orientation and introspection entries into the op surface.
 Agents use CLI operations directly or launch a caller-owned `admin serve --stdio`
 child through `oxibrain-client`. The foreground `admin serve --http <address>`
 variant exposes the local operations console.
+
+## Agent skill
+
+oxibrain ships its own agent skill — a `SKILL.md` + `CONTEXT.md` pair that
+teaches an agent the op surface (all fourteen ops), the payload contract
+(`space` is required on every op; ids are resolved, never guessed), and the
+safety rails (dry-run plan tokens, `meta.dropped`, `locked` backoff). Install
+it into your agent's skill directory:
+
+```bash
+oxibrain admin skill install                  # omp    → ~/.omp/skills/oxibrain
+oxibrain admin skill install --target claude  # claude → ~/.claude/skills/oxibrain
+oxibrain admin skill install --target raw     # print both files to stdout
+```
+
+Both files are generated from the op registry (`oxibrain-ops`), not
+hand-maintained, so they cannot drift from the installed binary's surface.
+Re-run the install after upgrading so the skill matches your binary.
 
 ## Architecture
 
