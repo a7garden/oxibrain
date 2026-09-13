@@ -55,6 +55,59 @@ pub struct RootFingerprint {
     pub include: Vec<String>,
     pub exclude: Vec<String>,
     pub max_file_bytes: u64,
+    /// Connector decoder version that produced the cached projection
+    /// (`connectors::DECODER_VERSION`). Cached fingerprints persisted before
+    /// this field existed deserialize with the empty default, which differs
+    /// from the current version — so every root resets exactly once after an
+    /// upgrade and the whole cache re-decodes under the new decoder.
+    #[serde(default)]
+    pub decoder_version: String,
+}
+
+/// One canonical `pdc://document/…` link in the projection — a
+/// serialization-stable mirror of the connector's `PdcLink`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PdcLinkMeta {
+    /// Target document UUID (canonical lowercase form).
+    pub uuid: String,
+    /// `b-<uuid>` block target when the fragment is present.
+    pub block: Option<String>,
+    /// True when the link carries the `pdc-embed` class (document embed).
+    pub embed: bool,
+}
+
+/// Standard decoded metadata of one canonical PDC document, persisted as
+/// JSON in the disposable document projection (`documents.pdc_meta`). Pure
+/// data: the connectors own decoding, the store serializes this verbatim,
+/// and the facade fills it at ingest time. Serialized form is part of the
+/// rebuildable cache only — reprojection from source reproduces it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PdcProjectionMeta {
+    /// Envelope title; may be empty (use `display_title` for rendering).
+    pub title: String,
+    /// Envelope title, else body fallback, else filename stem.
+    pub display_title: String,
+    /// Envelope `profile` free-text value when present.
+    pub profile: Option<String>,
+    /// Envelope `lang` when present.
+    pub lang: Option<String>,
+    pub tags: Vec<String>,
+    pub aliases: Vec<String>,
+    pub favorite: bool,
+    /// Envelope deletion state (trash semantics; the source stays indexed).
+    pub deleted: bool,
+    pub deleted_at: Option<String>,
+    pub created: String,
+    pub updated: String,
+    /// Canonical internal links in source order.
+    pub links: Vec<PdcLinkMeta>,
+    /// Managed-asset SHA-256 digests referenced by the body.
+    pub assets: Vec<String>,
+    pub task_count: u32,
+    pub block_id_count: u32,
+    /// Reasons the body carries unsafe constructs (`unsafe_content`); the
+    /// document is still indexed when non-empty.
+    pub unsafe_flags: Vec<String>,
 }
 
 /// Cached root metadata held in `documents.db`.

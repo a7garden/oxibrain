@@ -334,6 +334,7 @@ mod tests {
             include: vec!["**/*.md".to_owned()],
             exclude: Vec::new(),
             max_file_bytes: 1024 * 1024,
+            decoder_version: "1".to_owned(),
         };
         let text = "hello world";
         let upsert = oxibrain_store::documents::DocumentUpsert {
@@ -350,6 +351,7 @@ mod tests {
                 context: String::new(),
                 text: text.to_owned(),
             }],
+            pdc: None,
         };
         let plan = oxibrain_store::documents::ApplyPlan {
             root_actions: vec![(
@@ -391,6 +393,7 @@ mod tests {
             include: vec!["**/*.md".to_owned()],
             exclude: Vec::new(),
             max_file_bytes: 1024 * 1024,
+            decoder_version: "1".to_owned(),
         };
         let observation = oxibrain_core::documents::FileObservation {
             locator: "notes/a.md".to_owned(),
@@ -413,6 +416,7 @@ mod tests {
                 context: String::new(),
                 text: text.to_owned(),
             }],
+            pdc: None,
         };
         let plan = oxibrain_store::documents::ApplyPlan {
             root_actions: vec![(

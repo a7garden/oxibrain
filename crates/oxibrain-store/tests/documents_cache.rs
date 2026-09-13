@@ -27,6 +27,7 @@ fn fp(alias: &str, space: &str) -> RootFingerprint {
         include: vec!["**/*.md".to_owned()],
         exclude: Vec::new(),
         max_file_bytes: 1024 * 1024,
+        decoder_version: "2".to_owned(),
     }
 }
 
@@ -66,6 +67,7 @@ fn ups(locator: &str, revision: &str, text: &str, chunks: usize) -> DocumentUpse
         modified_ns: 1_700_000_000_000_000_000,
         modified_at: 1_700_000_000,
         chunks: cu,
+        pdc: None,
     }
 }
 
@@ -77,7 +79,7 @@ fn open_creates_schema_v1() {
         cache.user_version().unwrap(),
         oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION
     );
-    assert_eq!(oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION, 2);
+    assert_eq!(oxibrain_store::documents::DOCUMENTS_SCHEMA_VERSION, 3);
     assert!(dir.path().join("documents.db").exists());
 }
 
@@ -87,7 +89,7 @@ fn open_is_idempotent() {
     let _first = open(dir.path());
     drop(_first);
     let second = open(dir.path());
-    assert_eq!(second.user_version().unwrap(), 2);
+    assert_eq!(second.user_version().unwrap(), 3);
 }
 
 #[test]
@@ -113,7 +115,7 @@ fn open_ro_succeeds_when_db_exists() {
         // Drop releases the lock; the db file persists.
     }
     let ro = DocumentCache::open_ro(dir.path()).unwrap();
-    assert_eq!(ro.user_version().unwrap(), 2);
+    assert_eq!(ro.user_version().unwrap(), 3);
 }
 
 #[test]

@@ -705,3 +705,280 @@ space = "knowledge"
         "vault + knowledge + personal: {text}"
     );
 }
+
+// ── PDC classification, reporting, and projection (pdc-adoption-v1) ────────
+
+const UUID_KNOWN: &str = "018f47c6-4a77-7c52-9db8-0e5f9bcb17db";
+
+fn djot_source(id: &str, title: &str, extra_meta: &str, body: &str) -> String {
+    format!(
+        "---\nformat: pdc-document/1\nbody: pdc-djot/1\nid: {id}\n\
+         created: 2026-09-13T12:34:56.789Z\nupdated: 2026-09-13T12:34:56.789Z\n\
+         title: {title}\n{extra_meta}---\n{body}"
+    )
+}
+
+#[tokio::test]
+async fn pdc_and_legacy_classification_flows_into_freshness_report() {
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    write_documents_config(brain_dir.path(), vault.path(), "personal");
+    write_file(
+        vault.path(),
+        "minimal.djot",
+        &djot_source(
+            UUID_KNOWN,
+            "Minimal document",
+            "",
+            "# Minimal document\n\nThis is canonical Djot.\n",
+        ),
+    );
+    // No envelope at all → invalid_transport, recorded, no upsert.
+    write_file(vault.path(), "broken.djot", "plain words, no envelope\n");
+    // Visible legacy HTML keeps the legacy adapter and counts as legacy_html.
+    write_file(
+        vault.path(),
+        "notes.html",
+        "<html><body><p>legacy prose lives here</p></body></html>\n",
+    );
+
+    let brain = make_brain(brain_dir.path()).await;
+    let freshness = brain
+        .index_documents(IndexOptions {
+            embed: false,
+            budget: None,
+        })
+        .await
+        .unwrap();
+
+    // Exactly one diagnostic: the broken djot. Nothing aborts the pass.
+    assert_eq!(
+        freshness.diagnostics.len(),
+        1,
+        "{:?}",
+        freshness.diagnostics
+    );
+    let d = &freshness.diagnostics[0];
+    assert_eq!(d.alias, "vault");
+    assert_eq!(d.locator, "broken.djot");
+    assert_eq!(d.code, "invalid_transport");
+    assert_eq!(freshness.legacy_html, 1);
+
+    // The canonical djot still indexed and its body text is searchable
+    // (envelope never leaks into the cached text).
+    let q = oxibrain_core::retrieval::Query {
+        text: "canonical".into(),
+        mode: oxibrain_core::retrieval::QueryMode::Lexical,
+        space: "personal".into(),
+        as_of: None,
+        limit: 5,
+        min_confidence: 0.0,
+        planes: [oxibrain_core::retrieval::SearchPlane::Documents]
+            .into_iter()
+            .collect(),
+    };
+    let SearchResponse { documents, .. } = brain.search(q).await.unwrap();
+    assert!(
+        documents
+            .iter()
+            .any(|h| h.locator == "minimal.djot" && h.text.text.contains("canonical Djot")),
+        "expected the djot hit: {documents:?}"
+    );
+}
+
+#[tokio::test]
+async fn duplicate_pdc_uuid_conflicts_are_reported_and_dropped() {
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    write_documents_config(brain_dir.path(), vault.path(), "personal");
+    write_file(
+        vault.path(),
+        "a.djot",
+        &djot_source(UUID_KNOWN, "First claim", "", "alpha words only here\n"),
+    );
+    write_file(
+        vault.path(),
+        "b.djot",
+        &djot_source(UUID_KNOWN, "Second claim", "", "beta words only here\n"),
+    );
+
+    let brain = make_brain(brain_dir.path()).await;
+    // The apply stage must not error even though two Add actions lose
+    // their upserts — the facade converts them to Skip first.
+    let freshness = brain
+        .index_documents(IndexOptions {
+            embed: false,
+            budget: None,
+        })
+        .await
+        .unwrap();
+
+    let mut dup: Vec<_> = freshness
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "duplicate_document_id")
+        .collect();
+    dup.sort_by(|a, b| a.locator.cmp(&b.locator));
+    assert_eq!(dup.len(), 2, "{:?}", freshness.diagnostics);
+    assert_eq!(dup[0].locator, "a.djot");
+    assert!(dup[0].reason.contains("b.djot"), "{}", dup[0].reason);
+    assert_eq!(dup[1].locator, "b.djot");
+    assert!(dup[1].reason.contains("a.djot"), "{}", dup[1].reason);
+
+    // Neither conflicting document landed in the cache.
+    let cache = oxibrain_store::documents::DocumentCache::open_ro(brain_dir.path()).unwrap();
+    assert!(cache.resolve_pdc("vault", UUID_KNOWN).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn unresolved_pdc_link_is_reported_per_document() {
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    write_documents_config(brain_dir.path(), vault.path(), "personal");
+    write_file(
+        vault.path(),
+        "minimal.djot",
+        &djot_source(UUID_KNOWN, "Minimal document", "", "target body words\n"),
+    );
+    let missing_uuid = "ffffffff-ffff-ffff-ffff-fffffffffff1";
+    write_file(
+        vault.path(),
+        "linking.djot",
+        &djot_source(
+            "018f47c6-4a77-7c52-9db8-0e5f9bcb1700",
+            "Linking document",
+            "",
+            &format!(
+                "[Known](pdc://document/{UUID_KNOWN})\n\n[Missing](pdc://document/{missing_uuid})\n"
+            ),
+        ),
+    );
+
+    let brain = make_brain(brain_dir.path()).await;
+    let freshness = brain
+        .index_documents(IndexOptions {
+            embed: false,
+            budget: None,
+        })
+        .await
+        .unwrap();
+
+    let unresolved: Vec<_> = freshness
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "unresolved_link")
+        .collect();
+    assert_eq!(unresolved.len(), 1, "{:?}", freshness.diagnostics);
+    assert_eq!(unresolved[0].locator, "linking.djot");
+    assert!(
+        unresolved[0].reason.contains(missing_uuid),
+        "{}",
+        unresolved[0].reason
+    );
+    assert!(
+        !unresolved[0].reason.contains(UUID_KNOWN),
+        "resolved targets are not reported: {}",
+        unresolved[0].reason
+    );
+}
+
+#[tokio::test]
+async fn deleted_pdc_document_lands_with_pdc_deleted_set() {
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    write_documents_config(brain_dir.path(), vault.path(), "personal");
+    let uuid = "018f47c6-0000-7c52-9db8-0e5f9bcb17db";
+    write_file(
+        vault.path(),
+        "trashed.djot",
+        &djot_source(
+            uuid,
+            "Trashed note",
+            "deleted: true\ndeleted_at: 2026-09-13T13:00:00.000Z\n",
+            "archived contents\n",
+        ),
+    );
+
+    let brain = make_brain(brain_dir.path()).await;
+    let freshness = brain
+        .index_documents(IndexOptions {
+            embed: false,
+            budget: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        freshness.diagnostics.is_empty(),
+        "{:?}",
+        freshness.diagnostics
+    );
+
+    // Trash semantics: the row stays indexed with its canonical UUID and
+    // the deletion state lands in the projection columns.
+    let cache = oxibrain_store::documents::DocumentCache::open_ro(brain_dir.path()).unwrap();
+    let (document_id, locator) = cache.resolve_pdc("vault", uuid).unwrap().unwrap();
+    assert_eq!(locator, "trashed.djot");
+    let conn = rusqlite::Connection::open_with_flags(
+        brain_dir.path().join("documents.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let (deleted, profile): (i64, String) = conn
+        .query_row(
+            "SELECT pdc_deleted, pdc_body_profile FROM documents WHERE id = ?1",
+            rusqlite::params![document_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(deleted, 1);
+    assert_eq!(profile, "pdc-djot/1");
+}
+
+#[tokio::test]
+async fn pdc_uuid_link_resolution_survives_a_move() {
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    write_documents_config(brain_dir.path(), vault.path(), "personal");
+    write_file(
+        vault.path(),
+        "original-name.djot",
+        &djot_source(UUID_KNOWN, "Moved note", "", "stable identity body\n"),
+    );
+
+    let brain = make_brain(brain_dir.path()).await;
+    brain
+        .index_documents(IndexOptions {
+            embed: false,
+            budget: None,
+        })
+        .await
+        .unwrap();
+
+    // Move (rename) the file: the cache key changes with the locator, but
+    // the canonical PDC UUID must keep resolving — that is the Stage 2
+    // exit criterion of doc/spec/pdc-adoption-v1.md.
+    std::fs::create_dir(vault.path().join("renamed")).unwrap();
+    fs::rename(
+        vault.path().join("original-name.djot"),
+        vault.path().join("renamed/deeper-name.djot"),
+    )
+    .unwrap();
+
+    let brain = make_brain(brain_dir.path()).await;
+    let freshness = brain
+        .index_documents(IndexOptions {
+            embed: false,
+            budget: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        freshness.diagnostics.is_empty(),
+        "{:?}",
+        freshness.diagnostics
+    );
+
+    let cache = oxibrain_store::documents::DocumentCache::open_ro(brain_dir.path()).unwrap();
+    let (_, locator) = cache.resolve_pdc("vault", UUID_KNOWN).unwrap().unwrap();
+    assert_eq!(locator, "renamed/deeper-name.djot");
+}

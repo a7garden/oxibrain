@@ -12,6 +12,14 @@
 > archived specs may still say `DESIGN.md §n`; the section numbers changed in v2.0,
 > so treat those references as historical.
 
+## Priority 1 — Portable Document Contract Reader adoption
+
+- Unless the user explicitly overrides priority, the connector work in `doc/spec/pdc-adoption-v1.md` is this repository's highest-priority document-plane initiative. Advance its earliest incomplete gate before starting competing document decoder, identity, link, or indexing changes.
+- Load and follow the installed `portable-document-contract` skill before changing durable user-document discovery, parsing, indexing, links, assets, diagnostics, or migration behavior. Pin the shared corpus revision and report contract conflicts instead of inventing oxibrain-specific PDC semantics.
+- oxibrain is a Full Reader/indexer only: it discovers both `pdc-djot/1` and `pdc-html/1`, preserves raw source provenance, records canonical PDC UUIDs for link resolution, and never writes, repairs, emits, or migrates a user's document.
+- The existing path-derived document ID may remain an internal disposable-cache/provenance key, but it must never replace the PDC UUID. PDC documents remain on the document plane and never become episodes merely because they were indexed.
+- Repository docs, ledgers, database-internal records, generated projections, prompts, logs, caches, and exports remain outside PDC unless explicitly promoted.
+
 ## Project Stack
 
 oxibrain is greenfield. **It is a standalone product, not an oxios component** —

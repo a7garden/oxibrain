@@ -45,18 +45,22 @@ use oxibrain_connectors::documents_config::{
     DEFAULT_MAX_FILE_BYTES, DocumentsConfig, RootEntry, UpsertOutcome, default_exclude,
     default_include,
 };
+use oxibrain_connectors::pdc::{BodyProfile, HtmlClassification};
 use oxibrain_connectors::scan::{canonicalize_root, scan_root};
-use oxibrain_connectors::{GitDocumentReader, MediaType, decode};
+use oxibrain_connectors::{
+    DECODER_VERSION, GitDocumentReader, MediaType, PdcDiagnostic, PdcDiagnosticCode, PdcDocument,
+    classify_html_transport, decode, parse_djot_document, parse_html_document,
+};
 use oxibrain_core::chunking::{ChunkPolicy, render_context_prefix, split_into_chunks};
 use oxibrain_core::documents::{
-    CachedFile, CachedRootMeta, FileAction as CoreFileAction, FileObservation, RootAction,
-    RootFingerprint,
+    CachedFile, CachedRootMeta, FileAction as CoreFileAction, FileObservation, PdcLinkMeta,
+    PdcProjectionMeta, RootAction, RootFingerprint,
 };
 use oxibrain_core::retrieval::{Query as CoreQuery, QueryMode as CoreQueryMode, SearchPlane};
 use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
 use oxibrain_store::documents::{
     ApplyPlan, CachedChunk, ChunkUpsert as StoreChunkUpsert, DocumentCache, DocumentUpsert,
-    DocumentsLock, FtsTable, RootApply as StoreRootApply,
+    DocumentsLock, FtsTable, PdcProjectionUpsert, RootApply as StoreRootApply,
 };
 use oxibrain_store::ledger;
 
@@ -101,6 +105,24 @@ pub struct DocumentHit {
     pub score: f64,
 }
 
+/// One diagnosable document-plane condition from a reconcile pass
+/// (`pdc-adoption-v1` "Diagnostics"): a PDC parse/validation failure, a
+/// duplicate canonical UUID claim, an unresolved link, or a managed-asset
+/// problem. Diagnostics never abort the pass — unrelated valid documents
+/// still index.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DiagnosticReport {
+    /// Root alias the document belongs to.
+    pub alias: String,
+    /// Root-relative locator of the document.
+    pub locator: String,
+    /// Contract diagnostic code in `as_str` spelling
+    /// (`invalid_transport`, `duplicate_document_id`, …).
+    pub code: String,
+    /// Human-readable explanation; may aggregate several targets.
+    pub reason: String,
+}
+
 /// Summary that `index_documents` returns so callers can report freshness
 /// to operators (`doctor`, MCP `stats`, MCP `search` freshness field).
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -116,8 +138,38 @@ pub struct DocumentFreshness {
     /// Locators that flipped twice between two reads (a real materialization
     /// race — see spec §12 invariant 12).
     pub stale_after_retry: Vec<String>,
+    /// PDC + legacy decode diagnostics collected across all reconciled
+    /// roots in this pass, in root order then locator order.
+    pub diagnostics: Vec<DiagnosticReport>,
+    /// Documents that classified as visible legacy HTML and went through
+    /// the legacy adapter (`legacy_html` outcome).
+    pub legacy_html: u32,
     /// `embedded / total` when the dense channel ran; `None` otherwise.
     pub dense_coverage: Option<f64>,
+}
+
+/// Render diagnostic reports as grouped operator-facing lines (`oxibrain
+/// index` / `oxibrain doctor`): one header per code (sorted), then one line
+/// per diagnostic, capped at `max_lines` with an omission note.
+pub fn format_diagnostic_lines(diags: &[DiagnosticReport], max_lines: usize) -> Vec<String> {
+    let mut grouped: std::collections::BTreeMap<&str, Vec<&DiagnosticReport>> = Default::default();
+    for d in diags {
+        grouped.entry(d.code.as_str()).or_default().push(d);
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for (code, group) in &grouped {
+        lines.push(format!("{code}:"));
+        for d in group {
+            lines.push(format!("  {}/{}: {}", d.alias, d.locator, d.reason));
+        }
+    }
+    if lines.len() > max_lines {
+        let keep = max_lines.saturating_sub(1);
+        let omitted = lines.len() - keep;
+        lines.truncate(keep);
+        lines.push(format!("… {omitted} more diagnostic line(s) omitted"));
+    }
+    lines
 }
 
 /// Options accepted by `Brain::index_documents`.
@@ -604,6 +656,8 @@ impl Brain {
         let mut reconciled_roots: Vec<String> = Vec::new();
         let mut skipped_files_total: usize = 0;
         let mut stale_after_retry: Vec<String> = Vec::new();
+        let mut diagnostics: Vec<DiagnosticReport> = Vec::new();
+        let mut legacy_html = 0u32;
 
         for (entry, _) in &configured {
             let alias = entry.alias.clone();
@@ -620,6 +674,8 @@ impl Brain {
                     skipped_files_total += outcome.skipped_files;
                     reconciled_roots.push(outcome.alias);
                     roots_apply.push(outcome.root_apply);
+                    diagnostics.extend(outcome.diagnostics);
+                    legacy_html += outcome.legacy_html;
                 }
                 Err(e) => skipped_roots.push((alias, e.to_string())),
             }
@@ -642,6 +698,8 @@ impl Brain {
             skipped_roots,
             skipped_files: skipped_files_total,
             stale_after_retry,
+            diagnostics,
+            legacy_html,
             dense_coverage: None,
         })
     }
@@ -712,17 +770,105 @@ impl Brain {
         }
 
         // Pure per-root plan (decisions in core).
-        let actions: Vec<CoreFileAction> =
+        let mut actions: Vec<CoreFileAction> =
             oxibrain_core::documents::plan_reconcile(&cached_manifest, &observed);
 
         // Decode Add/Replace payloads. A file that vanished between scan
-        // and read is a skip, not a root failure.
+        // and read is a skip, not a root failure; a rejected PDC document
+        // is a recorded diagnostic. Every materialization failure converts
+        // its action to `Skip` so apply never sees an Add/Replace without
+        // a matching upsert.
         let mut upserts: Vec<DocumentUpsert> = Vec::new();
-        for act in &actions {
-            if let CoreFileAction::Add(obs) | CoreFileAction::Replace(obs) = act {
-                match self.materialize_upsert(obs, &canonical, stale).await {
-                    Ok(upsert) => upserts.push(upsert),
-                    Err(_) => skipped_files += 1,
+        // Parallel to `upserts`: index into `actions` of the Add/Replace
+        // each upsert was materialized from.
+        let mut action_of: Vec<usize> = Vec::new();
+        let mut diagnostics: Vec<DiagnosticReport> = Vec::new();
+        let mut legacy_html = 0u32;
+        for (idx, slot) in actions.iter_mut().enumerate() {
+            let obs = match &*slot {
+                CoreFileAction::Add(o) | CoreFileAction::Replace(o) => o.clone(),
+                _ => continue,
+            };
+            match self.materialize_upsert(&obs, &canonical, stale).await {
+                Ok(MaterializedUpsert::Pdc(upsert)) => {
+                    upserts.push(upsert);
+                    action_of.push(idx);
+                }
+                Ok(MaterializedUpsert::Legacy(upsert)) => {
+                    legacy_html += 1;
+                    upserts.push(upsert);
+                    action_of.push(idx);
+                }
+                Err(MaterializeError::Pdc(d)) => {
+                    let reason = diagnostic_reason(&d);
+                    diagnostics.push(DiagnosticReport {
+                        alias: entry.alias.clone(),
+                        locator: obs.locator.clone(),
+                        code: d.code.as_str().to_string(),
+                        reason: reason.clone(),
+                    });
+                    skipped_files += 1;
+                    *slot = CoreFileAction::Skip {
+                        locator: obs.locator.clone(),
+                        reason: format!("{}: {reason}", d.code.as_str()),
+                    };
+                }
+                Err(MaterializeError::Io(e)) => {
+                    skipped_files += 1;
+                    *slot = CoreFileAction::Skip {
+                        locator: obs.locator.clone(),
+                        reason: e.to_string(),
+                    };
+                }
+            }
+        }
+
+        // Root-level canonical pass (pdc-adoption-v1): resolve duplicate
+        // UUID claims first — they shrink the surviving uuid → locator map —
+        // then report unresolved links and verify managed assets for every
+        // surviving canonical document.
+        let uuid_map = resolve_duplicate_pdc_ids(
+            &entry.alias,
+            &mut actions,
+            &mut upserts,
+            &mut action_of,
+            &mut diagnostics,
+        );
+        for upsert in &upserts {
+            let Some(pdc) = &upsert.pdc else { continue };
+            // Unresolved `pdc://document/<uuid>` links: target UUID absent
+            // from THIS root's pass. One informational diagnostic per
+            // document with the missing targets aggregated into the reason.
+            let missing: std::collections::BTreeSet<&str> = pdc
+                .meta
+                .links
+                .iter()
+                .map(|l| l.uuid.as_str())
+                .filter(|uuid| !uuid_map.contains_key(*uuid))
+                .collect();
+            if !missing.is_empty() {
+                diagnostics.push(unresolved_link_report(
+                    &entry.alias,
+                    &upsert.locator,
+                    &missing,
+                ));
+            }
+            // Managed assets: each referenced digest must exist under
+            // `<root>/.pdc/assets/sha256/<2hex>/<digest>` and hash to
+            // itself. Deduped per document; verified by streaming read.
+            for digest in pdc
+                .meta
+                .assets
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+            {
+                if let Err((code, reason)) = verify_managed_asset(&canonical, digest) {
+                    diagnostics.push(DiagnosticReport {
+                        alias: entry.alias.clone(),
+                        locator: upsert.locator.clone(),
+                        code: code.as_str().to_string(),
+                        reason,
+                    });
                 }
             }
         }
@@ -754,10 +900,21 @@ impl Brain {
                 actions,
                 upserts,
             },
+            diagnostics,
+            legacy_html,
         })
     }
 
-    /// Decode one Add/Replace action into chunks + manifest payload.
+    /// Decode one Add/Replace action into chunks + manifest payload,
+    /// classification-aware (pdc-adoption-v1):
+    /// - `.djot` and canonical-PDC `.html` parse through the PDC connector;
+    ///   the upsert carries the contract media type and the projection
+    ///   payload.
+    /// - Legacy `.html` (and every other extension) keep the legacy decoder
+    ///   path; legacy HTML is counted in the `legacy_html` report.
+    /// - A PDC connector rejection surfaces as [`MaterializeError::Pdc`]
+    ///   (reportable diagnostic, no upsert).
+    ///
     /// Stability check (invariant §3): stat before/after the read; on a
     /// mismatch retry the read once; a second mismatch flags the locator
     /// in `stale` (the payload still lands — the next pass re-reconciles).
@@ -766,60 +923,71 @@ impl Brain {
         obs: &FileObservation,
         canonical_root: &Path,
         stale: &mut Vec<String>,
-    ) -> Result<DocumentUpsert, BrainError> {
+    ) -> Result<MaterializedUpsert, MaterializeError> {
         let path = canonical_root.join(&obs.locator);
-        let media_type = media_type_of(&path);
 
-        let mut bytes = std::fs::read(&path)
-            .map_err(|e| BrainError::Storage(format!("read {}: {e}", path.display())))?;
+        let mut bytes = std::fs::read(&path).map_err(|e| {
+            MaterializeError::Io(BrainError::Storage(format!("read {}: {e}", path.display())))
+        })?;
         if !stat_matches(&path, obs) {
-            bytes = std::fs::read(&path)
-                .map_err(|e| BrainError::Storage(format!("re-read {}: {e}", path.display())))?;
+            bytes = std::fs::read(&path).map_err(|e| {
+                MaterializeError::Io(BrainError::Storage(format!(
+                    "re-read {}: {e}",
+                    path.display()
+                )))
+            })?;
             if !stat_matches(&path, obs) {
                 stale.push(obs.locator.clone());
             }
         }
 
-        let decoded = decode(media_type, &bytes)?;
-        // Revision: gix-derived hint when present, else blake3 of the bytes
-        // actually read (the same form materialize_hit verifies).
-        let revision = obs
-            .revision_hint
-            .clone()
-            .unwrap_or_else(|| format!("blake3:{}", blake3_hex(&bytes)));
-
-        let policy = ChunkPolicy::default();
-        let chunks = split_into_chunks(&decoded.text, &policy);
-        let mut store_chunks = Vec::with_capacity(chunks.len());
-        for chunk in &chunks {
-            // Chunk spans are UTF-8 byte offsets into `decoded.text`
-            // (split_into_chunks guarantees boundary-aligned spans).
-            let slice = &decoded.text[chunk.span_start..chunk.span_end];
-            let context = render_context_prefix(
-                Timestamp::from_millis((obs.modified_ns / 1_000_000).max(0)),
-                "document",
-                &[],
-                None,
-            );
-            store_chunks.push(StoreChunkUpsert {
-                ordinal: chunk.ordinal,
-                span_start: chunk.span_start,
-                span_end: chunk.span_end,
-                context,
-                text: slice.to_string(),
-            });
+        let media_type = media_type_of(&path);
+        match media_type {
+            MediaType::Djot => {
+                let doc = parse_djot_document(&locator_stem(&obs.locator), &bytes)
+                    .map_err(MaterializeError::Pdc)?;
+                Ok(MaterializedUpsert::Pdc(build_upsert(
+                    obs,
+                    &bytes,
+                    DecodedSource::Pdc(Box::new(doc)),
+                )))
+            }
+            MediaType::Html => match classify_html_transport(&bytes) {
+                HtmlClassification::Pdc => {
+                    let doc = parse_html_document(&locator_stem(&obs.locator), &bytes)
+                        .map_err(MaterializeError::Pdc)?;
+                    Ok(MaterializedUpsert::Pdc(build_upsert(
+                        obs,
+                        &bytes,
+                        DecodedSource::Pdc(Box::new(doc)),
+                    )))
+                }
+                // Visible legacy HTML stays on the legacy adapter and is
+                // reported as `legacy_html` — never an error.
+                HtmlClassification::Legacy => {
+                    let decoded = decode(MediaType::Html, &bytes).map_err(MaterializeError::Io)?;
+                    Ok(MaterializedUpsert::Legacy(build_upsert(
+                        obs,
+                        &bytes,
+                        DecodedSource::Legacy {
+                            media_type: MediaType::Html.as_str().to_string(),
+                            text: decoded.text,
+                        },
+                    )))
+                }
+            },
+            _ => {
+                let decoded = decode(media_type, &bytes).map_err(MaterializeError::Io)?;
+                Ok(MaterializedUpsert::Legacy(build_upsert(
+                    obs,
+                    &bytes,
+                    DecodedSource::Legacy {
+                        media_type: media_type.as_str().to_string(),
+                        text: decoded.text,
+                    },
+                )))
+            }
         }
-
-        Ok(DocumentUpsert {
-            locator: obs.locator.clone(),
-            revision,
-            media_type: media_type.as_str().to_string(),
-            bytes: bytes.len() as u64,
-            modified_ns: obs.modified_ns,
-            // Seconds for display; hit materialization converts back to ms.
-            modified_at: (obs.modified_ns / 1_000_000_000).max(0),
-            chunks: store_chunks,
-        })
     }
 
     // ─── documents search ──────────────────────────────────────────────────
@@ -978,24 +1146,39 @@ impl Brain {
             return Ok(None);
         }
 
-        let media_type = media_type_from_db(&ch.media_type).unwrap_or_else(|| media_type_of(&path));
-        let decoded = match decode(media_type, &bytes) {
-            Ok(d) => d,
-            Err(_) => return Ok(None),
+        // Choose the decoder by the STORED media type so cached chunk text
+        // reproduces byte-for-byte: canonical PDC documents re-decode through
+        // the PDC connector (envelope never enters the cached text); legacy
+        // media types keep the legacy decoders. Unknown stored values fall
+        // back to the locator extension.
+        let media_type = MediaType::from_stored_str(&ch.media_type);
+        let decoded_text: String = match ch.media_type.as_str() {
+            s if s == BodyProfile::Djot.media_type() => match parse_djot_document("", &bytes) {
+                Ok(doc) => doc.body.text,
+                Err(_) => return Ok(None),
+            },
+            s if s == BodyProfile::Html.media_type() => match parse_html_document("", &bytes) {
+                Ok(doc) => doc.body.text,
+                Err(_) => return Ok(None),
+            },
+            _ => match decode(media_type.unwrap_or_else(|| media_type_of(&path)), &bytes) {
+                Ok(d) => d.text,
+                Err(_) => return Ok(None),
+            },
         };
         // Span must stay inside the decoded text and align with UTF-8
         // boundaries; otherwise the cached row is not this file's shape.
-        let span_start = ch.span_start.min(decoded.text.len());
-        let span_end = ch.span_end.min(decoded.text.len());
+        let span_start = ch.span_start.min(decoded_text.len());
+        let span_end = ch.span_end.min(decoded_text.len());
         if span_start > span_end
-            || !decoded.text.is_char_boundary(span_start)
-            || !decoded.text.is_char_boundary(span_end)
+            || !decoded_text.is_char_boundary(span_start)
+            || !decoded_text.is_char_boundary(span_end)
         {
             return Ok(None);
         }
         Ok(Some(HitMaterialized {
             document_id: ch.document_id.clone(),
-            text: decoded.text[span_start..span_end].to_string(),
+            text: decoded_text[span_start..span_end].to_string(),
         }))
     }
 
@@ -1124,11 +1307,321 @@ struct RootIndexOutcome {
     alias: String,
     skipped_files: usize,
     root_apply: StoreRootApply,
+    diagnostics: Vec<DiagnosticReport>,
+    legacy_html: u32,
+}
+
+/// Outcome of materializing one Add/Replace action.
+enum MaterializedUpsert {
+    /// Canonical PDC document — the upsert carries the projection payload.
+    Pdc(DocumentUpsert),
+    /// Legacy decoder path (markdown, plain text, visible legacy HTML).
+    Legacy(DocumentUpsert),
+}
+
+/// The decoded content of one Add/Replace action, tagged by decode path.
+enum DecodedSource {
+    /// Canonical PDC document — body text + projection payload come from
+    /// the parsed document. Boxed: `PdcDocument` is far larger than the
+    /// legacy variant.
+    Pdc(Box<PdcDocument>),
+    /// Legacy decoder output with its stored media type string.
+    Legacy { media_type: String, text: String },
+}
+
+/// Why one Add/Replace action produced no upsert.
+enum MaterializeError {
+    /// The PDC connector rejected the document — a reportable diagnostic.
+    Pdc(PdcDiagnostic),
+    /// I/O or legacy-decode failure — counted as a skipped file.
+    Io(BrainError),
 }
 
 struct HitMaterialized {
     document_id: String,
     text: String,
+}
+
+/// Assemble the manifest + chunk payload for one decoded Add/Replace action.
+fn build_upsert(obs: &FileObservation, bytes: &[u8], source: DecodedSource) -> DocumentUpsert {
+    let (text, media_type, pdc) = match source {
+        DecodedSource::Pdc(doc) => {
+            let meta = pdc_meta_from_document(&doc);
+            let pdc = PdcProjectionUpsert {
+                uuid: doc.metadata.document_uuid.clone(),
+                body_profile: doc.metadata.body.as_str().to_string(),
+                meta,
+            };
+            (
+                doc.body.text,
+                doc.metadata.body.media_type().to_string(),
+                Some(pdc),
+            )
+        }
+        DecodedSource::Legacy { media_type, text } => (text, media_type, None),
+    };
+
+    // Revision: gix-derived hint when present, else blake3 of the bytes
+    // actually read (the same form materialize_hit verifies).
+    let revision = obs
+        .revision_hint
+        .clone()
+        .unwrap_or_else(|| format!("blake3:{}", blake3_hex(bytes)));
+
+    let policy = ChunkPolicy::default();
+    let chunks = split_into_chunks(&text, &policy);
+    let mut store_chunks = Vec::with_capacity(chunks.len());
+    for chunk in &chunks {
+        // Chunk spans are UTF-8 byte offsets into `text`
+        // (split_into_chunks guarantees boundary-aligned spans).
+        let slice = &text[chunk.span_start..chunk.span_end];
+        let context = render_context_prefix(
+            Timestamp::from_millis((obs.modified_ns / 1_000_000).max(0)),
+            "document",
+            &[],
+            None,
+        );
+        store_chunks.push(StoreChunkUpsert {
+            ordinal: chunk.ordinal,
+            span_start: chunk.span_start,
+            span_end: chunk.span_end,
+            context,
+            text: slice.to_string(),
+        });
+    }
+
+    DocumentUpsert {
+        locator: obs.locator.clone(),
+        revision,
+        media_type,
+        bytes: bytes.len() as u64,
+        modified_ns: obs.modified_ns,
+        // Seconds for display; hit materialization converts back to ms.
+        modified_at: (obs.modified_ns / 1_000_000_000).max(0),
+        chunks: store_chunks,
+        pdc,
+    }
+}
+
+/// Map a parsed PDC document to its projection metadata (the JSON shape
+/// the store persists in `documents.pdc_meta`).
+fn pdc_meta_from_document(doc: &PdcDocument) -> PdcProjectionMeta {
+    PdcProjectionMeta {
+        title: doc.metadata.title.clone(),
+        display_title: doc.display_title.clone(),
+        profile: doc.metadata.profile.clone(),
+        lang: doc.metadata.lang.clone(),
+        tags: doc.metadata.tags.clone(),
+        aliases: doc.metadata.aliases.clone(),
+        favorite: doc.metadata.favorite,
+        deleted: doc.metadata.deleted,
+        deleted_at: doc.metadata.deleted_at.clone(),
+        created: doc.metadata.created.clone(),
+        updated: doc.metadata.updated.clone(),
+        links: doc
+            .body
+            .document_links
+            .iter()
+            .map(|l| PdcLinkMeta {
+                uuid: l.uuid.clone(),
+                block: l.block.clone(),
+                embed: l.embed,
+            })
+            .collect(),
+        assets: doc.body.asset_refs.clone(),
+        task_count: doc.body.tasks.len() as u32,
+        block_id_count: doc.body.block_ids.len() as u32,
+        unsafe_flags: doc.body.unsafe_constructs.clone(),
+    }
+}
+
+/// File stem of a locator — the connector's display-title fallback of last
+/// resort.
+fn locator_stem(locator: &str) -> String {
+    Path::new(locator)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Diagnostic reason with the optional source position appended.
+fn diagnostic_reason(d: &PdcDiagnostic) -> String {
+    match (d.line, d.col) {
+        (Some(line), Some(col)) => format!("{} (line {line}, col {col})", d.reason),
+        (Some(line), None) => format!("{} (line {line})", d.reason),
+        _ => d.reason.clone(),
+    }
+}
+
+/// Maximum link targets listed in one `unresolved_link` reason before the
+/// rest is summarized as "+N more".
+const MAX_LISTED_LINK_TARGETS: usize = 5;
+
+/// Build the informational `unresolved_link` report for one document:
+/// the missing target UUIDs are aggregated into a single reason line.
+fn unresolved_link_report(
+    alias: &str,
+    locator: &str,
+    missing: &std::collections::BTreeSet<&str>,
+) -> DiagnosticReport {
+    let listed: Vec<&str> = missing
+        .iter()
+        .take(MAX_LISTED_LINK_TARGETS)
+        .copied()
+        .collect();
+    let more = missing.len().saturating_sub(listed.len());
+    DiagnosticReport {
+        alias: alias.to_string(),
+        locator: locator.to_string(),
+        code: PdcDiagnosticCode::UnresolvedLink.as_str().to_string(),
+        reason: format!(
+            "{} unresolved pdc://document link target(s): {}{}",
+            missing.len(),
+            listed.join(", "),
+            if more > 0 {
+                format!(" (+{more} more)")
+            } else {
+                String::new()
+            }
+        ),
+    }
+}
+
+/// Root-level PDC conflict pass (pure planning). A canonical UUID claimed
+/// by more than one locator in the same pass has no canonical location —
+/// the document owner's decision, never ours — so EVERY conflicting
+/// locator is dropped: its upsert is removed, its action becomes `Skip`,
+/// and it gets a `duplicate_document_id` diagnostic naming the other
+/// claimants. Returns the surviving `uuid → locator` map.
+fn resolve_duplicate_pdc_ids(
+    alias: &str,
+    actions: &mut [CoreFileAction],
+    upserts: &mut Vec<DocumentUpsert>,
+    action_of: &mut Vec<usize>,
+    diagnostics: &mut Vec<DiagnosticReport>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut by_uuid: std::collections::BTreeMap<&str, Vec<usize>> = Default::default();
+    for (i, upsert) in upserts.iter().enumerate() {
+        if let Some(pdc) = &upsert.pdc {
+            by_uuid.entry(pdc.uuid.as_str()).or_default().push(i);
+        }
+    }
+
+    let mut conflicting: std::collections::BTreeSet<usize> = Default::default();
+    for (uuid, idxs) in &by_uuid {
+        if idxs.len() < 2 {
+            continue;
+        }
+        for &i in idxs {
+            let others: Vec<&str> = idxs
+                .iter()
+                .filter(|&&j| j != i)
+                .map(|&j| upserts[j].locator.as_str())
+                .collect();
+            diagnostics.push(DiagnosticReport {
+                alias: alias.to_string(),
+                locator: upserts[i].locator.clone(),
+                code: PdcDiagnosticCode::DuplicateDocumentId.as_str().to_string(),
+                reason: format!(
+                    "document UUID {uuid} is also claimed by {}",
+                    others.join(", ")
+                ),
+            });
+            conflicting.insert(i);
+        }
+    }
+
+    // Stable in-place partition: keep order, push dropped to the tail.
+    // Converting the action here is what guarantees apply never sees an
+    // Add/Replace without a matching upsert.
+    let mut keep = 0usize;
+    for i in 0..upserts.len() {
+        if conflicting.contains(&i) {
+            let locator = upserts[i].locator.clone();
+            let uuid = upserts[i]
+                .pdc
+                .as_ref()
+                .map(|p| p.uuid.clone())
+                .unwrap_or_default();
+            actions[action_of[i]] = CoreFileAction::Skip {
+                locator,
+                reason: format!("duplicate PDC document id {uuid} claimed by multiple locators"),
+            };
+            continue;
+        }
+        if keep != i {
+            upserts.swap(keep, i);
+            action_of.swap(keep, i);
+        }
+        keep += 1;
+    }
+    upserts.truncate(keep);
+    action_of.truncate(keep);
+
+    let mut uuid_map = std::collections::BTreeMap::new();
+    for upsert in upserts.iter() {
+        if let Some(pdc) = &upsert.pdc {
+            uuid_map.insert(pdc.uuid.clone(), upsert.locator.clone());
+        }
+    }
+    uuid_map
+}
+
+/// Verify one managed asset on disk: present under
+/// `<root>/.pdc/assets/sha256/<2hex>/<digest>` and sha256-identical to the
+/// referenced digest. The content hash is computed by streaming read —
+/// assets are never loaded into memory whole. `Ok(())` = verified.
+fn verify_managed_asset(root: &Path, digest: &str) -> Result<(), (PdcDiagnosticCode, String)> {
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err((
+            PdcDiagnosticCode::AssetDigestMismatch,
+            format!("malformed asset digest `{digest}`"),
+        ));
+    }
+    let path = root
+        .join(".pdc")
+        .join("assets")
+        .join("sha256")
+        .join(&digest[..2])
+        .join(digest);
+    let mut file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => {
+            return Err((
+                PdcDiagnosticCode::MissingAsset,
+                format!("asset {digest} not found at {}", path.display()),
+            ));
+        }
+    };
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buf[..n]),
+            Err(e) => {
+                return Err((
+                    PdcDiagnosticCode::AssetDigestMismatch,
+                    format!("asset {digest} read failed: {e}"),
+                ));
+            }
+        }
+    }
+    let computed = hex::encode(hasher.finalize());
+    if computed != digest {
+        return Err((
+            PdcDiagnosticCode::AssetDigestMismatch,
+            format!("asset {digest} content hashes to {computed}"),
+        ));
+    }
+    Ok(())
 }
 
 // ─── Free helpers ───────────────────────────────────────────────────────────
@@ -1165,6 +1658,9 @@ fn fingerprint_from_entry(entry: &RootEntry) -> Result<RootFingerprint, BrainErr
         include: entry.include.clone(),
         exclude: entry.exclude.clone(),
         max_file_bytes: entry.max_file_bytes,
+        // Pins the decode semantics: a version bump invalidates every
+        // cached fingerprint (equality change ⇒ one-time full rebuild).
+        decoder_version: DECODER_VERSION.to_string(),
     })
 }
 
@@ -1188,8 +1684,6 @@ fn open_cache_rw_with_retry(dir: &Path) -> Result<DocumentCache, BrainError> {
     Err(last_err.unwrap_or(BrainError::Busy("documents.lock".into())))
 }
 
-/// Whether the file's current stat still matches the scan-time observation
-/// (size + mtime in nanoseconds, mirroring `scan_root`'s `system_time_ns`).
 fn stat_matches(path: &Path, obs: &FileObservation) -> bool {
     match std::fs::metadata(path) {
         Ok(m) => {
@@ -1222,16 +1716,6 @@ fn media_type_of(path: &Path) -> MediaType {
         .and_then(|e| e.to_str())
         .and_then(MediaType::from_extension)
         .unwrap_or(MediaType::PlainText)
-}
-
-/// Media type from the stored `media_type` string (see `MediaType::as_str`).
-fn media_type_from_db(s: &str) -> Option<MediaType> {
-    match s {
-        "text/markdown" => Some(MediaType::Markdown),
-        "text/html" => Some(MediaType::Html),
-        "text/plain" => Some(MediaType::PlainText),
-        _ => None,
-    }
 }
 
 /// Embedder identity for the documents-plane vector cache. `EmbeddingPort`
@@ -1285,4 +1769,118 @@ fn encode_doc_locator(locator: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #![cfg_attr(test, allow(clippy::unwrap_used))]
+    use super::*;
+
+    fn pdc_upsert(locator: &str, uuid: &str) -> DocumentUpsert {
+        DocumentUpsert {
+            locator: locator.to_string(),
+            revision: "rev1".to_string(),
+            media_type: BodyProfile::Djot.media_type().to_string(),
+            bytes: 10,
+            modified_ns: 1,
+            modified_at: 0,
+            chunks: Vec::new(),
+            pdc: Some(PdcProjectionUpsert {
+                uuid: uuid.to_string(),
+                body_profile: BodyProfile::Djot.as_str().to_string(),
+                meta: PdcProjectionMeta::default(),
+            }),
+        }
+    }
+
+    fn add_action(locator: &str) -> CoreFileAction {
+        CoreFileAction::Add(FileObservation {
+            locator: locator.to_string(),
+            bytes: 10,
+            modified_ns: 1,
+            revision_hint: None,
+        })
+    }
+
+    #[test]
+    fn duplicate_uuid_drops_every_conflicting_upsert() {
+        let uuid_a = "018f47c6-4a77-7c52-9db8-0e5f9bcb17db";
+        let uuid_c = "018f47c6-4a77-7c52-9db8-0e5f9bcb17dc";
+        let mut actions = vec![
+            add_action("a.djot"),
+            add_action("b.djot"),
+            add_action("c.djot"),
+        ];
+        let mut upserts = vec![
+            pdc_upsert("a.djot", uuid_a),
+            pdc_upsert("b.djot", uuid_a),
+            pdc_upsert("c.djot", uuid_c),
+        ];
+        let mut action_of = vec![0usize, 1, 2];
+        let mut diagnostics = Vec::new();
+
+        let uuid_map = resolve_duplicate_pdc_ids(
+            "vault",
+            &mut actions,
+            &mut upserts,
+            &mut action_of,
+            &mut diagnostics,
+        );
+
+        // The conflicted UUID vanishes from the map; the sole claimant stays.
+        assert_eq!(uuid_map.len(), 1);
+        assert_eq!(uuid_map.get(uuid_c).map(String::as_str), Some("c.djot"));
+        // Every conflicting locator was dropped with a diagnostic naming
+        // the other claimant.
+        assert_eq!(upserts.len(), 1);
+        assert_eq!(upserts[0].locator, "c.djot");
+        assert_eq!(diagnostics.len(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.code == PdcDiagnosticCode::DuplicateDocumentId.as_str())
+        );
+        let a = diagnostics.iter().find(|d| d.locator == "a.djot").unwrap();
+        assert!(a.reason.contains("b.djot"), "reason: {}", a.reason);
+        // Their actions became Skip so apply never sees an upsert-less
+        // Add/Replace.
+        assert!(matches!(&actions[0], CoreFileAction::Skip { locator, .. } if locator == "a.djot"));
+        assert!(matches!(&actions[1], CoreFileAction::Skip { locator, .. } if locator == "b.djot"));
+        assert!(matches!(&actions[2], CoreFileAction::Add(_)));
+    }
+
+    fn diag(alias: &str, code: &str) -> DiagnosticReport {
+        DiagnosticReport {
+            alias: alias.to_string(),
+            locator: "x.djot".to_string(),
+            code: code.to_string(),
+            reason: "r".to_string(),
+        }
+    }
+
+    #[test]
+    fn diagnostic_lines_group_by_code_and_cap_with_note() {
+        let diags = vec![
+            diag("v1", "invalid_transport"),
+            diag("v2", "invalid_transport"),
+            diag("v3", "missing_asset"),
+        ];
+        let lines = format_diagnostic_lines(&diags, 50);
+        assert_eq!(
+            lines,
+            vec![
+                "invalid_transport:",
+                "  v1/x.djot: r",
+                "  v2/x.djot: r",
+                "missing_asset:",
+                "  v3/x.djot: r",
+            ]
+        );
+
+        // Over the cap: one header + 3 diagnostics = 5 lines; cap 4 keeps
+        // 3 and appends the omission note.
+        let lines = format_diagnostic_lines(&diags, 4);
+        assert_eq!(lines.len(), 4);
+        assert!(lines.last().unwrap().contains("more diagnostic line"));
+    }
 }

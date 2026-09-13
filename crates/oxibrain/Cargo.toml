@@ -29,6 +29,7 @@ blake3.workspace = true
 hex.workspace = true
 serde.workspace = true
 rusqlite.workspace = true
+sha2 = "0.10"
 toml = "0.8"
 toml_edit = "0.22"
 reqwest.workspace = true

@@ -29,3 +29,4 @@ gix = { workspace = true, features = ["excludes"] }
 [dev-dependencies]
 gix = { workspace = true, features = ["excludes", "tree-editor"] }
 tempfile.workspace = true
+serde_json.workspace = true

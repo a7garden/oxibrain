@@ -24,7 +24,7 @@ use crate::io_err;
 use crate::sql_err;
 use fs2::FileExt;
 use oxibrain_core::documents::{
-    CachedFile, CachedRootMeta, FileAction, RootAction, RootFingerprint,
+    CachedFile, CachedRootMeta, FileAction, PdcProjectionMeta, RootAction, RootFingerprint,
 };
 use oxibrain_index::{dequantize_i8, quantize_i8_unit};
 use oxibrain_ports::BrainError;
@@ -33,7 +33,7 @@ use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 /// `documents.db` schema version. Independent of `brain.db`'s ledger version.
-pub const DOCUMENTS_SCHEMA_VERSION: i64 = 2;
+pub const DOCUMENTS_SCHEMA_VERSION: i64 = 3;
 
 /// Default embedding dimension for `doc_vectors` (BGE-M3 / multilingual).
 /// Mirrors `crate::vectors::EMBEDDING_DIM`.
@@ -75,7 +75,10 @@ pub struct RootApply {
 pub struct DocumentUpsert {
     pub locator: String,
     pub revision: String,
-    /// `"text/markdown"` | `"text/html"` | `"text/plain"`.
+    /// `"text/markdown"` | `"text/html"` | `"text/plain"`, or for canonical
+    /// PDC documents one of the contract media types
+    /// `"application/vnd.pdc.document+djot;version=1"` |
+    /// `"application/vnd.pdc.document+html;version=1"`.
     pub media_type: String,
     /// Raw file bytes (pre-decode).
     pub bytes: u64,
@@ -85,6 +88,23 @@ pub struct DocumentUpsert {
     pub modified_at: i64,
     /// Final chunk set for this document.
     pub chunks: Vec<ChunkUpsert>,
+    /// PDC projection payload when the source decoded as a canonical PDC
+    /// document (pdc-adoption-v1); `None` for every legacy decoder.
+    pub pdc: Option<PdcProjectionUpsert>,
+}
+
+/// PDC projection payload for one canonical PDC document
+/// (doc/spec/pdc-adoption-v1.md).
+///
+/// `uuid` is the canonical envelope UUID and `body_profile` is
+/// `'pdc-djot/1'` or `'pdc-html/1'`. `meta` is the decoded envelope
+/// metadata; it is stored as JSON in `documents.pdc_meta` and read back
+/// for link resolution and the trash filter — never re-decoded from bytes.
+#[derive(Debug, Clone)]
+pub struct PdcProjectionUpsert {
+    pub uuid: String,
+    pub body_profile: String,
+    pub meta: PdcProjectionMeta,
 }
 
 /// One chunk in a document's decoded text.
@@ -262,6 +282,14 @@ impl DocumentCache {
             conn.pragma_update(None, "user_version", DOCUMENTS_SCHEMA_VERSION)
                 .map_err(sql_err)?;
         }
+        if current < 3 {
+            // v3: PDC projection columns + the per-root unique UUID index
+            // (pdc-adoption-v1). The columns are nullable, so v2 rows
+            // survive with NULL and legacy decoders keep writing NULL.
+            conn.execute_batch(V3_SCHEMA_SQL).map_err(sql_err)?;
+            conn.pragma_update(None, "user_version", DOCUMENTS_SCHEMA_VERSION)
+                .map_err(sql_err)?;
+        }
         Ok(())
     }
 
@@ -365,6 +393,29 @@ impl DocumentCache {
         match row {
             Ok(g) => Ok(g),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(sql_err(e)),
+        }
+    }
+
+    /// Resolve a canonical PDC UUID within one root to its cached
+    /// `(document_id, locator)`. Read-only; walks the partial unique
+    /// index `idx_documents_pdc_uuid` (v3, pdc-adoption-v1). Returns
+    /// `None` when the root has no document carrying that UUID — the
+    /// normal case for legacy decoders, which never populate the column.
+    pub fn resolve_pdc(
+        &self,
+        root_alias: &str,
+        uuid: &str,
+    ) -> Result<Option<(String, String)>, BrainError> {
+        let row: Result<(String, String), rusqlite::Error> = self.conn.query_row(
+            "SELECT id, locator FROM documents
+             WHERE root_alias = ?1 AND pdc_document_id = ?2",
+            params![root_alias, uuid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        );
+        match row {
+            Ok(pair) => Ok(Some(pair)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(sql_err(e)),
         }
     }
@@ -507,6 +558,12 @@ impl DocumentCache {
             "SELECT chunk_id, rank
              FROM {table_name}
              WHERE {table_name} MATCH ?1 AND space = ?2
+               AND NOT EXISTS (
+                 SELECT 1 FROM doc_chunks dc
+                 JOIN documents d ON d.id = dc.document_id
+                 WHERE dc.id = {table_name}.chunk_id
+                   AND COALESCE(d.pdc_deleted, 0) = 1
+               )
              ORDER BY rank
              LIMIT ?3"
         );
@@ -564,9 +621,28 @@ impl DocumentCache {
                 .sqrt();
             scored.push((chunk_id, dist));
         }
-        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
-        scored.truncate(limit);
-        Ok(scored)
+        // Trash semantics (pdc-adoption-v1): canonical documents whose
+        // envelope says deleted:true stay indexed but out of default
+        // retrieval, on the dense channel exactly like the lexical one.
+        let mut trashed = self
+            .conn
+            .prepare(
+                "SELECT 1 FROM doc_chunks dc
+                 JOIN documents d ON d.id = dc.document_id
+                 WHERE dc.id = ?1 AND COALESCE(d.pdc_deleted, 0) = 1",
+            )
+            .map_err(sql_err)?;
+        let mut kept: Vec<(String, f64)> = Vec::with_capacity(scored.len());
+        for (chunk_id, dist) in scored {
+            match trashed.query_row(params![&chunk_id], |_r| Ok(())) {
+                Ok(()) => {}
+                Err(rusqlite::Error::QueryReturnedNoRows) => kept.push((chunk_id, dist)),
+                Err(e) => return Err(sql_err(e)),
+            }
+        }
+        kept.sort_by(|a, b| a.1.total_cmp(&b.1));
+        kept.truncate(limit);
+        Ok(kept)
     }
 
     /// Load the cached chunk rows for a set of chunk IDs (order preserved).
@@ -801,6 +877,11 @@ const V1_SCHEMA_SQL: &str = include_str!("documents_v1.sql");
 /// v2 schema migration (ADR-014): doc_texts + external-content FTS +
 /// plain int8 doc_vectors.
 const V2_SCHEMA_SQL: &str = include_str!("documents_v2.sql");
+
+/// v3 schema migration (pdc-adoption-v1): canonical PDC identity columns
+/// on `documents` + a partial unique index making a UUID unique within
+/// one root.
+const V3_SCHEMA_SQL: &str = include_str!("documents_v3.sql");
 
 /// Monotonic timestamp used for `doc_roots.scanned_at`. Seconds since the
 /// Unix epoch; the column has no sub-second precision.
@@ -1055,12 +1136,29 @@ fn upsert_document(
     )
     .map_err(sql_err)?;
 
-    // 3. Insert documents row.
-    tx.execute(
+    // 3. Insert documents row. The PDC projection columns (v3) are NULL
+    // across the board for legacy decoders; a canonical PDC upsert writes
+    // the envelope identity, the serialized metadata, and the trash flag
+    // (1 = envelope deleted:true, 0 = live).
+    let (pdc_uuid, pdc_profile, pdc_meta, pdc_deleted) = match &upsert.pdc {
+        Some(pdc) => {
+            let meta_json = serde_json::to_string(&pdc.meta)
+                .map_err(|e| BrainError::Storage(format!("serialize pdc_meta: {e}")))?;
+            (
+                Some(pdc.uuid.as_str()),
+                Some(pdc.body_profile.as_str()),
+                Some(meta_json),
+                Some(if pdc.meta.deleted { 1i64 } else { 0i64 }),
+            )
+        }
+        None => (None, None, None, None),
+    };
+    if let Err(e) = tx.execute(
         "INSERT INTO documents
            (id, root_alias, space, locator, revision, media_type,
-            bytes, modified_at, indexed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            bytes, modified_at, indexed_at,
+            pdc_document_id, pdc_body_profile, pdc_meta, pdc_deleted)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             &document_id,
             alias,
@@ -1071,9 +1169,14 @@ fn upsert_document(
             upsert.bytes as i64,
             upsert.modified_at,
             now_secs(),
+            pdc_uuid,
+            pdc_profile,
+            pdc_meta,
+            pdc_deleted,
         ],
-    )
-    .map_err(sql_err)?;
+    ) {
+        return Err(map_document_insert_err(tx, alias, upsert, e));
+    }
 
     // 4. Insert chunks + both FTS rows.
     for chunk in &upsert.chunks {
@@ -1131,6 +1234,55 @@ fn upsert_document(
     Ok(())
 }
 
+/// Map a failed `documents` insert to a typed error (inside apply's tx).
+///
+/// A UNIQUE violation on `idx_documents_pdc_uuid` means two documents in
+/// one root claim the same canonical UUID. The facade filters these
+/// conflicts before apply, so reaching this is defensive; it must surface
+/// as `BrainError::Invalid` naming both locators, not as generic Storage
+/// noise. Every other failure passes through as `BrainError::Storage`.
+fn map_document_insert_err(
+    tx: &rusqlite::Transaction<'_>,
+    alias: &str,
+    upsert: &DocumentUpsert,
+    err: rusqlite::Error,
+) -> BrainError {
+    // Message shape: "UNIQUE constraint failed: documents.root_alias,
+    // documents.pdc_document_id".
+    let uuid_conflict = matches!(
+        &err,
+        rusqlite::Error::SqliteFailure(_, Some(msg))
+            if msg.contains("UNIQUE constraint failed") && msg.contains("pdc_document_id")
+    );
+    if !uuid_conflict {
+        return sql_err(err);
+    }
+    let Some(pdc) = upsert.pdc.as_ref() else {
+        return sql_err(err);
+    };
+    // The constraint aborts only the failing statement, so the row that
+    // already holds the UUID is still readable — name its locator.
+    let existing: Option<String> = tx
+        .query_row(
+            "SELECT locator FROM documents
+             WHERE root_alias = ?1 AND pdc_document_id = ?2",
+            params![alias, &pdc.uuid],
+            |r| r.get(0),
+        )
+        .ok();
+    let conflicting = &upsert.locator;
+    match existing {
+        Some(existing) => BrainError::Invalid(format!(
+            "duplicate PDC document id {} in root '{alias}': already indexed at '{existing}', conflicting upsert for '{conflicting}'",
+            pdc.uuid
+        )),
+        None => BrainError::Invalid(format!(
+            "duplicate PDC document id {} in root '{alias}': conflicting upsert for '{conflicting}'",
+            pdc.uuid
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1152,6 +1304,7 @@ mod tests {
             include: vec!["**/*.md".to_owned()],
             exclude: Vec::new(),
             max_file_bytes: 1024 * 1024,
+            decoder_version: "2".to_owned(),
         }
     }
 
@@ -1190,6 +1343,7 @@ mod tests {
             modified_ns: 1_700_000_000_000_000_000,
             modified_at: 1_700_000_000,
             chunks: cu,
+            pdc: None,
         }
     }
 
@@ -1638,5 +1792,225 @@ mod tests {
         assert_eq!(cache.document_count_for_space("s1").unwrap(), 0);
         assert_eq!(cache.chunk_count_for_space("s1").unwrap(), 0);
         assert_eq!(cache.document_count_for_space("s2").unwrap(), 1);
+    }
+
+    /// Build a `documents.db` at v2 by hand (the recorded previous
+    /// version): run the v1 + v2 scripts, pin `user_version` to 2, and
+    /// seed one v2-era root + document row. The migration up-tests open
+    /// this file through `open_rw` and let the ladder advance it.
+    fn v2_store(dir: &Path) {
+        let conn = Connection::open(dir.join("documents.db")).unwrap();
+        conn.execute_batch(V1_SCHEMA_SQL).unwrap();
+        conn.execute_batch(V2_SCHEMA_SQL).unwrap();
+        conn.pragma_update(None, "user_version", 2i64).unwrap();
+        conn.execute(
+            "INSERT INTO doc_roots(alias, space, config_hash, generation, head_revision, scanned_at)
+             VALUES ('vault', 'personal', 'hash-v2', 1, NULL, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO documents(id, root_alias, space, locator, revision, media_type,
+                                   bytes, modified_at, indexed_at)
+             VALUES ('doc-v2', 'vault', 'personal', 'notes/a.md', 'rev1',
+                     'text/markdown', 12, 0, 0)",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migrate_v2_to_v3_survives_rows_with_null_pdc_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        v2_store(dir.path());
+
+        let cache = DocumentCache::open_rw(dir.path()).unwrap();
+        assert_eq!(cache.user_version().unwrap(), 3);
+
+        // The v2 row survived; every new column reads back NULL.
+        let (uuid, profile, meta, deleted): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        ) = cache
+            .conn
+            .query_row(
+                "SELECT pdc_document_id, pdc_body_profile, pdc_meta, pdc_deleted
+                 FROM documents WHERE id = 'doc-v2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(uuid, None);
+        assert_eq!(profile, None);
+        assert_eq!(meta, None);
+        assert_eq!(deleted, None);
+
+        // UUID resolution misses cleanly for a legacy row / unknown uuid.
+        assert!(
+            cache
+                .resolve_pdc("vault", "00000000-0000-4000-8000-000000000000")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn migrate_v2_to_v3_is_idempotent_on_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        v2_store(dir.path());
+        let cache = DocumentCache::open_rw(dir.path()).unwrap();
+        assert_eq!(cache.user_version().unwrap(), 3);
+        drop(cache);
+        let again = DocumentCache::open_rw(dir.path()).unwrap();
+        assert_eq!(again.user_version().unwrap(), 3);
+        assert_eq!(count(&again.conn, "documents"), 1);
+    }
+
+    /// Minimal canonical-PDC payload for the tests. `deleted` drives the
+    /// `pdc_deleted` trash flag; the rest of the metadata exercises the
+    /// JSON round trip through `documents.pdc_meta`.
+    fn pdc_upsert(uuid: &str, deleted: bool) -> PdcProjectionUpsert {
+        PdcProjectionUpsert {
+            uuid: uuid.to_owned(),
+            body_profile: "pdc-djot/1".to_owned(),
+            meta: PdcProjectionMeta {
+                title: "Envelope Title".to_owned(),
+                display_title: "Display Title".to_owned(),
+                deleted,
+                deleted_at: deleted.then(|| "2026-09-13T12:00:00.000Z".to_owned()),
+                created: "2026-09-01T08:00:00.000Z".to_owned(),
+                updated: "2026-09-13T12:00:00.000Z".to_owned(),
+                links: vec![oxibrain_core::documents::PdcLinkMeta {
+                    uuid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".to_owned(),
+                    block: None,
+                    embed: false,
+                }],
+                ..PdcProjectionMeta::default()
+            },
+        }
+    }
+
+    #[test]
+    fn pdc_upsert_round_trip_resolves_by_uuid() {
+        let dir = tempfile::tempdir().unwrap();
+        let uuid = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff";
+        {
+            let cache = DocumentCache::open_rw(dir.path()).unwrap();
+            let mut u = upsert("notes/pdc.djot", "rev1", "pdc body text", 1);
+            u.media_type = "application/vnd.pdc.document+djot;version=1".to_owned();
+            u.pdc = Some(pdc_upsert(uuid, true));
+            cache
+                .apply(&ApplyPlan {
+                    root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
+                    roots: vec![RootApply {
+                        fingerprint: fp("vault", "personal"),
+                        expected_generation: 0,
+                        actions: vec![FileAction::Add(obs("notes/pdc.djot", 14, "rev1"))],
+                        upserts: vec![u],
+                    }],
+                })
+                .unwrap();
+        }
+        // Re-open read-only: the projection is usable without the writer.
+        let ro = DocumentCache::open_ro(dir.path()).unwrap();
+        let (document_id, locator) = ro
+            .resolve_pdc("vault", uuid)
+            .unwrap()
+            .expect("canonical uuid resolves");
+        assert_eq!(locator, "notes/pdc.djot");
+        assert_eq!(
+            document_id,
+            oxibrain_core::documents::document_id("vault", "notes/pdc.djot")
+        );
+
+        // Columns read back exactly as written; trash rows stay resolvable
+        // (deleted:true excludes from default search, not from the index).
+        let (profile, deleted, meta_json): (String, i64, String) = ro
+            .conn
+            .query_row(
+                "SELECT pdc_body_profile, pdc_deleted, pdc_meta
+                 FROM documents WHERE pdc_document_id = ?1",
+                params![uuid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(profile, "pdc-djot/1");
+        assert_eq!(deleted, 1);
+        let meta: PdcProjectionMeta = serde_json::from_str(&meta_json).unwrap();
+        assert_eq!(meta, pdc_upsert(uuid, true).meta);
+
+        // Resolution is scoped to the root.
+        assert!(ro.resolve_pdc("other-root", uuid).unwrap().is_none());
+    }
+
+    #[test]
+    fn pdc_uuid_conflict_is_typed_and_root_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DocumentCache::open_rw(dir.path()).unwrap();
+        let shared = "0f0e1d2c-3b4a-4c5d-8e9f-0a1b2c3d4e5f";
+
+        // The same canonical UUID in two different roots is legitimate.
+        let mut vault = upsert("notes/dup.djot", "rev1", "vault copy", 1);
+        vault.pdc = Some(pdc_upsert(shared, false));
+        cache
+            .apply(&ApplyPlan {
+                root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
+                roots: vec![RootApply {
+                    fingerprint: fp("vault", "personal"),
+                    expected_generation: 0,
+                    actions: vec![FileAction::Add(obs("notes/dup.djot", 10, "rev1"))],
+                    upserts: vec![vault],
+                }],
+            })
+            .unwrap();
+        let mut annex = upsert("dup.djot", "rev1", "annex copy", 1);
+        annex.pdc = Some(pdc_upsert(shared, false));
+        cache
+            .apply(&ApplyPlan {
+                root_actions: vec![("annex".to_owned(), RootAction::KeepRoot)],
+                roots: vec![RootApply {
+                    fingerprint: fp("annex", "personal"),
+                    expected_generation: 0,
+                    actions: vec![FileAction::Add(obs("dup.djot", 10, "rev1"))],
+                    upserts: vec![annex],
+                }],
+            })
+            .unwrap();
+
+        // Same UUID, same root, different locator → typed `Invalid` naming
+        // both locators; the whole apply rolls back.
+        let mut clash = upsert("notes/other.djot", "rev1", "clash", 1);
+        clash.pdc = Some(pdc_upsert(shared, true));
+        let err = cache
+            .apply(&ApplyPlan {
+                root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
+                roots: vec![RootApply {
+                    fingerprint: fp("vault", "personal"),
+                    expected_generation: 1,
+                    actions: vec![FileAction::Add(obs("notes/other.djot", 6, "rev1"))],
+                    upserts: vec![clash],
+                }],
+            })
+            .unwrap_err();
+        match err {
+            BrainError::Invalid(msg) => {
+                assert!(msg.contains(shared), "names the uuid: {msg}");
+                assert!(
+                    msg.contains("notes/dup.djot"),
+                    "names the existing locator: {msg}"
+                );
+                assert!(
+                    msg.contains("notes/other.djot"),
+                    "names the conflicting locator: {msg}"
+                );
+            }
+            other => panic!("expected BrainError::Invalid, got {other:?}"),
+        }
+        assert_eq!(count(&cache.conn, "documents"), 2);
+        // Resolve still lands on the original locator for that uuid.
+        let (_, locator) = cache.resolve_pdc("vault", shared).unwrap().unwrap();
+        assert_eq!(locator, "notes/dup.djot");
     }
 }

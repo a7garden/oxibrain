@@ -9,6 +9,7 @@
 //! --documents`); documents indexing is this command's one behavior with or
 //! without it.
 
+use oxibrain::document_plane::format_diagnostic_lines;
 use oxibrain::{Brain, BrainConfig, IndexOptions};
 use std::path::Path;
 
@@ -39,6 +40,15 @@ pub async fn run(dir: &Path, documents: bool, embed: bool) -> anyhow::Result<()>
     }
     for locator in &freshness.stale_after_retry {
         println!("stale after retry: {locator}");
+    }
+    if freshness.legacy_html > 0 {
+        println!("legacy html documents: {}", freshness.legacy_html);
+    }
+    if !freshness.diagnostics.is_empty() {
+        println!("pdc diagnostics: {}", freshness.diagnostics.len());
+        for line in format_diagnostic_lines(&freshness.diagnostics, 50) {
+            println!("{line}");
+        }
     }
     if embed {
         match freshness.dense_coverage {

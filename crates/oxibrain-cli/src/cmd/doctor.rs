@@ -7,6 +7,7 @@
 //! so operators can move still-relevant paths into `documents.toml`, never
 //! edited automatically).
 
+use oxibrain::document_plane::format_diagnostic_lines;
 use oxibrain::{Brain, BrainConfig, IndexOptions};
 use std::path::Path;
 
@@ -65,6 +66,19 @@ pub async fn run(dir: &Path) -> anyhow::Result<()> {
     }
     for locator in &freshness.stale_after_retry {
         println!("  stale after retry: {locator}");
+    }
+    // PDC diagnostics (pdc-adoption-v1 "Diagnostics"): grouped by code and
+    // capped — doctor is a health surface, not a full audit log.
+    if freshness.legacy_html > 0 {
+        println!("  legacy html documents: {}", freshness.legacy_html);
+    }
+    if freshness.diagnostics.is_empty() {
+        println!("  pdc diagnostics: none");
+    } else {
+        println!("  pdc diagnostics: {}", freshness.diagnostics.len());
+        for line in format_diagnostic_lines(&freshness.diagnostics, 50) {
+            println!("  {line}");
+        }
     }
 
     // Memory-plane extraction backlog.

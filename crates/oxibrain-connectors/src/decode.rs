@@ -18,13 +18,19 @@ use oxibrain_ports::BrainError;
 use crate::html::html_note_to_text;
 
 /// Bumped when decode semantics change in a way that invalidates cached text.
-pub const DECODER_VERSION: &str = "1";
+/// v2: PDC Reader support — `.djot` documents decode through the
+/// `pdc-djot/1` body profile and canonical `.html` through `pdc-html/1`
+/// (`doc/spec/pdc-adoption-v1.md`, corpus revision 3).
+pub const DECODER_VERSION: &str = "2";
 
 /// Coarse content type used to pick a decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaType {
     Markdown,
     Html,
+    /// Canonical PDC Djot documents (`.djot`). Decoded through the
+    /// `pdc-djot/1` body profile; envelope text never reaches the index.
+    Djot,
     PlainText,
 }
 
@@ -36,6 +42,8 @@ impl MediaType {
             Some(Self::Markdown)
         } else if ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm") {
             Some(Self::Html)
+        } else if ext.eq_ignore_ascii_case("djot") {
+            Some(Self::Djot)
         } else if ext.eq_ignore_ascii_case("txt") || ext.eq_ignore_ascii_case("text") {
             Some(Self::PlainText)
         } else {
@@ -48,7 +56,25 @@ impl MediaType {
         match self {
             Self::Markdown => "text/markdown",
             Self::Html => "text/html",
+            Self::Djot => "application/vnd.pdc.document+djot;version=1",
             Self::PlainText => "text/plain",
+        }
+    }
+
+    /// Inverse of the stored media_type strings: legacy values (`text/*`)
+    /// plus the two PDC contract media types. `None` for anything else so
+    /// callers can fall back to the locator extension.
+    pub fn from_stored_str(stored: &str) -> Option<Self> {
+        match stored {
+            "text/markdown" => Some(Self::Markdown),
+            "text/html" => Some(Self::Html),
+            "text/plain" => Some(Self::PlainText),
+            "application/vnd.pdc.document+djot;version=1" => Some(Self::Djot),
+            // Canonical PDC HTML documents decode through the PDC parser, but
+            // their coarse decoder family is the HTML one; the caller uses
+            // the stored `pdc_body_profile` to pick `parse_html_document`.
+            "application/vnd.pdc.document+html;version=1" => Some(Self::Html),
+            _ => None,
         }
     }
 }
@@ -81,6 +107,15 @@ pub fn decode(media_type: MediaType, bytes: &[u8]) -> Result<DecodedDocument, Br
             // comment syntax; the html module already strips it before html→text.
             let raw = decode_utf8(bytes)?;
             html_note_to_text(&raw)
+        }
+        MediaType::Djot => {
+            // Canonical PDC Djot: decode through the `pdc-djot/1` profile so
+            // cached text is identical to the ingest-time body text. Only
+            // valid documents carry the `Djot` media type in the cache —
+            // classification happens before an upsert exists.
+            crate::pdc::parse_djot_document("", bytes)
+                .map(|doc| doc.body.text)
+                .map_err(|d| BrainError::Invalid(format!("pdc document: {d}")))?
         }
         MediaType::PlainText => decode_utf8(bytes)?,
     };

@@ -46,6 +46,7 @@ fn fp(alias: &str, space: &str, path: &str) -> RootFingerprint {
         include: vec!["**/*.md".into()],
         exclude: vec![],
         max_file_bytes: 1024,
+        decoder_version: "1".into(),
     }
 }
 
@@ -95,8 +96,41 @@ fn diff_roots_reset_when_fingerprint_changes() {
         include: vec!["**/*.md".into(), "**/*.txt".into()],
         exclude: vec![],
         max_file_bytes: 1024,
+        // Same decoder version as the cached fingerprint so the reset is
+        // attributable to the include change alone.
+        decoder_version: "1".into(),
     }];
     let cached = vec![meta("vault", "personal", "/data/vault", 3)];
+    let actions = diff_roots(&configured, &cached);
+    assert_eq!(actions, vec![("vault".into(), RootAction::ResetRoot)]);
+}
+
+#[test]
+fn fingerprint_without_decoder_version_resets_once() {
+    // Fingerprints persisted before `decoder_version` existed deserialize
+    // with the empty default, which never equals the current connector
+    // version — so an upgraded binary re-decodes every root exactly once.
+    let legacy_json = r#"{
+        "alias": "vault",
+        "canonical_path": "/data/vault",
+        "space": "personal",
+        "include": ["**/*.md"],
+        "exclude": [],
+        "max_file_bytes": 1024
+    }"#;
+    let cached_fp: RootFingerprint = serde_json::from_str(legacy_json).unwrap();
+    assert_eq!(cached_fp.decoder_version, "");
+
+    let configured = vec![RootFingerprint {
+        decoder_version: "2".into(),
+        ..fp("vault", "personal", "/data/vault")
+    }];
+    let cached = vec![CachedRootMeta {
+        alias: "vault".into(),
+        space: "personal".into(),
+        fingerprint: cached_fp,
+        generation: 3,
+    }];
     let actions = diff_roots(&configured, &cached);
     assert_eq!(actions, vec![("vault".into(), RootAction::ResetRoot)]);
 }
