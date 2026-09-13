@@ -741,6 +741,9 @@ async fn pdc_and_legacy_classification_flows_into_freshness_report() {
         "notes.html",
         "<html><body><p>legacy prose lives here</p></body></html>\n",
     );
+    // Markdown keeps the legacy decoder but is NOT a legacy HTML document;
+    // the freshness count must not inflate.
+    write_file(vault.path(), "notes.md", "plain markdown prose\n");
 
     let brain = make_brain(brain_dir.path()).await;
     let freshness = brain

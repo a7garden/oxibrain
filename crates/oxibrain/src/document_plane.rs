@@ -795,7 +795,12 @@ impl Brain {
                     action_of.push(idx);
                 }
                 Ok(MaterializedUpsert::Legacy(upsert)) => {
-                    legacy_html += 1;
+                    // Only HTML-classified legacy outcomes are "legacy html"
+                    // documents; Markdown/PlainText keep the legacy decoder
+                    // but are not legacy HTML and must not inflate the count.
+                    if upsert.media_type == MediaType::Html.as_str() {
+                        legacy_html += 1;
+                    }
                     upserts.push(upsert);
                     action_of.push(idx);
                 }

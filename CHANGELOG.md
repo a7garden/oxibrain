@@ -4,6 +4,16 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [0.14.1] — 2026-09-13
+
+### Fixed
+
+- **The freshness report counts only legacy HTML as `legacy_html`.** The
+  classifier routes every non-PDC document through the legacy decoder path,
+  and the report counted each of those outcomes — so a vault of plain Markdown
+  reported "legacy html documents: 240". Markdown and plain-text documents
+  still index exactly as before; only the report was wrong.
+
 ## [0.14.0] — 2026-09-13
 
 oxibrain becomes a Portable Document Contract (PDC) Full Reader/indexer:
