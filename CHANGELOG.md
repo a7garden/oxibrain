@@ -4,6 +4,62 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
+## [0.14.0] — 2026-09-13
+
+oxibrain becomes a Portable Document Contract (PDC) Full Reader/indexer:
+canonical `pdc-djot/1` and `pdc-html/1` documents are discovered, validated,
+decoded, and indexed through the document connectors — while the vault itself
+stays strictly read-only. Contract pin: `portable-document-contract` draft 4,
+corpus revision 3 (`6481ef0`), vendored into the connector test suite and
+asserted case by case.
+
+### Added
+
+- **PDC discovery and classification.** `.djot` files are scanned by default;
+  every one surfaces as a document or a visible PDC diagnostic (frontmatter-free
+  Djot is `invalid_transport`, never silently skipped). `.html` files classify as
+  canonical PDC HTML (comment-wrapped envelope transport) or visible legacy HTML,
+  which keeps indexing through the existing adapter. Hidden directories are
+  pruned and symlinks are never followed.
+- **Constrained-envelope parser and profile decoders** (`oxibrain-connectors::pdc`).
+  The frozen envelope grammar is enforced by construction: duplicate keys,
+  comments, tabs, anchors/aliases/tags, complex keys, empty values, and deeper
+  maps are rejected as `invalid_envelope`; canonical timestamps are validated as
+  real Gregorian dates; `updated ≥ created` and the `deleted`/`deleted_at`
+  pairing are enforced; document IDs must be canonical lowercase UUIDs. Body
+  decoding extracts indexable text plus stable block targets, canonical
+  `pdc://document/<uuid>` links, managed-asset references, task state, raw-HTML /
+  unsafe-construct flags, and title fallbacks — never envelope text, and the
+  source bytes are never mutated (asserted for every corpus fixture).
+- **PDC diagnostics in `index` and `admin doctor`.** Transport, envelope,
+  version, identity, duplicate document/block IDs, size, complexity, missing or
+  hash-mismatched assets, unsafe content, unresolved UUID links, and legacy-HTML
+  counts are reported with locator paths; one bad document never blocks its
+  neighbors. A duplicate canonical UUID inside one root excludes every
+  conflicting copy from the index (all locators reported) instead of picking a
+  silent winner.
+- **Canonical identity in the projection.** `documents.db` migrates to v3 with
+  nullable `pdc_document_id`, `pdc_body_profile`, `pdc_meta` (parsed standard
+  metadata as JSON), and `pdc_deleted` columns plus a per-root unique index on
+  the canonical UUID. `pdc_deleted` documents stay indexed but drop out of both
+  lexical and dense retrieval (trash semantics). `DocumentCache::resolve_pdc`
+  maps a canonical UUID to `(document_id, locator)`, and the mapping survives
+  moves: re-indexing a renamed file resolves the same UUID to the new locator
+  (regression-tested; the path-derived `document_id` remains the internal
+  cache/provenance key only).
+
+### Changed
+
+- **`DECODER_VERSION` bumps to 2 and `RootFingerprint` carries it.** The first
+  `index` after upgrading resets and rebuilds every document root once, so
+  cached chunks, text, and metadata all reflect the PDC decoders. Rebuilding
+  stays deterministic; documents.db remains a fully rebuildable projection.
+
+### Docs
+
+- `doc/spec/pdc-adoption-v1.md` (the staged adoption plan) and the Priority-1
+  section in `AGENTS.md` land with the implementation.
+
 ## [0.13.0] — 2026-09-12
 
 The local embedder reaches the shipped binaries; recall and drain-reporting repairs.
