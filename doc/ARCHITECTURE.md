@@ -1,5 +1,15 @@
 # oxibrain — Architecture
-> **Version:** v2.15 · **Date:** 2026-08-30 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.16 · **Date:** 2026-09-14 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.16 — Document plane: PDC2 Markdown-first adoption (spec `doc/spec/pdc-adoption-v2.md`).**
+> The connector boundary adopts `pdc-document/2` (tag `v2.0.0-draft.2`, commit `0ee51ea`,
+> corpus `pdc-document-conformance/2` rev 2) as a Full Reader/indexer: canonical
+> `pdc-markdown/1` lowercase `.md` and `pdc-html/1`; frozen `pdc-document/1` documents stay
+> readable as `legacy_document_version` items and are never auto-converted; plain `.md` and
+> unmarked `.html` remain visible legacy inputs; `pdc-query/1` `.base` definitions are
+> validated and preserved as opaque source, never executed (§26). This plane is outside the
+> ledger/projection split — `documents.db` stays a disposable projection and PDC documents
+> never become episodes.
+>
 > **v2.15 — Unified Oxi home (spec `docs/superpowers/specs/2026-08-29-oxi-home-layout-design.md`, ADR-015).**
 > One discoverable root (`~/.oxi`, override `OXI_HOME`) with strict ownership: `brain/` is
 > oxibrain-private, `spaces/<space>/vault/` is the only shared write area (oximemo owns space
@@ -2935,3 +2945,38 @@ Considered against working implementations, recorded so they are not re-litigate
 - Binary quantization (Qdrant, SimSIMD lineage) — D25.
 - SQLite FTS5 `trigram` tokenizer — §7.4.
 - Loro — Rust CRDT for the post-v1 sync path (§15.6).
+
+## 26. Document plane (PDC2)
+
+The document plane is deliberately outside the ledger/projection split of §3:
+`documents.db` is a disposable, rebuildable cache whose only write path is the
+facade's apply pass, and nothing indexed from a document ever becomes an
+episode, entity, or assertion.
+
+**Contracts.** `pdc-document/2` (tag `v2.0.0-draft.2`, commit `0ee51ea`) with
+body profiles `pdc-markdown/1` (canonical lowercase `.md`, Obsidian-compatible)
+and `pdc-html/1`; frozen `pdc-document/1` (`.djot`/`pdc-djot/1` and v1
+`.pdc-html/1` documents) is mandatory readable legacy, never auto-converted;
+`pdc-query/1` covers `.base` files and fenced `base` blocks as opaque,
+read-only query definitions — validated against the same safe-YAML rules as
+the envelope and never executed. The normative text lives in the
+`portable-document-contract` repository; this repo pins corpus
+`pdc-document-conformance/2` revision 2 (`tests/fixtures/pdc2-corpus/`,
+`PDC2_CORPUS_REVISION`) plus the frozen v1 corpus revision 3.
+
+**Roles and boundaries.** oxibrain is a Full Reader/indexer: it classifies,
+validates, decodes, indexes, and serves source references; it never writes,
+repairs, normalizes, assigns IDs to, or migrates a source document, and it
+never opens a transaction across inference (P7, P8 unchanged). Discovery scans
+`.md`, `.html`, `.djot`, and `.base` (include globs, per-root byte caps,
+symlink- and dot-directory pruning). Classification outcomes are visible and
+exhaustive: canonical v2, readable v1 (`legacy_document_version`), plain
+Markdown (`legacy_markdown`), unmarked HTML (`legacy_html`), unexecuted query
+definitions (`query_definitions`), or an exact contract diagnostic.
+
+**Identity.** The envelope UUID (`pdc_document_id`) is canonical for `pdc://`
+resolution and unique per root; the path-derived document ID remains the
+internal cache/provenance key behind `doc://alias/<locator>?rev=`. Raw source
+provenance is byte-identical (gix blob oids or blake3), so reprojection from
+source is deterministic and user properties survive in source even though the
+disposable projection records only standard fields.

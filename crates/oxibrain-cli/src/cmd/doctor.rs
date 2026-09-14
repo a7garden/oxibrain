@@ -67,10 +67,25 @@ pub async fn run(dir: &Path) -> anyhow::Result<()> {
     for locator in &freshness.stale_after_retry {
         println!("  stale after retry: {locator}");
     }
-    // PDC diagnostics (pdc-adoption-v1 "Diagnostics"): grouped by code and
+    // PDC diagnostics (pdc-adoption-v2 "Diagnostics"): grouped by code and
     // capped — doctor is a health surface, not a full audit log.
     if freshness.legacy_html > 0 {
         println!("  legacy html documents: {}", freshness.legacy_html);
+    }
+    if freshness.legacy_markdown > 0 {
+        println!("  legacy markdown documents: {}", freshness.legacy_markdown);
+    }
+    if freshness.legacy_document_version > 0 {
+        println!(
+            "  legacy document-version (pdc-document/1) documents: {}",
+            freshness.legacy_document_version
+        );
+    }
+    if freshness.query_definitions > 0 {
+        println!(
+            "  pdc-query/1 query definitions (preserved, never executed): {}",
+            freshness.query_definitions
+        );
     }
     if freshness.diagnostics.is_empty() {
         println!("  pdc diagnostics: none");

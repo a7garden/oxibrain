@@ -19,7 +19,9 @@ pub use markdown::{MarkdownFile, scan_directory};
 pub use oxibrain_core::documents::FileObservation;
 pub use oxios::{OxiosMemoryEntry, read_oxios_memory};
 pub use pdc::{
-    PDC_CORPUS_REVISION, PdcBody, PdcDiagnostic, PdcDiagnosticCode, PdcDocument, PdcLink,
-    PdcMetadata, PdcTask, classify_html_transport, parse_djot_document, parse_html_document,
+    MarkdownClassification, PDC_QUERY_CONTRACT, PDC2_CORPUS_FORMAT, PDC2_CORPUS_REVISION, PdcBody,
+    PdcDiagnostic, PdcDiagnosticCode, PdcDocument, PdcLink, PdcMetadata, PdcTask, WikiLink,
+    classify_html_transport, parse_djot_document, parse_html_document, parse_markdown_document,
+    sniff_markdown, validate_base_query,
 };
 pub use scan::{ScanResult, SkippedFile, canonicalize_root, scan_root};

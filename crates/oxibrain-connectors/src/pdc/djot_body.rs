@@ -32,6 +32,9 @@ const RAW_HTML_BLOCK: &str = "raw html block";
 pub fn parse_djot_body(src: &str) -> PdcBody {
     let mut body = PdcBody {
         text: String::new(),
+        wiki_links: Vec::new(),
+        query_blocks: 0,
+        query_errors: Vec::new(),
         block_ids: Vec::new(),
         document_links: Vec::new(),
         asset_refs: Vec::new(),

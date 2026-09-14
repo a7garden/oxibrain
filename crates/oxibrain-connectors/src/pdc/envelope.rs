@@ -102,6 +102,27 @@ pub fn parse_envelope(src: &str) -> Result<RawEnvelope, EnvelopeError> {
     Ok(out)
 }
 
+/// Observed top-level `format` value from raw envelope text, used to choose
+/// the envelope grammar before parsing it (v1 constrained YAML vs. v2 safe
+/// general YAML). Scans for a `format:` key at column zero and strips one
+/// layer of matching quotes.
+pub(super) fn observed_format(src: &str) -> Option<String> {
+    for line in src.lines() {
+        let Some(rest) = line.strip_prefix("format:") else {
+            continue;
+        };
+        let value = rest.trim();
+        let unquoted = match (value.chars().next(), value.chars().last()) {
+            (Some(q), Some(last)) if (q == '"' || q == '\'') && q == last && value.len() >= 2 => {
+                &value[1..value.len() - 1]
+            }
+            _ => value,
+        };
+        return Some(unquoted.to_string());
+    }
+    None
+}
+
 /// Split `key: rest`. The colon must terminate the key (no quoted keys, no
 /// complex keys). Forbidden characters in keys or lines fail with `reason`.
 fn split_key(line: &str, line_no: usize) -> Result<(String, &str), EnvelopeError> {
@@ -630,6 +651,7 @@ pub(super) fn validate_fields(
     }
 
     Ok(super::PdcMetadata {
+        contract_version: 1,
         document_uuid: id.clone(),
         body,
         created,
@@ -639,10 +661,222 @@ pub(super) fn validate_fields(
         lang,
         tags,
         aliases,
+        cssclasses: Vec::new(),
         favorite,
         deleted,
         deleted_at,
     })
+}
+// --- pdc-document/2 standard field validation (PDC-2.0 §5) -------------------
+
+use super::yaml_frontmatter::YamlValue;
+
+/// Validate the standard fields of a `pdc-document/2` envelope (safe general
+/// YAML already parsed by [`super::yaml_frontmatter::parse_safe_yaml`]).
+/// Unknown top-level keys are user properties (§5.3): they are legal here and
+/// simply not projected.
+pub(super) fn validate_fields_v2(
+    fields: &[(String, YamlValue)],
+    transport_profile: BodyProfile,
+) -> Result<super::PdcMetadata, PdcDiagnostic> {
+    use PdcDiagnosticCode as Code;
+
+    let invalid = |msg: String| PdcDiagnostic::new(Code::InvalidEnvelope, msg);
+    let get = |key: &str| fields.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+
+    // format: exact value; an unknown pdc-document major is unsupported, not
+    // malformed (§2).
+    let format_ok = matches!(get("format"), Some(YamlValue::Str(s)) if s == "pdc-document/2");
+    if !format_ok {
+        let observed = match get("format") {
+            Some(YamlValue::Str(s)) => s.clone(),
+            _ => String::new(),
+        };
+        if observed.starts_with("pdc-document/") {
+            return Err(PdcDiagnostic::new(
+                Code::UnsupportedDocumentVersion,
+                format!("unsupported document version `{observed}`"),
+            ));
+        }
+        return Err(invalid(format!(
+            "`format` must be exactly `pdc-document/2` (observed `{observed}`)"
+        )));
+    }
+
+    // body: exact profile matching the transport. `pdc-djot/1` is valid only
+    // inside a pdc-document/1 envelope (§2), so under v2 it is a transport
+    // mismatch; other unknown profiles are unsupported versions.
+    let body = match get("body") {
+        Some(YamlValue::Str(s)) => match BodyProfile::from_str_exact(s) {
+            Some(p) if p == transport_profile => p,
+            Some(_) | None if s == "pdc-djot/1" => {
+                return Err(PdcDiagnostic::new(
+                    Code::InvalidTransport,
+                    "`pdc-djot/1` is valid only inside a `pdc-document/1` envelope (PDC 2 §2)"
+                        .to_string(),
+                ));
+            }
+            Some(_) => {
+                return Err(PdcDiagnostic::new(
+                    Code::InvalidTransport,
+                    format!(
+                        "envelope declares `{s}` but the file transport is `{}`",
+                        transport_profile.as_str()
+                    ),
+                ));
+            }
+            None => {
+                return Err(PdcDiagnostic::new(
+                    Code::UnsupportedBodyVersion,
+                    format!("unsupported body profile `{s}`"),
+                ));
+            }
+        },
+        _ => {
+            return Err(invalid(
+                "`body` is required and must be a string".to_string(),
+            ));
+        }
+    };
+
+    // id: canonical lowercase hyphenated UUID (§7.1).
+    let id = match get("id") {
+        Some(YamlValue::Str(s)) => s.clone(),
+        _ => return Err(invalid("`id` is required and must be a string".to_string())),
+    };
+    if !is_canonical_uuid(&id) {
+        return Err(PdcDiagnostic::new(
+            Code::InvalidDocumentId,
+            format!("`id` must be a canonical lowercase hyphenated UUID (observed `{id}`)"),
+        ));
+    }
+
+    // created/updated: canonical timestamps, updated >= created (§5.1).
+    let created = v2_string_field(fields, "created")?;
+    let updated = v2_string_field(fields, "updated")?;
+    validate_canonical_timestamp(&created).map_err(invalid_containing("created"))?;
+    validate_canonical_timestamp(&updated).map_err(invalid_containing("updated"))?;
+    if updated.as_str() < created.as_str() {
+        return Err(invalid(
+            "`updated` must not be earlier than `created`".to_string(),
+        ));
+    }
+
+    // title: any string, may be empty.
+    let title = v2_string_field(fields, "title")?;
+
+    // Optional standard fields (§5.2); strict types, strict value shapes.
+    let profile = v2_opt_string_field(fields, "profile")?;
+    let lang = v2_opt_string_field(fields, "lang")?;
+    let tags = v2_seq_field(fields, "tags")?;
+    let aliases = v2_seq_field(fields, "aliases")?;
+    let cssclasses = v2_seq_field(fields, "cssclasses")?;
+    let favorite = v2_bool_field(fields, "favorite")?.unwrap_or(false);
+    let deleted = v2_bool_field(fields, "deleted")?.unwrap_or(false);
+    let deleted_at = match get("deleted_at") {
+        None => None,
+        Some(YamlValue::Str(s)) => {
+            validate_canonical_timestamp(s).map_err(invalid_containing("deleted_at"))?;
+            Some(s.clone())
+        }
+        Some(_) => return Err(invalid("`deleted_at` must be a string".to_string())),
+    };
+    if deleted != deleted_at.is_some() {
+        return Err(invalid(
+            "`deleted_at` must be present exactly when `deleted` is true".to_string(),
+        ));
+    }
+
+    // Tags/aliases/cssclasses are case-sensitive and duplicate-free.
+    for (field, seq) in [
+        ("tags", &tags),
+        ("aliases", &aliases),
+        ("cssclasses", &cssclasses),
+    ] {
+        let mut seen = std::collections::BTreeSet::new();
+        for item in seq {
+            if !seen.insert(item.as_str()) {
+                return Err(invalid(format!("duplicate {field} label `{item}`")));
+            }
+        }
+    }
+
+    Ok(super::PdcMetadata {
+        contract_version: 2,
+        document_uuid: id,
+        body,
+        created,
+        updated,
+        title,
+        profile,
+        lang,
+        tags,
+        aliases,
+        cssclasses,
+        favorite,
+        deleted,
+        deleted_at,
+    })
+}
+
+fn v2_string_field(fields: &[(String, YamlValue)], key: &str) -> Result<String, PdcDiagnostic> {
+    match fields.iter().find(|(k, _)| k == key).map(|(_, v)| v) {
+        Some(YamlValue::Str(s)) => Ok(s.clone()),
+        _ => Err(PdcDiagnostic::new(
+            PdcDiagnosticCode::InvalidEnvelope,
+            format!("`{key}` is required and must be a string"),
+        )),
+    }
+}
+
+fn v2_opt_string_field(
+    fields: &[(String, YamlValue)],
+    key: &str,
+) -> Result<Option<String>, PdcDiagnostic> {
+    match fields.iter().find(|(k, _)| k == key).map(|(_, v)| v) {
+        None => Ok(None),
+        Some(YamlValue::Str(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(PdcDiagnostic::new(
+            PdcDiagnosticCode::InvalidEnvelope,
+            format!("`{key}` must be a string"),
+        )),
+    }
+}
+
+fn v2_seq_field(fields: &[(String, YamlValue)], key: &str) -> Result<Vec<String>, PdcDiagnostic> {
+    match fields.iter().find(|(k, _)| k == key).map(|(_, v)| v) {
+        None => Ok(Vec::new()),
+        Some(YamlValue::Seq(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    YamlValue::Str(s) => out.push(s.clone()),
+                    _ => {
+                        return Err(PdcDiagnostic::new(
+                            PdcDiagnosticCode::InvalidEnvelope,
+                            format!("`{key}` must be a string sequence"),
+                        ));
+                    }
+                }
+            }
+            Ok(out)
+        }
+        Some(_) => Err(PdcDiagnostic::new(
+            PdcDiagnosticCode::InvalidEnvelope,
+            format!("`{key}` must be a string sequence"),
+        )),
+    }
+}
+
+fn v2_bool_field(fields: &[(String, YamlValue)], key: &str) -> Result<Option<bool>, PdcDiagnostic> {
+    match fields.iter().find(|(k, _)| k == key).map(|(_, v)| v) {
+        None => Ok(None),
+        Some(YamlValue::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(PdcDiagnostic::new(
+            PdcDiagnosticCode::InvalidEnvelope,
+            format!("`{key}` must be a Boolean"),
+        )),
+    }
 }
 
 fn invalid_containing(field: &'static str) -> impl Fn(String) -> PdcDiagnostic {

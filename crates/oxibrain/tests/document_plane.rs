@@ -706,7 +706,7 @@ space = "knowledge"
     );
 }
 
-// ── PDC classification, reporting, and projection (pdc-adoption-v1) ────────
+// ── PDC classification, reporting, and projection (pdc-adoption-v2) ────────
 
 const UUID_KNOWN: &str = "018f47c6-4a77-7c52-9db8-0e5f9bcb17db";
 
@@ -959,7 +959,7 @@ async fn pdc_uuid_link_resolution_survives_a_move() {
 
     // Move (rename) the file: the cache key changes with the locator, but
     // the canonical PDC UUID must keep resolving — that is the Stage 2
-    // exit criterion of doc/spec/pdc-adoption-v1.md.
+    // exit criterion of doc/spec/pdc-adoption-v2.md.
     std::fs::create_dir(vault.path().join("renamed")).unwrap();
     fs::rename(
         vault.path().join("original-name.djot"),
@@ -984,4 +984,96 @@ async fn pdc_uuid_link_resolution_survives_a_move() {
     let cache = oxibrain_store::documents::DocumentCache::open_ro(brain_dir.path()).unwrap();
     let (_, locator) = cache.resolve_pdc("vault", UUID_KNOWN).unwrap().unwrap();
     assert_eq!(locator, "renamed/deeper-name.djot");
+}
+
+// ── PDC2 Markdown-first classification (pdc-adoption-v2) ───────────────────
+
+#[tokio::test]
+async fn pdc2_markdown_first_classification_flows_into_freshness_report() {
+    let brain_dir = TempDir::new().unwrap();
+    let vault = TempDir::new().unwrap();
+    write_documents_config(brain_dir.path(), vault.path(), "personal");
+    // Canonical v2 markdown: envelope excluded from text, projection row set.
+    write_file(
+        vault.path(),
+        "note.md",
+        "---\nformat: pdc-document/2\nbody: pdc-markdown/1\n\
+         id: 018f47c6-4a77-7c52-9db8-0e5f9bcb1705\n\
+         created: 2026-09-14T12:34:56.789Z\nupdated: 2026-09-14T12:34:56.789Z\n\
+         title: Canonical note\n---\n# Canonical note\n\nv2 body text here.\n",
+    );
+    // Plain Markdown without PDC frontmatter: visible legacy markdown.
+    write_file(
+        vault.path(),
+        "plain.md",
+        "# Plain\n\nplain markdown prose\n",
+    );
+    // Readable v1 djot: fully indexed, counted as legacy_document_version.
+    write_file(
+        vault.path(),
+        "old.djot",
+        &djot_source(UUID_KNOWN, "Old djot", "", "legacy djot body\n"),
+    );
+    // `pdc-query/1` definition: validated, preserved opaque, never executed.
+    write_file(
+        vault.path(),
+        "views.base",
+        "filters: 'priority == 2'\nviews:\n  - type: table\n    name: T\n",
+    );
+    // Marked-PDC markdown with an unclosed fence: visible diagnostic.
+    write_file(
+        vault.path(),
+        "broken.md",
+        "---\nformat: pdc-document/2\ntitle: Broken\n",
+    );
+
+    let brain = make_brain(brain_dir.path()).await;
+    let freshness = brain
+        .index_documents(IndexOptions {
+            embed: false,
+            budget: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(freshness.legacy_markdown, 1, "{freshness:?}");
+    assert_eq!(freshness.legacy_document_version, 1);
+    assert_eq!(freshness.query_definitions, 1);
+    assert_eq!(freshness.legacy_html, 0);
+    // Exactly one diagnostic: the unclosed markdown fence.
+    assert_eq!(
+        freshness.diagnostics.len(),
+        1,
+        "{:?}",
+        freshness.diagnostics
+    );
+    assert_eq!(freshness.diagnostics[0].code, "invalid_transport");
+    assert_eq!(freshness.diagnostics[0].locator, "broken.md");
+
+    // The canonical markdown doc is searchable and its body text excludes
+    // the envelope; the plain markdown doc stays visible legacy content.
+    let q = oxibrain_core::retrieval::Query {
+        text: "here".into(),
+        mode: oxibrain_core::retrieval::QueryMode::Lexical,
+        space: "personal".into(),
+        as_of: None,
+        limit: 5,
+        min_confidence: 0.0,
+        planes: [oxibrain_core::retrieval::SearchPlane::Documents]
+            .into_iter()
+            .collect(),
+    };
+    let SearchResponse { documents, .. } = brain.search(q).await.unwrap();
+    assert!(
+        documents
+            .iter()
+            .any(|h| h.locator == "note.md" && h.text.text.contains("v2 body text here")),
+        "expected the canonical markdown hit: {documents:?}"
+    );
+    assert!(
+        !documents
+            .iter()
+            .any(|h| h.locator == "note.md" && h.text.text.contains("format:")),
+        "envelope must never leak into cached text"
+    );
 }

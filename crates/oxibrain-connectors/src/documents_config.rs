@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
-const DEFAULT_INCLUDE: &[&str] = &["**/*.md", "**/*.txt", "**/*.html", "**/*.djot"];
+const DEFAULT_INCLUDE: &[&str] = &["**/*.md", "**/*.txt", "**/*.html", "**/*.djot", "**/*.base"];
 const DEFAULT_EXCLUDE: &[&str] = &["**/.git/**", "**/.DS_Store", "**/*.tmp", "**/*.lock"];
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 

@@ -12,11 +12,11 @@
 > archived specs may still say `DESIGN.md §n`; the section numbers changed in v2.0,
 > so treat those references as historical.
 
-## Priority 1 — Portable Document Contract Reader adoption
+## Priority 1 — Portable Document Contract v2 (Markdown-first)
 
-- Unless the user explicitly overrides priority, the connector work in `doc/spec/pdc-adoption-v1.md` is this repository's highest-priority document-plane initiative. Advance its earliest incomplete gate before starting competing document decoder, identity, link, or indexing changes.
-- Load and follow the installed `portable-document-contract` skill before changing durable user-document discovery, parsing, indexing, links, assets, diagnostics, or migration behavior. Pin the shared corpus revision and report contract conflicts instead of inventing oxibrain-specific PDC semantics.
-- oxibrain is a Full Reader/indexer only: it discovers both `pdc-djot/1` and `pdc-html/1`, preserves raw source provenance, records canonical PDC UUIDs for link resolution, and never writes, repairs, emits, or migrates a user's document.
+- Unless the user explicitly overrides priority, the document-plane work in `doc/spec/pdc-adoption-v2.md` is this repository's highest-priority connector initiative. It is implemented: canonical `pdc-markdown/1` (lowercase `.md`, Obsidian-compatible) and `pdc-html/1`, with frozen `pdc-document/1` documents readable as `legacy_document_version` items and never auto-converted. Remaining work is corpus resyncs and integration tests, not new gates.
+- The normative contract lives in the `portable-document-contract` repository (tag `v2.0.0-draft.2`, commit `0ee51ea`; `references/PDC-2.0.md`, `PDC-QUERY-1.0.md`). Consult it before changing durable user-document discovery, parsing, indexing, links, assets, diagnostics, or query behavior. The vendored corpus (`tests/fixtures/pdc2-corpus/`, revision 2) and `PDC2_CORPUS_REVISION` move together; report contract conflicts instead of inventing oxibrain-specific PDC semantics.
+- oxibrain is a Full Reader/indexer only: it discovers `.md`, `.html`, `.djot`, and (read-only) `.base` files, preserves raw source provenance byte-for-byte, records canonical PDC UUIDs for link resolution, validates `pdc-query/1` definitions without executing them, and never writes, repairs, emits, converts, or migrates a user's document.
 - The existing path-derived document ID may remain an internal disposable-cache/provenance key, but it must never replace the PDC UUID. PDC documents remain on the document plane and never become episodes merely because they were indexed.
 - Repository docs, ledgers, database-internal records, generated projections, prompts, logs, caches, and exports remain outside PDC unless explicitly promoted.
 

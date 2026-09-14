@@ -101,6 +101,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -626,7 +632,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1817,6 +1823,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashlink"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
+dependencies = [
+ "hashbrown 0.17.1",
+]
+
+[[package]]
 name = "heapless"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2061,7 +2076,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2421,7 +2436,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "oxibrain"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "blake3",
@@ -2450,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2477,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-client"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "oxibrain",
@@ -2491,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-connectors"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2509,11 +2524,12 @@ dependencies = [
  "toml",
  "tracing",
  "walkdir",
+ "yaml-rust2",
 ]
 
 [[package]]
 name = "oxibrain-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "blake3",
  "hex",
@@ -2528,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-embed-local"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "llama-cpp-2",
  "oxibrain-ports",
@@ -2541,7 +2557,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-index"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "proptest",
  "serde",
@@ -2549,7 +2565,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-llm-http"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "oxibrain-ports",
@@ -2562,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-llm-local"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "encoding_rs",
@@ -2577,7 +2593,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-mcp"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2599,14 +2615,14 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-ops"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "oxibrain-ports"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "proptest",
@@ -2618,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-store"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "blake3",
  "fs2",
@@ -2640,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "oxibrain-views"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "parking_lot"
@@ -2843,7 +2859,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3053,7 +3069,7 @@ dependencies = [
  "bitflags 2.13.1",
  "fallible-iterator",
  "fallible-streaming-iterator",
- "hashlink",
+ "hashlink 0.9.1",
  "libsqlite3-sys",
  "smallvec",
 ]
@@ -3074,7 +3090,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3387,10 +3403,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3945,7 +3961,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4056,6 +4072,17 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "yaml-rust2"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57e5b818a27a4cd30884ea380857a5e56f7ec3ba24a3990a3cc0b95af3238e18"
+dependencies = [
+ "arraydeque",
+ "encoding_rs",
+ "hashlink 0.12.2",
+]
 
 [[package]]
 name = "zerocopy"

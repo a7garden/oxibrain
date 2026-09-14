@@ -151,11 +151,14 @@ impl<'a> HtmlScan<'a> {
             text: collapse_spaces(&text),
             block_ids,
             document_links,
+            wiki_links: Vec::new(),
             asset_refs,
             tasks,
             unsafe_constructs,
             container_depth,
             fallback_title,
+            query_blocks: 0,
+            query_errors: Vec::new(),
         }
     }
 

@@ -45,11 +45,12 @@ use oxibrain_connectors::documents_config::{
     DEFAULT_MAX_FILE_BYTES, DocumentsConfig, RootEntry, UpsertOutcome, default_exclude,
     default_include,
 };
-use oxibrain_connectors::pdc::{BodyProfile, HtmlClassification};
+use oxibrain_connectors::pdc::{BodyProfile, HtmlClassification, MarkdownClassification};
 use oxibrain_connectors::scan::{canonicalize_root, scan_root};
 use oxibrain_connectors::{
     DECODER_VERSION, GitDocumentReader, MediaType, PdcDiagnostic, PdcDiagnosticCode, PdcDocument,
     classify_html_transport, decode, parse_djot_document, parse_html_document,
+    parse_markdown_document, sniff_markdown, validate_base_query,
 };
 use oxibrain_core::chunking::{ChunkPolicy, render_context_prefix, split_into_chunks};
 use oxibrain_core::documents::{
@@ -106,7 +107,7 @@ pub struct DocumentHit {
 }
 
 /// One diagnosable document-plane condition from a reconcile pass
-/// (`pdc-adoption-v1` "Diagnostics"): a PDC parse/validation failure, a
+/// (`pdc-adoption-v2` "Diagnostics"): a PDC parse/validation failure, a
 /// duplicate canonical UUID claim, an unresolved link, or a managed-asset
 /// problem. Diagnostics never abort the pass — unrelated valid documents
 /// still index.
@@ -144,6 +145,14 @@ pub struct DocumentFreshness {
     /// Documents that classified as visible legacy HTML and went through
     /// the legacy adapter (`legacy_html` outcome).
     pub legacy_html: u32,
+    /// `.md` files without valid PDC frontmatter — visible plain Markdown.
+    pub legacy_markdown: u32,
+    /// Readable `pdc-document/1` documents (djot/html bodies). Fully indexed
+    /// under the frozen v1 rules; never auto-converted (PDC 2 §6.3).
+    pub legacy_document_version: u32,
+    /// `.base` files that validated as `pdc-query/1` definitions — preserved
+    /// opaque source, never executed.
+    pub query_definitions: u32,
     /// `embedded / total` when the dense channel ran; `None` otherwise.
     pub dense_coverage: Option<f64>,
 }
@@ -658,6 +667,9 @@ impl Brain {
         let mut stale_after_retry: Vec<String> = Vec::new();
         let mut diagnostics: Vec<DiagnosticReport> = Vec::new();
         let mut legacy_html = 0u32;
+        let mut legacy_markdown = 0u32;
+        let mut legacy_document_version = 0u32;
+        let mut query_definitions = 0u32;
 
         for (entry, _) in &configured {
             let alias = entry.alias.clone();
@@ -676,6 +688,9 @@ impl Brain {
                     roots_apply.push(outcome.root_apply);
                     diagnostics.extend(outcome.diagnostics);
                     legacy_html += outcome.legacy_html;
+                    legacy_markdown += outcome.legacy_markdown;
+                    legacy_document_version += outcome.legacy_document_version;
+                    query_definitions += outcome.query_definitions;
                 }
                 Err(e) => skipped_roots.push((alias, e.to_string())),
             }
@@ -700,6 +715,9 @@ impl Brain {
             stale_after_retry,
             diagnostics,
             legacy_html,
+            legacy_markdown,
+            legacy_document_version,
+            query_definitions,
             dense_coverage: None,
         })
     }
@@ -784,12 +802,25 @@ impl Brain {
         let mut action_of: Vec<usize> = Vec::new();
         let mut diagnostics: Vec<DiagnosticReport> = Vec::new();
         let mut legacy_html = 0u32;
+        let mut legacy_markdown = 0u32;
+        let mut legacy_document_version = 0u32;
+        let mut query_definitions = 0u32;
         for (idx, slot) in actions.iter_mut().enumerate() {
             let obs = match &*slot {
                 CoreFileAction::Add(o) | CoreFileAction::Replace(o) => o.clone(),
                 _ => continue,
             };
-            match self.materialize_upsert(&obs, &canonical, stale).await {
+            match self
+                .materialize_upsert(
+                    &obs,
+                    &canonical,
+                    stale,
+                    &mut legacy_markdown,
+                    &mut legacy_document_version,
+                    &mut query_definitions,
+                )
+                .await
+            {
                 Ok(MaterializedUpsert::Pdc(upsert)) => {
                     upserts.push(upsert);
                     action_of.push(idx);
@@ -828,7 +859,7 @@ impl Brain {
             }
         }
 
-        // Root-level canonical pass (pdc-adoption-v1): resolve duplicate
+        // Root-level canonical pass (pdc-adoption-v2): resolve duplicate
         // UUID claims first — they shrink the surviving uuid → locator map —
         // then report unresolved links and verify managed assets for every
         // surviving canonical document.
@@ -907,27 +938,37 @@ impl Brain {
             },
             diagnostics,
             legacy_html,
+            legacy_markdown,
+            legacy_document_version,
+            query_definitions,
         })
     }
 
     /// Decode one Add/Replace action into chunks + manifest payload,
-    /// classification-aware (pdc-adoption-v1):
-    /// - `.djot` and canonical-PDC `.html` parse through the PDC connector;
-    ///   the upsert carries the contract media type and the projection
-    ///   payload.
-    /// - Legacy `.html` (and every other extension) keep the legacy decoder
-    ///   path; legacy HTML is counted in the `legacy_html` report.
+    /// classification-aware (pdc-adoption-v2):
+    /// - `.djot` (frozen v1) and canonical-PDC `.html`/`.md` parse through
+    ///   the PDC connector; the upsert carries the contract media type and
+    ///   the projection payload. Readable v1 documents are counted in the
+    ///   `legacy_document_version` report.
+    /// - Plain Markdown and visible legacy HTML keep the legacy decoder path
+    ///   and are counted (`legacy_markdown` / `legacy_html`); `.base` query
+    ///   definitions validate against `pdc-query/1` and index as opaque
+    ///   source, never executed.
     /// - A PDC connector rejection surfaces as [`MaterializeError::Pdc`]
     ///   (reportable diagnostic, no upsert).
     ///
     /// Stability check (invariant §3): stat before/after the read; on a
     /// mismatch retry the read once; a second mismatch flags the locator
     /// in `stale` (the payload still lands — the next pass re-reconciles).
+    #[allow(clippy::too_many_arguments)]
     async fn materialize_upsert(
         &self,
         obs: &FileObservation,
         canonical_root: &Path,
         stale: &mut Vec<String>,
+        legacy_markdown: &mut u32,
+        legacy_document_version: &mut u32,
+        query_definitions: &mut u32,
     ) -> Result<MaterializedUpsert, MaterializeError> {
         let path = canonical_root.join(&obs.locator);
 
@@ -949,8 +990,12 @@ impl Brain {
         let media_type = media_type_of(&path);
         match media_type {
             MediaType::Djot => {
+                // Frozen v1 transport: every parseable Djot document is a
+                // readable legacy v1 item (PDC 2 §6.3) — counted, indexed,
+                // never converted.
                 let doc = parse_djot_document(&locator_stem(&obs.locator), &bytes)
                     .map_err(MaterializeError::Pdc)?;
+                *legacy_document_version += 1;
                 Ok(MaterializedUpsert::Pdc(build_upsert(
                     obs,
                     &bytes,
@@ -961,6 +1006,11 @@ impl Brain {
                 HtmlClassification::Pdc => {
                     let doc = parse_html_document(&locator_stem(&obs.locator), &bytes)
                         .map_err(MaterializeError::Pdc)?;
+                    // pdc-html/1 is canonical under both envelope majors;
+                    // v1 envelopes stay legacy_document_version items.
+                    if doc.metadata.contract_version == 1 {
+                        *legacy_document_version += 1;
+                    }
                     Ok(MaterializedUpsert::Pdc(build_upsert(
                         obs,
                         &bytes,
@@ -980,6 +1030,50 @@ impl Brain {
                         },
                     )))
                 }
+            },
+            MediaType::Markdown => match sniff_markdown(&bytes) {
+                // Canonical `pdc-markdown/1`: transport + envelope + body.
+                MarkdownClassification::Pdc => {
+                    let doc = parse_markdown_document(&locator_stem(&obs.locator), &bytes)
+                        .map_err(MaterializeError::Pdc)?;
+                    Ok(MaterializedUpsert::Pdc(build_upsert(
+                        obs,
+                        &bytes,
+                        DecodedSource::Pdc(Box::new(doc)),
+                    )))
+                }
+                // Plain Markdown without valid PDC frontmatter stays visible
+                // legacy input (`legacy_markdown`), never a conversion target.
+                MarkdownClassification::Legacy => {
+                    let decoded =
+                        decode(MediaType::Markdown, &bytes).map_err(MaterializeError::Io)?;
+                    *legacy_markdown += 1;
+                    Ok(MaterializedUpsert::Legacy(build_upsert(
+                        obs,
+                        &bytes,
+                        DecodedSource::Legacy {
+                            media_type: MediaType::Markdown.as_str().to_string(),
+                            text: decoded.text,
+                        },
+                    )))
+                }
+            },
+            MediaType::BaseQuery => match validate_base_query(&bytes) {
+                // `pdc-query/1`: preserved opaque source, never executed.
+                Ok(()) => {
+                    let decoded =
+                        decode(MediaType::BaseQuery, &bytes).map_err(MaterializeError::Io)?;
+                    *query_definitions += 1;
+                    Ok(MaterializedUpsert::Legacy(build_upsert(
+                        obs,
+                        &bytes,
+                        DecodedSource::Legacy {
+                            media_type: MediaType::BaseQuery.as_str().to_string(),
+                            text: decoded.text,
+                        },
+                    )))
+                }
+                Err(d) => Err(MaterializeError::Pdc(d)),
             },
             _ => {
                 let decoded = decode(media_type, &bytes).map_err(MaterializeError::Io)?;
@@ -1162,10 +1256,24 @@ impl Brain {
                 Ok(doc) => doc.body.text,
                 Err(_) => return Ok(None),
             },
-            s if s == BodyProfile::Html.media_type() => match parse_html_document("", &bytes) {
-                Ok(doc) => doc.body.text,
-                Err(_) => return Ok(None),
-            },
+            // Canonical PDC documents re-decode through the parser so the
+            // cached text matches the ingest-time body exactly. HTML carries
+            // the contract media type under either envelope major; markdown
+            // exists only under `pdc-document/2`.
+            s if s == BodyProfile::Html.media_type()
+                || s == "application/vnd.pdc.document+html;version=2" =>
+            {
+                match parse_html_document("", &bytes) {
+                    Ok(doc) => doc.body.text,
+                    Err(_) => return Ok(None),
+                }
+            }
+            s if s == BodyProfile::Markdown.media_type() => {
+                match parse_markdown_document("", &bytes) {
+                    Ok(doc) => doc.body.text,
+                    Err(_) => return Ok(None),
+                }
+            }
             _ => match decode(media_type.unwrap_or_else(|| media_type_of(&path)), &bytes) {
                 Ok(d) => d.text,
                 Err(_) => return Ok(None),
@@ -1314,6 +1422,9 @@ struct RootIndexOutcome {
     root_apply: StoreRootApply,
     diagnostics: Vec<DiagnosticReport>,
     legacy_html: u32,
+    legacy_markdown: u32,
+    legacy_document_version: u32,
+    query_definitions: u32,
 }
 
 /// Outcome of materializing one Add/Replace action.
@@ -1359,7 +1470,7 @@ fn build_upsert(obs: &FileObservation, bytes: &[u8], source: DecodedSource) -> D
             };
             (
                 doc.body.text,
-                doc.metadata.body.media_type().to_string(),
+                doc.metadata.transport_media_type(),
                 Some(pdc),
             )
         }

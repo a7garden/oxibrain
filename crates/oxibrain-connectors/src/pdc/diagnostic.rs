@@ -1,8 +1,9 @@
-//! PDC diagnostics (`pdc-document/1` §13).
+//! PDC diagnostics (`pdc-document/1` §13, `pdc-document/2` §13).
 //!
-//! Codes mirror the contract's diagnostic vocabulary exactly (`as_str()` is the
-//! contract spelling). `LegacyHtml` is a visible classification rather than an
-//! error, and `UnresolvedLink` is an oxibrain-side informational report — the
+//! Codes mirror the contracts' diagnostic vocabulary exactly (`as_str()` is
+//! the contract spelling). `LegacyHtml`, `LegacyMarkdown`, and
+//! `LegacyDocumentVersion` are visible classifications rather than errors,
+//! and `UnresolvedLink` is an oxibrain-side informational report — the
 //! contract requires diagnostics to be distinguishable but does not assign it
 //! a code. Indexing one bad document must never hide unrelated valid ones, so
 //! diagnostics travel alongside results instead of aborting the pass.
@@ -23,6 +24,17 @@ pub enum PdcDiagnosticCode {
     AssetDigestMismatch,
     UnsafeContent,
     LegacyHtml,
+    /// `pdc-document/2` §13: a visible plain-Markdown legacy item (a `.md`
+    /// file without valid PDC frontmatter). Not an error, never a rewrite
+    /// authorization.
+    LegacyMarkdown,
+    /// `pdc-document/2` §13: a readable `pdc-document/1` document. Fully
+    /// indexed under the frozen v1 rules; never auto-converted.
+    LegacyDocumentVersion,
+    /// `pdc-query/1` §5: a malformed query definition (invalid YAML,
+    /// duplicate keys, forbidden YAML features, wrong root type). The file
+    /// remains visible and untouched.
+    InvalidQuery,
     /// oxibrain informational report, not a contract code: a `pdc://document/<uuid>`
     /// link whose target UUID is absent from the same root.
     UnresolvedLink,
@@ -46,6 +58,9 @@ impl PdcDiagnosticCode {
             Self::AssetDigestMismatch => "asset_digest_mismatch",
             Self::UnsafeContent => "unsafe_content",
             Self::LegacyHtml => "legacy_html",
+            Self::LegacyMarkdown => "legacy_markdown",
+            Self::LegacyDocumentVersion => "legacy_document_version",
+            Self::InvalidQuery => "invalid_query",
             Self::UnresolvedLink => "unresolved_link",
         }
     }

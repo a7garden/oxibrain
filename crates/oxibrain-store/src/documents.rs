@@ -75,10 +75,12 @@ pub struct RootApply {
 pub struct DocumentUpsert {
     pub locator: String,
     pub revision: String,
-    /// `"text/markdown"` | `"text/html"` | `"text/plain"`, or for canonical
-    /// PDC documents one of the contract media types
+    /// `"text/markdown"` | `"text/html"` | `"text/plain"`, for canonical PDC
+    /// documents one of the contract media types
     /// `"application/vnd.pdc.document+djot;version=1"` |
-    /// `"application/vnd.pdc.document+html;version=1"`.
+    /// `"application/vnd.pdc.document+html;version=1|2"` |
+    /// `"application/vnd.pdc.document+markdown;version=2"`, or the query
+    /// definition `"application/vnd.pdc.query+yaml;version=1"`.
     pub media_type: String,
     /// Raw file bytes (pre-decode).
     pub bytes: u64,
@@ -89,12 +91,12 @@ pub struct DocumentUpsert {
     /// Final chunk set for this document.
     pub chunks: Vec<ChunkUpsert>,
     /// PDC projection payload when the source decoded as a canonical PDC
-    /// document (pdc-adoption-v1); `None` for every legacy decoder.
+    /// document (pdc-adoption-v2); `None` for every legacy decoder.
     pub pdc: Option<PdcProjectionUpsert>,
 }
 
 /// PDC projection payload for one canonical PDC document
-/// (doc/spec/pdc-adoption-v1.md).
+/// (doc/spec/pdc-adoption-v2.md).
 ///
 /// `uuid` is the canonical envelope UUID and `body_profile` is
 /// `'pdc-djot/1'` or `'pdc-html/1'`. `meta` is the decoded envelope
@@ -284,7 +286,7 @@ impl DocumentCache {
         }
         if current < 3 {
             // v3: PDC projection columns + the per-root unique UUID index
-            // (pdc-adoption-v1). The columns are nullable, so v2 rows
+            // (pdc-adoption-v2). The columns are nullable, so v2 rows
             // survive with NULL and legacy decoders keep writing NULL.
             conn.execute_batch(V3_SCHEMA_SQL).map_err(sql_err)?;
             conn.pragma_update(None, "user_version", DOCUMENTS_SCHEMA_VERSION)
@@ -399,7 +401,7 @@ impl DocumentCache {
 
     /// Resolve a canonical PDC UUID within one root to its cached
     /// `(document_id, locator)`. Read-only; walks the partial unique
-    /// index `idx_documents_pdc_uuid` (v3, pdc-adoption-v1). Returns
+    /// index `idx_documents_pdc_uuid` (v3, pdc-adoption-v2). Returns
     /// `None` when the root has no document carrying that UUID — the
     /// normal case for legacy decoders, which never populate the column.
     pub fn resolve_pdc(
@@ -621,7 +623,7 @@ impl DocumentCache {
                 .sqrt();
             scored.push((chunk_id, dist));
         }
-        // Trash semantics (pdc-adoption-v1): canonical documents whose
+        // Trash semantics (pdc-adoption-v2): canonical documents whose
         // envelope says deleted:true stay indexed but out of default
         // retrieval, on the dense channel exactly like the lexical one.
         let mut trashed = self
@@ -878,7 +880,7 @@ const V1_SCHEMA_SQL: &str = include_str!("documents_v1.sql");
 /// plain int8 doc_vectors.
 const V2_SCHEMA_SQL: &str = include_str!("documents_v2.sql");
 
-/// v3 schema migration (pdc-adoption-v1): canonical PDC identity columns
+/// v3 schema migration (pdc-adoption-v2): canonical PDC identity columns
 /// on `documents` + a partial unique index making a UUID unique within
 /// one root.
 const V3_SCHEMA_SQL: &str = include_str!("documents_v3.sql");

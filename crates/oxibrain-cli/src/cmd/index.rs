@@ -44,6 +44,21 @@ pub async fn run(dir: &Path, documents: bool, embed: bool) -> anyhow::Result<()>
     if freshness.legacy_html > 0 {
         println!("legacy html documents: {}", freshness.legacy_html);
     }
+    if freshness.legacy_markdown > 0 {
+        println!("legacy markdown documents: {}", freshness.legacy_markdown);
+    }
+    if freshness.legacy_document_version > 0 {
+        println!(
+            "legacy document-version (pdc-document/1) documents: {}",
+            freshness.legacy_document_version
+        );
+    }
+    if freshness.query_definitions > 0 {
+        println!(
+            "pdc-query/1 query definitions (preserved, never executed): {}",
+            freshness.query_definitions
+        );
+    }
     if !freshness.diagnostics.is_empty() {
         println!("pdc diagnostics: {}", freshness.diagnostics.len());
         for line in format_diagnostic_lines(&freshness.diagnostics, 50) {

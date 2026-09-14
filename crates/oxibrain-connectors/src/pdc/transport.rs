@@ -11,7 +11,7 @@
 //!   HTML, not malformed PDC.
 
 use super::diagnostic::{PdcDiagnostic, PdcDiagnosticCode};
-use super::{HtmlClassification, PDC_MAX_DOCUMENT_BYTES};
+use super::{HtmlClassification, MarkdownClassification, PDC_MAX_DOCUMENT_BYTES};
 
 /// A document split into its envelope source and body. `envelope_src` is the
 /// text between the two transport markers with CRLF normalized to LF (the
@@ -135,6 +135,79 @@ pub fn split_djot(bytes: &[u8]) -> Result<TransportSplit, PdcDiagnostic> {
             .join("\n"),
         body: s[body_start..].to_string(),
     })
+}
+
+/// Split the Markdown transport (`pdc-markdown/1`, PDC 2 §4.2): the first
+/// line is exactly `---` at byte 0, a later line exactly `---` closes the
+/// envelope, the remainder is the Markdown body. A missing closer is
+/// `invalid_transport` ("missing or unclosed envelope"). CRLF is normalized
+/// in the envelope slice only.
+pub fn split_markdown(bytes: &[u8]) -> Result<TransportSplit, PdcDiagnostic> {
+    let s = as_utf8(bytes)?;
+    let lines = scan_lines(s);
+    if lines.first().is_none_or(|l| l.text != "---") {
+        return Err(transport_at(
+            "first line must be exactly `---` (the Markdown transport is a fenced frontmatter block)",
+            1,
+        ));
+    }
+    let Some(close) = lines
+        .iter()
+        .skip(1)
+        .position(|l| l.text == "---")
+        .map(|i| i + 1)
+    else {
+        return Err(transport_error(
+            "unclosed Markdown frontmatter: no closing `---` line",
+        ));
+    };
+    let body_start = lines.get(close + 1).map_or(s.len(), |l| l.start);
+    Ok(TransportSplit {
+        envelope_src: lines[1..close]
+            .iter()
+            .map(|l| l.text)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        body: s[body_start..].to_string(),
+    })
+}
+
+/// Cheap classification of raw `.md` bytes (PDC 2 §3.2/§4.2): a PDC Markdown
+/// transport attempt, or visible plain Markdown. A file starts a PDC attempt
+/// when (after an optional BOM, which the parse then rejects per §4.1) its
+/// first line is exactly `---` and a closer is present. The attempt is only
+/// routed to the PDC parser when the envelope declares a `pdc-document/*`
+/// `format`; any other frontmatter is ordinary user YAML and stays plain
+/// Markdown. An opener without a closer is still an attempt (the transport
+/// requires one) so the diagnostic surfaces instead of silently indexing.
+pub fn sniff_markdown(bytes: &[u8]) -> MarkdownClassification {
+    let candidate = bytes.strip_prefix(&UTF8_BOM).unwrap_or(bytes);
+    let Ok(s) = std::str::from_utf8(candidate) else {
+        return MarkdownClassification::Legacy;
+    };
+    let lines = scan_lines(s);
+    if lines.first().is_none_or(|l| l.text != "---") {
+        return MarkdownClassification::Legacy;
+    }
+    let Some(close) = lines
+        .iter()
+        .skip(1)
+        .position(|l| l.text == "---")
+        .map(|i| i + 1)
+    else {
+        // The transport shape demands a closer; its absence is a malformed
+        // PDC attempt, not plain Markdown.
+        return MarkdownClassification::Pdc;
+    };
+    let envelope = lines[1..close]
+        .iter()
+        .map(|l| l.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    match super::envelope::observed_format(&envelope) {
+        Some(v) if v.starts_with("pdc-document/") => MarkdownClassification::Pdc,
+        _ => MarkdownClassification::Legacy,
+    }
 }
 
 /// Cheap classification of raw `.html` bytes: canonical PDC HTML transport

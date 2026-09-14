@@ -837,3 +837,436 @@ fn legacy_html_is_classified_before_any_parse() {
         HtmlClassification::Pdc
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// pdc-document-conformance/2 runner (vendored at tests/fixtures/pdc2-corpus,
+// pin: commit 0ee51ea, tag v2.0.0-draft.2, revision 2 — see its PIN.md).
+//
+// Same discipline as the v1 runner above: every `file` case runs against the
+// pure parse/classify API in an isolated vault, valid fixtures get content
+// assertions, and the source bytes are asserted byte-identical afterwards.
+// Writer-only operations run their Reader equivalents (reads never write).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use oxibrain_connectors::pdc::{
+    MarkdownClassification, PDC_QUERY_CONTRACT, PDC2_CORPUS_FORMAT, PDC2_CORPUS_REVISION,
+    parse_markdown_document, sniff_markdown, validate_base_query,
+};
+
+const CORPUS2_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pdc2-corpus");
+
+fn corpus2_json() -> Value {
+    serde_json::from_str(&fs::read_to_string(Path::new(CORPUS2_ROOT).join("corpus.json")).unwrap())
+        .unwrap()
+}
+
+fn fixture2_bytes(corpus_rel: &str) -> Vec<u8> {
+    fs::read(Path::new(CORPUS2_ROOT).join(corpus_rel)).unwrap()
+}
+
+fn install_fixture2(vault: &Path, corpus_rel: &str) -> PathBuf {
+    let dest = vault.join(corpus_rel);
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    fs::write(&dest, fixture2_bytes(corpus_rel)).unwrap();
+    dest
+}
+
+/// Parse (or query-validate) with the profile implied by the extension.
+fn parse_document2(path: &Path, bytes: &[u8]) -> Result<PdcDocument, PdcDiagnostic> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("md") => parse_markdown_document(stem, bytes),
+        Some("html") => parse_html_document(stem, bytes),
+        Some("djot") => parse_djot_document(stem, bytes),
+        other => panic!("no v2 parse entry point for extension {other:?}"),
+    }
+}
+
+#[test]
+fn corpus2_revision_pin_matches_implementation() {
+    let corpus = corpus2_json();
+    assert_eq!(corpus["format"].as_str(), Some(PDC2_CORPUS_FORMAT));
+    assert_eq!(
+        corpus["revision"].as_u64(),
+        Some(PDC2_CORPUS_REVISION as u64),
+        "vendored corpus moved — refresh per tests/fixtures/pdc2-corpus/PIN.md"
+    );
+    assert_eq!(corpus["queryContract"].as_str(), Some(PDC_QUERY_CONTRACT));
+    assert_eq!(PDC2_CORPUS_REVISION, 2);
+}
+
+#[test]
+fn corpus2_conformance() {
+    let cases = corpus2_json()["cases"].as_array().expect("cases").clone();
+    assert!(!cases.is_empty(), "vendored v2 corpus is empty");
+    let mut failures = Vec::new();
+    for case in &cases {
+        let id = case["id"].as_str().unwrap_or("(no id)").to_string();
+        if let Err(msg) = run_case2(case) {
+            failures.push(format!("{id}: {msg}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} v2 corpus cases failed:\n  {}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n  ")
+    );
+}
+
+fn run_case2(case: &Value) -> Result<(), String> {
+    match case["kind"].as_str().unwrap_or_default() {
+        "file" => run_file_case2(case),
+        "operation" => run_operation_case2(case),
+        "set" => run_set_case2(case),
+        other => Err(format!("unknown v2 case kind {other:?}")),
+    }
+}
+
+fn run_file_case2(case: &Value) -> Result<(), String> {
+    let rel = case["path"].as_str().expect("file case has path");
+    let expect_kind = case["expect"].as_str().expect("case has expect");
+    let vault = tempdir().map_err(|e| format!("tempdir: {e}"))?;
+    let dest = install_fixture2(vault.path(), rel);
+    let source = fs::read(&dest).map_err(|e| format!("read vendored copy: {e}"))?;
+
+    // `.base` fixtures are query definitions, not documents: the Reader
+    // contract is safe-YAML validation + preservation, never execution.
+    if rel.ends_with(".base") {
+        let outcome = validate_base_query(&source);
+        match expect_kind {
+            "valid" | "valid_unexecuted" => {
+                outcome.map_err(|d| format!("{rel}: {d}"))?;
+            }
+            "invalid_query" => {
+                expect(outcome.is_err(), &format!("{rel} must be an invalid query"))?;
+            }
+            other => return Err(format!("unexpected expect {other:?} for .base fixture")),
+        }
+        return assert_bytes_unchanged(&dest, &source);
+    }
+
+    match expect_kind {
+        "legacy_html" => {
+            expect(
+                classify_html_transport(&source) == HtmlClassification::Legacy,
+                &format!("{rel} must classify as legacy HTML"),
+            )?;
+        }
+        "legacy_markdown" => {
+            expect(
+                sniff_markdown(&source) == MarkdownClassification::Legacy,
+                &format!("{rel} must classify as plain Markdown"),
+            )?;
+        }
+        "invalid_query" => {
+            expect(
+                validate_base_query(&source).is_err(),
+                &format!("{rel} must be an invalid query definition"),
+            )?;
+        }
+        "valid_unexecuted" => {
+            // Unknown constructs are preserved and never executed
+            // (pdc-query/1 §4.6): a successful safe-YAML validation is the
+            // whole Reader contract here.
+            validate_base_query(&source).map_err(|d| format!("{rel}: {d}"))?;
+        }
+        _ => {
+            let parsed = parse_document2(&dest, &source);
+            match expect_kind {
+                "valid" | "legacy_valid" => {
+                    let doc = parsed.map_err(|d| format!("expected a valid document, got {d}"))?;
+                    assert_v2_valid_document(
+                        case["id"].as_str().unwrap_or_default(),
+                        &doc,
+                        expect_kind == "legacy_valid",
+                    )?;
+                }
+                "unsafe_content" => {
+                    let doc =
+                        parsed.map_err(|d| format!("unsafe content still parses, got {d}"))?;
+                    expect(
+                        !doc.body.unsafe_constructs.is_empty(),
+                        "expected non-empty body.unsafe_constructs",
+                    )?;
+                }
+                _expected_code => {
+                    let diag = parsed.expect_err("expected a diagnostic");
+                    expect_code(&diag, case)?;
+                }
+            }
+        }
+    }
+
+    assert_bytes_unchanged(&dest, &source)
+}
+
+/// Content assertions for the v2 valid fixtures. A new corpus pin that adds
+/// another `valid` fixture must extend this match — parsing without content
+/// assertions is not a conformance test.
+fn assert_v2_valid_document(case_id: &str, doc: &PdcDocument, legacy: bool) -> Result<(), String> {
+    expect(
+        !legacy || doc.metadata.contract_version == 1,
+        "legacy_valid fixtures must carry contract_version 1",
+    )?;
+    match case_id {
+        "v2-md-minimal" => {
+            expect(doc.metadata.contract_version == 2, "v2 envelope version")?;
+            expect(doc.metadata.title == "Minimal v2 document", "title")?;
+            expect(doc.display_title == "Minimal v2 document", "display title")?;
+            expect(
+                doc.body.text.contains("canonical Markdown under PDC 2."),
+                "body text indexed",
+            )?;
+            expect(!doc.body.text.contains("format:"), "envelope never leaks")?;
+        }
+        "v2-md-semantics" => {
+            let m = &doc.metadata;
+            expect(m.contract_version == 2, "v2 envelope version")?;
+            expect(m.tags == ["standard", "interop"], "tags")?;
+            expect(m.aliases == ["Fixture"], "aliases")?;
+            expect(m.cssclasses == ["wide-table"], "cssclasses")?;
+            expect(m.favorite, "favorite")?;
+            expect(m.profile.as_deref() == Some("note"), "profile")?;
+            expect(m.lang.as_deref() == Some("en"), "lang")?;
+            // Caret block IDs (heading + task line).
+            expect(
+                doc.body
+                    .block_ids
+                    .contains(&"b-018f47c6-7dbe-7a14-9f67-6f89a5e3cc32".into()),
+                "heading block target",
+            )?;
+            expect(
+                doc.body
+                    .block_ids
+                    .contains(&"b-018f47c6-c718-728c-9d91-b2bc700814bb".into()),
+                "task block target",
+            )?;
+            // One canonical pdc:// link to the v1 minimal fixture.
+            expect(
+                doc.body
+                    .document_links
+                    .iter()
+                    .any(|l| l.uuid.ends_with("9db8-0e5f9bcb17db") && !l.embed),
+                "pdc:// link",
+            )?;
+            // Wiki links/embeds and the relative image, projected as written.
+            expect(
+                doc.body
+                    .wiki_links
+                    .iter()
+                    .any(|w| w.target == "minimal" && w.embed),
+                "wiki embed",
+            )?;
+            expect(
+                doc.body
+                    .wiki_links
+                    .iter()
+                    .any(|w| w.target == "assets/diagram.png" && w.embed),
+                "relative image",
+            )?;
+            expect(doc.body.wiki_links.len() >= 3, "wiki + relative links")?;
+            // GFM tasks: open+completed; `- [/]` is a preserved extension.
+            expect(doc.body.tasks.len() == 2, "two standard tasks")?;
+            expect(!doc.body.tasks[0].completed, "open task")?;
+            // Benign raw HTML stays inert source; no unsafe flags.
+            expect(
+                doc.body.unsafe_constructs.is_empty(),
+                "benign html not flagged",
+            )?;
+            expect(doc.body.text.contains("<b>bold</b>"), "raw html in source")?;
+            expect(
+                doc.body.text.contains("==Highlighted text=="),
+                "highlight kept",
+            )?;
+            expect(doc.body.text.contains("%%source comment%%"), "comment kept")?;
+            // The fenced `base` query validated and stays visible content.
+            expect(doc.body.query_blocks == 1, "one valid base fence")?;
+            expect(doc.body.query_errors.is_empty(), "no query errors")?;
+            expect(
+                doc.body.text.contains("```base"),
+                "base fence stays in text",
+            )?;
+        }
+        "v2-html-minimal" => {
+            expect(doc.metadata.contract_version == 2, "v2 envelope version")?;
+            expect(doc.metadata.title == "Minimal HTML v2", "title")?;
+            expect(
+                doc.metadata.transport_media_type()
+                    == "application/vnd.pdc.document+html;version=2",
+                "v2 html media type",
+            )?;
+        }
+        "v2-html-semantics" => {
+            expect(doc.metadata.contract_version == 2, "v2 envelope version")?;
+            expect(doc.metadata.tags == ["portable", "html"], "tags")?;
+            expect(
+                doc.body
+                    .block_ids
+                    .contains(&"b-018f47c6-7dbe-7a14-9f67-6f89a5e3c170".into()),
+                "h1 id target",
+            )?;
+            expect(
+                doc.body
+                    .asset_refs
+                    .iter()
+                    .any(|d| d.starts_with("0123456789abcdef")),
+                "managed asset ref",
+            )?;
+            expect(doc.body.tasks.len() == 1, "one open task")?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn run_operation_case2(case: &Value) -> Result<(), String> {
+    let op = case["operation"].as_str().unwrap_or_default();
+    let input = case["input"].as_str().expect("operation has input");
+    let vault = tempdir().map_err(|e| format!("tempdir: {e}"))?;
+    let dest = install_fixture2(vault.path(), input);
+    let source = fs::read(&dest).map_err(|e| format!("read vendored copy: {e}"))?;
+
+    match op {
+        // Reader equivalents of the Writer operations: oxibrain never writes,
+        // so the no-op/patch/conflict cases assert parse + byte preservation.
+        "no-op-round-trip" | "metadata-patch" | "external-change-before-save" => {
+            let parsed = parse_document2(&dest, &source);
+            parsed.map_err(|d| format!("{op}: expected a readable document, got {d}"))?;
+            assert_bytes_unchanged(&dest, &source)
+        }
+        "prefix-source-bytes" => {
+            let prefix = decode_hex(case["prefixHex"].as_str().expect("prefixHex"));
+            let mut bytes = prefix;
+            bytes.extend_from_slice(&source);
+            // Synthesize under a separate directory so the pristine vendored
+            // copy stays byte-identical for the preservation assert.
+            synthesize2(vault.path(), &format!("synth/{input}"), &bytes);
+            assert_v2_diagnostic(vault.path(), &format!("synth/{input}"), case)?;
+            assert_bytes_unchanged(&dest, &source)
+        }
+        "pad-body-to-total-bytes" => {
+            let total = case["totalBytes"].as_u64().expect("totalBytes") as usize;
+            let mut bytes = source.clone();
+            bytes.resize(total, b'\n');
+            synthesize2(vault.path(), &format!("synth/{input}"), &bytes);
+            assert_v2_diagnostic(vault.path(), &format!("synth/{input}"), case)?;
+            assert_bytes_unchanged(&dest, &source)
+        }
+        "replace-body-with-nested-block-quotes" => {
+            // v1 complexity cap: nested block quotes replace the body.
+            let depth = case["containerDepth"].as_u64().expect("containerDepth") as usize;
+            let input_rel = format!("synth/{input}");
+            let text = djot_with_body(
+                &String::from_utf8(source.clone()).expect("djot fixture is UTF-8"),
+                &nested_quotes_body(depth),
+            );
+            synthesize2(vault.path(), &input_rel, text.as_bytes());
+            assert_v2_diagnostic(vault.path(), &input_rel, case)?;
+            assert_bytes_unchanged(&dest, &source)
+        }
+        "replace-envelope-with-yaml-mapping-depth" => {
+            let depth = case["depth"].as_u64().expect("depth") as usize;
+            let mut envelope = String::from(
+                "format: pdc-document/2\nbody: pdc-markdown/1\n\
+                 id: 018f47c6-4a77-7c52-9db8-0e5f9bcb17db\n\
+                 created: 2026-09-14T12:34:56.789Z\n\
+                 updated: 2026-09-14T12:34:56.789Z\ntitle: Deep\n",
+            );
+            for i in 0..depth {
+                envelope.push_str(&" ".repeat(i));
+                envelope.push_str(&format!("k{i}:\n"));
+            }
+            envelope.push_str(&" ".repeat(depth));
+            envelope.push_str("leaf: 1\n");
+            let md = format!("---\n{envelope}---\n# Deep body\n");
+            synthesize2(vault.path(), &format!("synth/{input}"), md.as_bytes());
+            assert_v2_diagnostic(vault.path(), &format!("synth/{input}"), case)?;
+            assert_bytes_unchanged(&dest, &source)
+        }
+        other => Err(format!("unknown v2 operation {other:?}")),
+    }
+}
+
+/// Parse the synthesized copy and require the case's expected diagnostic.
+fn assert_v2_diagnostic(vault: &Path, rel: &str, case: &Value) -> Result<(), String> {
+    let bytes = fs::read(vault.join(rel)).map_err(|e| format!("read synthesized: {e}"))?;
+    let parsed = parse_document2(Path::new(rel), &bytes);
+    match case["expect"].as_str().unwrap_or_default() {
+        "unsafe_content" => {
+            let doc = parsed.map_err(|d| format!("unsafe content still parses, got {d}"))?;
+            expect(
+                !doc.body.unsafe_constructs.is_empty(),
+                "expected unsafe_content",
+            )?;
+            Ok(())
+        }
+        code => {
+            let diag = parsed.expect_err("expected a diagnostic");
+            expect(
+                diag.code.as_str() == code,
+                &format!("expected diagnostic {code:?}, got {diag}"),
+            )
+        }
+    }
+}
+
+fn synthesize2(vault: &Path, rel: &str, bytes: &[u8]) -> PathBuf {
+    let dest = vault.join(rel);
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    fs::write(&dest, bytes).unwrap();
+    dest
+}
+
+/// Duplicate document IDs are a vault-level conflict: every member parses;
+/// choosing the survivor is the facade's job and is asserted there.
+fn run_set_case2(case: &Value) -> Result<(), String> {
+    let paths = case["paths"].as_array().expect("set paths");
+    let vault = tempdir().map_err(|e| format!("tempdir: {e}"))?;
+    for rel in paths {
+        let rel = rel.as_str().expect("path string");
+        let dest = install_fixture2(vault.path(), rel);
+        let source = fs::read(&dest).map_err(|e| format!("read vendored copy: {e}"))?;
+        parse_document2(&dest, &source).map_err(|d| format!("{rel}: {d}"))?;
+        assert_bytes_unchanged(&dest, &source)?;
+    }
+    Ok(())
+}
+
+/// Walk every vendored v2 fixture, parse it (any outcome), and assert the
+/// source bytes on disk are identical afterwards.
+#[test]
+fn parsing_never_mutates_any_vendored_v2_fixture() {
+    let root = Path::new(CORPUS2_ROOT).join("fixtures");
+    let mut checked = 0usize;
+    for entry in walkdir::WalkDir::new(&root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let before = fs::read(path).unwrap();
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("base") => {
+                let _ = validate_base_query(&before);
+            }
+            Some("md") | Some("html") | Some("djot") => {
+                let _ = parse_document2(path, &before);
+            }
+            _ => continue,
+        }
+        let after = fs::read(path).unwrap();
+        assert_eq!(before, after, "source mutated: {}", path.display());
+        checked += 1;
+    }
+    assert!(
+        checked > 40,
+        "expected the full vendored fixture set, got {checked}"
+    );
+}

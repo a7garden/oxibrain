@@ -1,4 +1,4 @@
--- documents.db v3: PDC projection columns (doc/spec/pdc-adoption-v1.md).
+-- documents.db v3: PDC projection columns (doc/spec/pdc-adoption-v2.md).
 -- A canonical PDC document records its envelope identity alongside the
 -- existing projection row: the canonical UUID, the body profile
 -- ('pdc-djot/1' | 'pdc-html/1'), the decoded envelope metadata as

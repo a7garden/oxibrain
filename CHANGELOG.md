@@ -12,6 +12,20 @@ squash-merged.
   install targets, what the `SKILL.md`/`CONTEXT.md` pair teaches, and why the
   pair is derived from the op registry instead of shipped as a static file.
 
+## [0.15.0] — 2026-09-14
+
+### Changed
+
+- **The PDC connector now reads Markdown-first PDC 2.** It discovers and
+  indexes `pdc-markdown/1` with safe YAML properties and Obsidian-compatible
+  links, embeds, tasks, and block IDs while remaining strictly read-only.
+- Authored `pdc-html/1` stays first-class. PDC 1 Djot and HTML documents remain
+  visible legacy inputs and are never rewritten or automatically converted.
+- `.base` files and fenced `base` blocks follow the read-only `pdc-query/1`
+  contract; unsupported constructs remain visible and unexecuted.
+- The connector pins Portable Document Contract commit `0ee51ea` and
+  `pdc-document-conformance/2` revision 2.
+
 ## [0.14.1] — 2026-09-13
 
 ### Fixed
