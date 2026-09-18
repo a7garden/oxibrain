@@ -141,7 +141,7 @@ impl Brain {
             .ingest_note_impl(&space_id, &path, content, occurred_at)
             .await?;
 
-        let config = crate::extraction::default_extractor_config();
+        let config = self.extractor_config().clone();
         match self.extract_one(&space_id, &episode_id, &config).await {
             Ok(summary) => Ok(CaptureOutcome::Captured {
                 episode_id,

@@ -74,6 +74,12 @@ pub struct Brain {
     tokenizer: Arc<dyn TokenizerPort>,
     /// Optional dense embedder for QueryMode::Dense / hybrid dense channel.
     embedder: Option<Arc<dyn EmbeddingPort>>,
+    /// Extractor identity (§9.5) used by inline capture and backlog drains.
+    /// Defaults to the facade default; callers that resolve a concrete
+    /// provider (model id, mechanism, weights digest) bind it here so a
+    /// weight change invalidates the extraction cache instead of silently
+    /// reusing extractions from the old weights.
+    extractor_config: oxibrain_core::extraction::ExtractorConfig,
 }
 
 /// Outcome of a capture-family call (`remember`): either the episode was
@@ -117,6 +123,7 @@ impl Brain {
             llm: None,
             tokenizer: Arc::new(CharTokenizer),
             embedder: None,
+            extractor_config: crate::extraction::default_extractor_config(),
         }
     }
 
@@ -180,6 +187,24 @@ impl Brain {
     pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingPort>) -> Self {
         self.embedder = Some(embedder);
         self
+    }
+
+    /// Bind the extractor identity used by inline capture (`remember`) and
+    /// backlog drains (`extract_uncached`). Fold the resolved provider's
+    /// model id, mechanism, and weights digest in (§9.5): the ExtractorId
+    /// keys the extraction cache, so a model or weight change must change
+    /// it or stale extractions from the old weights keep hitting.
+    pub fn with_extractor_config(
+        mut self,
+        config: oxibrain_core::extraction::ExtractorConfig,
+    ) -> Self {
+        self.extractor_config = config;
+        self
+    }
+
+    /// The bound extractor identity.
+    pub(crate) fn extractor_config(&self) -> &oxibrain_core::extraction::ExtractorConfig {
+        &self.extractor_config
     }
 
     /// Returns the configured embedder, or None.

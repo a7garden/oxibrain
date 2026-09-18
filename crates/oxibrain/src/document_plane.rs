@@ -506,7 +506,7 @@ impl Brain {
                                          WHERE f.episode_id = e.id
                                            AND f.extractor_id = ?1
                                            AND f.created_at >= ?2)";
-        let extractor_id = crate::extraction::default_extractor_config().id();
+        let extractor_id = self.extractor_config().id();
         let cutoff = Timestamp::from_millis(
             self.clock.now().millis()
                 - crate::extraction::FAILURE_RETRY_COOLDOWN.as_millis() as i64,

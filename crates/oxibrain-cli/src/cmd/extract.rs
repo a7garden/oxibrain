@@ -34,7 +34,16 @@ pub async fn run(dir: &Path, limit: Option<usize>) -> anyhow::Result<()> {
             .await?
         }
         None => Brain::with_llm(BrainConfig::at(dir), clock.clone(), provider.port.clone()).await?,
-    };
+    }
+    // §9.5: the drain must key the extraction cache by the resolved
+    // provider's identity (model id + mechanism + weights digest), or a
+    // model swap silently reuses extractions produced by the old weights.
+    .with_extractor_config(llm::config(
+        provider.model_id.clone(),
+        provider.mechanism,
+        provider.model_digest.clone(),
+        provider.profile_id(),
+    ));
     let before = brain.pending_extraction_stats().await?;
     if before.count == 0 {
         println!("pending extraction: none");

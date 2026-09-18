@@ -243,7 +243,7 @@ impl Brain {
     /// inside a transaction (§7.2).
     pub async fn extract_uncached(&self, limit: usize) -> Result<usize, BrainError> {
         let _llm = self.require_llm()?;
-        let config = default_extractor_config();
+        let config = self.extractor_config().clone();
         let extractor_id = config.id();
         let failure_cutoff = oxibrain_ports::Timestamp::from_millis(
             self.clock.now().millis() - FAILURE_RETRY_COOLDOWN.as_millis() as i64,
