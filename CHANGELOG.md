@@ -4,13 +4,43 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
-## [Unreleased]
+## [0.16.0] — 2026-09-19
+
+### Added
+
+- **MLX weights are served through loopback OpenAI-compatible servers**
+  (ADR-016). `OXIBRAIN_LLM_PROVIDER=loopback` (aliases `lmstudio`, `mlx`)
+  resolves `OXIBRAIN_LLM_MODEL` (required, never guessed),
+  `OXIBRAIN_LLM_BASE_URL` (default `http://127.0.0.1:1234/v1`, the LM
+  Studio server port), and optional `OXIBRAIN_LLM_API_KEY`. Structured
+  output rides the server's strict `json_schema` response format
+  (mechanism `JsonSchema`, schema-and-repair in the pipeline); the
+  validator and trust invariants are unchanged, and the C2 local-GGUF
+  default stays the zero-setup path.
+- `OpenAiLlm::with_base_url` — OpenAI-compatible chat completions against
+  an arbitrary base URL with optional bearer auth (loopback MLX servers,
+  llama.cpp `server`).
+
+### Fixed
+
+- **The extractor identity follows the resolved provider** (§9.5).
+  `extract_uncached`, inline capture (`remember`), and pending-extraction
+  stats previously keyed the extraction cache with a static facade
+  identity ("oxibrain-default", no weights digest), so swapping
+  extraction weights in the model manifest silently reused extractions
+  produced by the old weights. `Brain` now binds a resolved
+  `ExtractorConfig` (model id, mechanism, weights digest, profile id);
+  `admin extract --pending` feeds it the resolved provider, and pending
+  stats plus the failure-retry cooldown follow the same identity.
 
 ### Docs
 
 - The README documents the generated agent skill (`admin skill install`):
   install targets, what the `SKILL.md`/`CONTEXT.md` pair teaches, and why the
   pair is derived from the op registry instead of shipped as a static file.
+- ARCHITECTURE v2.17: §8 documents the loopback MLX tier and drops the
+  never-implemented "Ollama" adapter entry; ADR-016 records why MLX is
+  served through loopback servers instead of a native engine.
 
 ## [0.15.0] — 2026-09-14
 
