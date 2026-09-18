@@ -4,13 +4,25 @@ use reqwest::Client;
 use serde_json::{Value, json};
 
 pub struct OpenAiLlm {
-    api_key: String,
+    base_url: String,
+    api_key: Option<String>,
     model: String,
     client: Client,
 }
 impl OpenAiLlm {
     pub fn new(api_key: String, model: String) -> Self {
+        Self::with_base_url("https://api.openai.com/v1".into(), Some(api_key), model)
+    }
+
+    /// OpenAI-compatible endpoint on an arbitrary base — a loopback MLX
+    /// server (LM Studio's MLX engine, `mlx_lm.server`) or a llama.cpp
+    /// `server`. `base_url` is normalized (trailing slash stripped) and
+    /// `{base_url}/chat/completions` is posted to. `api_key` is `None` for
+    /// servers that need no auth; a bearer header is sent only when a key
+    /// is present.
+    pub fn with_base_url(base_url: String, api_key: Option<String>, model: String) -> Self {
         Self {
+            base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             model,
             client: Client::new(),
@@ -30,12 +42,16 @@ impl LlmPort for OpenAiLlm {
         if let Some(schema) = req.json_schema {
             body["response_format"] = json!({"type":"json_schema","json_schema":{"name":"extraction","schema":schema,"strict":true}});
         }
-        let response = self
+        let url = format!("{}/chat/completions", self.base_url);
+        let mut request = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("authorization", format!("Bearer {}", self.api_key))
+            .post(url)
             .header("content-type", "application/json")
-            .json(&body)
+            .json(&body);
+        if let Some(key) = &self.api_key {
+            request = request.header("authorization", format!("Bearer {key}"));
+        }
+        let response = request
             .send()
             .await
             .map_err(|e| provider(true, e.to_string()))?;

@@ -3,6 +3,10 @@
 //! Used by `extract` and `reextract`. Providers:
 //!   - `OXIBRAIN_LLM_PROVIDER=anthropic` (+ `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`)
 //!   - `OXIBRAIN_LLM_PROVIDER=openai`     (+ `OPENAI_API_KEY`, `OPENAI_MODEL`)
+//!   - `OXIBRAIN_LLM_PROVIDER=loopback`   (+ `OXIBRAIN_LLM_MODEL`, optional
+//!     `OXIBRAIN_LLM_BASE_URL` / `OXIBRAIN_LLM_API_KEY`) — a loopback
+//!     OpenAI-compatible server: the MLX path (LM Studio's MLX engine,
+//!     `mlx_lm.server`) or a llama.cpp `server`. Aliases: `lmstudio`, `mlx`.
 //!   - `OXIBRAIN_LLM_PROVIDER=local`      (GGUF from `oxibrain model pull`, §8.4)
 //!
 //! Resolution order for [`from_env_for_role`], the role-aware entry point
@@ -24,8 +28,9 @@
 //!
 //! `OXIBRAIN_MODEL` is a fallback for the HTTP model id. The mechanism
 //! (tool-call / json-schema / GBNF grammar) follows the provider — Anthropic
-//! uses forced tool calls, OpenAI native json_schema structured output, and
-//! the local path grammar-constrained decoding (DESIGN §7.4, §9.4).
+//! uses forced tool calls, OpenAI and loopback servers native json_schema
+//! structured output, and the local path grammar-constrained decoding
+//! (DESIGN §7.4, §9.4).
 
 use anyhow::Context as _;
 use oxibrain_core::extraction::ExtractMechanism;
@@ -43,6 +48,9 @@ use crate::cmd::foundation::{
 pub enum Provider {
     Anthropic,
     OpenAi,
+    /// Loopback OpenAI-compatible server (LM Studio's MLX engine,
+    /// `mlx_lm.server`, llama.cpp `server`). Local, no account, no key.
+    Loopback,
     Local,
 }
 
@@ -127,9 +135,13 @@ pub fn resolve_provider(
     match explicit {
         Some("anthropic") => Ok(Provider::Anthropic),
         Some("openai") => Ok(Provider::OpenAi),
+        // "lmstudio" / "mlx" are mnemonic aliases for the same loopback
+        // OpenAI-compatible surface; the base URL / model decide which
+        // server actually answers.
+        Some("loopback") | Some("lmstudio") | Some("mlx") => Ok(Provider::Loopback),
         Some("local") => Ok(Provider::Local),
         Some(other) => anyhow::bail!(
-            "unknown OXIBRAIN_LLM_PROVIDER={other} (expected: anthropic|openai|local)"
+            "unknown OXIBRAIN_LLM_PROVIDER={other} (expected: anthropic|openai|loopback|local)"
         ),
         // No explicit choice: prefer a configured HTTP provider, fall back to
         // the local model so the no-API-key promise holds.
@@ -180,6 +192,7 @@ pub async fn from_env_for_role(role: ProfileRole) -> anyhow::Result<ProviderLlm>
         match resolve_provider(Some(name), anthropic_key_present, openai_key_present)? {
             Provider::Anthropic => return anthropic_from_env(),
             Provider::OpenAi => return openai_from_env(),
+            Provider::Loopback => return loopback_from_env(),
             Provider::Local => return local_from_manifest().await,
         }
     }
@@ -348,6 +361,47 @@ fn openai_from_env() -> anyhow::Result<ProviderLlm> {
     })
 }
 
+/// Loopback OpenAI-compatible server — the MLX path (LM Studio's MLX
+/// engine by default; also `mlx_lm.server`, llama.cpp `server`). Local
+/// process on this machine, no account, no API key. Structured output
+/// rides the server's `response_format: json_schema` support (mechanism
+/// JsonSchema; schema-and-repair in the pipeline) — GBNF grammar
+/// constraints remain a llama.cpp-only capability (D28), and the
+/// post-extraction validator gates correctness either way.
+///
+/// Env:
+///   - `OXIBRAIN_LLM_BASE_URL` (default `http://127.0.0.1:1234/v1`, the
+///     LM Studio server default)
+///   - `OXIBRAIN_LLM_MODEL` (required — the server's model id; never
+///     guessed)
+///   - `OXIBRAIN_LLM_API_KEY` (optional bearer for servers behind auth)
+fn loopback_from_env() -> anyhow::Result<ProviderLlm> {
+    let base_url = std::env::var("OXIBRAIN_LLM_BASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:1234/v1".to_string());
+    let model = std::env::var("OXIBRAIN_LLM_MODEL").map_err(|_| {
+        anyhow::anyhow!(
+            "loopback provider needs OXIBRAIN_LLM_MODEL (the server-side model id); \
+             refusing to guess which model the server should load"
+        )
+    })?;
+    let api_key = std::env::var("OXIBRAIN_LLM_API_KEY").ok();
+    Ok(ProviderLlm {
+        port: Arc::new(oxibrain_llm_http::OpenAiLlm::with_base_url(
+            base_url,
+            api_key,
+            model.clone(),
+        )),
+        model_id: model.clone(),
+        mechanism: ExtractMechanism::JsonSchema,
+        model_digest: None,
+        tokenizer: None,
+        source: ResolutionSource::CompatEnv {
+            kind: ProviderKind::OpenAi,
+            model_id: model,
+        },
+    })
+}
+
 /// Pick the extract-role entry out of a manifest. Pure, for tests.
 fn extract_entry(
     entries: &[oxibrain::models::ModelEntry],
@@ -475,6 +529,62 @@ mod tests {
             resolve_provider(Some("anthropic"), false, false).unwrap(),
             Provider::Anthropic
         );
+    }
+
+    #[test]
+    fn loopback_aliases_resolve_to_loopback() {
+        for name in ["loopback", "lmstudio", "mlx"] {
+            assert_eq!(
+                resolve_provider(Some(name), false, false).unwrap(),
+                Provider::Loopback,
+                "alias {name} must resolve to the loopback provider"
+            );
+        }
+    }
+
+    #[test]
+    fn loopback_from_env_requires_a_model_id() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_base = std::env::var_os("OXIBRAIN_LLM_BASE_URL");
+        let saved_model = std::env::var_os("OXIBRAIN_LLM_MODEL");
+        // SAFETY: env vars are serialised via ENV_LOCK in this module.
+        unsafe {
+            std::env::remove_var("OXIBRAIN_LLM_BASE_URL");
+            std::env::remove_var("OXIBRAIN_LLM_MODEL");
+        }
+
+        // No model id: loud refusal — the server must be told which model
+        // to serve, never guessed.
+        assert!(loopback_from_env().is_err());
+
+        // SAFETY: see above.
+        unsafe {
+            std::env::set_var("OXIBRAIN_LLM_MODEL", "qwen/qwen3-30b-a3b-2507");
+        }
+        let provider = loopback_from_env().unwrap();
+        assert_eq!(provider.model_id, "qwen/qwen3-30b-a3b-2507");
+        assert_eq!(provider.mechanism, ExtractMechanism::JsonSchema);
+        assert!(provider.model_digest.is_none());
+        // Default base URL is the LM Studio server port.
+        match &provider.source {
+            ResolutionSource::CompatEnv { kind, model_id } => {
+                assert_eq!(*kind, ProviderKind::OpenAi);
+                assert_eq!(model_id, "qwen/qwen3-30b-a3b-2507");
+            }
+            other => panic!("expected CompatEnv source, got {other:?}"),
+        }
+
+        // SAFETY: see above.
+        unsafe {
+            match saved_base {
+                Some(v) => std::env::set_var("OXIBRAIN_LLM_BASE_URL", v),
+                None => std::env::remove_var("OXIBRAIN_LLM_BASE_URL"),
+            }
+            match saved_model {
+                Some(v) => std::env::set_var("OXIBRAIN_LLM_MODEL", v),
+                None => std::env::remove_var("OXIBRAIN_LLM_MODEL"),
+            }
+        }
     }
 
     #[test]
