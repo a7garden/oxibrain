@@ -1,0 +1,28 @@
+[package]
+name = "oxibrain-llm-mlx"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Native MLX inference adapter for oxibrain (Apple Silicon, in-process)"
+repository.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["llm", "mlx", "apple-silicon", "metal"]
+categories = ["api-bindings"]
+
+[dependencies]
+blake3.workspace = true
+parking_lot.workspace = true
+oxibrain-ports.workspace = true
+async-trait.workspace = true
+mlx-rs = { workspace = true, features = ["safetensors"] }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+half = "2"
+
+[dev-dependencies]
+ahash = "0.8"
+tempfile.workspace = true

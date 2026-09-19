@@ -30,13 +30,26 @@ impl ModelRole {
     }
 }
 
+/// The on-disk engine format a manifest entry targets. The engine is
+/// chosen per model: `gguf` loads through llama.cpp (GBNF-capable, the
+/// C2 default), `mlx` loads Apple-MLX safetensors models in-process
+/// (feature `mlx`; schema-and-repair, no GBNF — ADR-017).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelFormat {
+    #[default]
+    Gguf,
+    Mlx,
+}
+
 /// One model in the manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub role: ModelRole,
     /// Stable name, e.g. `qwen2.5-1.5b-instruct`.
     pub name: String,
-    /// Local file name under the models dir.
+    /// Local file name (GGUF) or model-directory spec (MLX: a path, an
+    /// `OXIBRAIN_MLX_HOME` name, or an HF-cache repo id) under the models dir.
     pub file: String,
     /// Download URL (HuggingFace resolve or any https URL).
     pub url: String,
@@ -45,6 +58,9 @@ pub struct ModelEntry {
     /// File size in MiB.
     pub size_mb: u64,
     pub license: String,
+    /// Engine format — selects the loader. Defaults to `gguf`.
+    #[serde(default)]
+    pub format: ModelFormat,
 }
 
 /// The shipped default model set (§8.4): a multilingual instruct model for
@@ -59,6 +75,7 @@ pub fn default_manifest() -> Vec<ModelEntry> {
             digest: "2619da49b802f7bc7e92264edd12e4bf093dd97f42584535ae77dc587ab55362".into(),
             size_mb: 1065,
             license: "apache-2.0".into(),
+            format: ModelFormat::Gguf,
         },
         ModelEntry {
             role: ModelRole::Embed,
@@ -68,6 +85,7 @@ pub fn default_manifest() -> Vec<ModelEntry> {
             digest: "b7f56ba6ceb9fce993f0b1ea2810257ecceb23b5fa2e9787ed679c8174f96ec4".into(),
             size_mb: 417,
             license: "mit".into(),
+            format: ModelFormat::Gguf,
         },
     ]
 }

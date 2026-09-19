@@ -424,6 +424,15 @@ async fn ensure_local_model_present() -> anyhow::Result<()> {
     // A malformed manifest is a loud error, not a silent reset: bootstrap
     // must never overwrite entries the user cannot see were dropped.
     let manifest = load_manifest().map_err(|e| anyhow::anyhow!("load model manifest: {e}"))?;
+    // MLX entries resolve outside the models dir (HF cache / local path)
+    // and are never pulled by this process — presence and fingerprint are
+    // checked when the engine loads (ADR-017).
+    if manifest
+        .iter()
+        .any(|m| m.role == oxibrain::models::ModelRole::Extract && m.format == oxibrain::models::ModelFormat::Mlx)
+    {
+        return Ok(());
+    }
     let defaults = default_manifest();
     let plan = plan_extract_pull(&manifest, &dir, &defaults);
 
@@ -458,7 +467,7 @@ async fn ensure_local_model_present() -> anyhow::Result<()> {
 /// GGUF, and expose its tokenizer (§7.5). Lazy-pulls the model on first use
 /// so `oxibrain init` does not have to download anything.
 async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
-    use oxibrain::models::{load_manifest, model_dir, verify_entry};
+    use oxibrain::models::{ModelFormat, load_manifest, model_dir, verify_entry};
 
     ensure_local_model_present().await?;
 
@@ -466,8 +475,51 @@ async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
     let entry = extract_entry(&manifest)
         .ok_or_else(|| anyhow::anyhow!("local extract model could not be resolved after pull"))?;
     let dir = model_dir();
-    verify_entry(entry, &dir)
-        .map_err(|e| anyhow::anyhow!("model digest mismatch for {}: {e}", entry.name))?;
+
+    // The engine is chosen per manifest entry (ADR-017): GGUF loads through
+    // llama.cpp (GBNF, D28); MLX safetensors load in-process on Apple
+    // Silicon (schema-and-repair; the validator stays the gate).
+    match entry.format {
+        ModelFormat::Mlx => {
+            #[cfg(feature = "mlx")]
+            {
+                let dir = oxibrain_llm_mlx::weights::resolve_model_dir(&entry.file)
+                    .map_err(|e| anyhow::anyhow!("resolve MLX model `{}`: {e}", entry.file))?;
+                let fingerprint = oxibrain_llm_mlx::weights::model_fingerprint(&dir)
+                    .map_err(|e| anyhow::anyhow!("fingerprint MLX model: {e}"))?;
+                if fingerprint != entry.digest {
+                    anyhow::bail!(
+                        "MLX model digest mismatch for {}: manifest {} != on disk {} \
+                         (update the manifest digest after re-pulling the model)",
+                        entry.name,
+                        entry.digest,
+                        fingerprint
+                    );
+                }
+                let llm = Arc::new(oxibrain_llm_mlx::LocalMxlLlm::load(&entry.file, 16_384)?);
+                return Ok(ProviderLlm {
+                    model_id: entry.name.clone(),
+                    mechanism: ExtractMechanism::JsonMode,
+                    model_digest: Some(entry.digest.clone()),
+                    port: llm.clone(),
+                    tokenizer: Some(llm),
+                    source: ResolutionSource::Local,
+                });
+            }
+            #[cfg(not(feature = "mlx"))]
+            anyhow::bail!(
+                "manifest entry `{}` has format = \"mlx\" but this oxibrain \
+                 binary was built without the `mlx` feature; rebuild with \
+                 `--features mlx` or switch the extract entry to a GGUF model",
+                entry.name
+            );
+        }
+        ModelFormat::Gguf => {
+            verify_entry(entry, &dir)
+                .map_err(|e| anyhow::anyhow!("model digest mismatch for {}: {e}", entry.name))?;
+        }
+    }
+
     let path = dir.join(&entry.file);
     let llm = Arc::new(
         oxibrain_llm_local::LocalLlm::open(&path, oxibrain_llm_local::LocalLlmOptions::default())
@@ -661,6 +713,7 @@ mod tests {
             size_mb: 1,
             license: String::new(),
             file: format!("{name}.gguf"),
+            format: oxibrain::models::ModelFormat::Gguf,
         };
         let entries = vec![
             mk(ModelRole::Embed, "bge-m3"),

@@ -8,7 +8,7 @@ members = [
     "crates/oxibrain",
     "crates/oxibrain-cli",
     "crates/oxibrain-llm-http",
-    "crates/oxibrain-llm-local",
+    "crates/oxibrain-llm-mlx",
     "crates/oxibrain-mcp",
     "crates/oxibrain-client",
     "crates/oxibrain-connectors",
@@ -19,25 +19,26 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.16.0"
+version = "0.17.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/a7garden/oxibrain"
 rust-version = "1.96"
 
 [workspace.dependencies]
-oxibrain = { path = "crates/oxibrain", version = "0.16.0" }
-oxibrain-core = { path = "crates/oxibrain-core", version = "0.16.0" }
-oxibrain-index = { path = "crates/oxibrain-index", version = "0.16.0" }
-oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.16.0" }
-oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.16.0" }
-oxibrain-llm-local = { path = "crates/oxibrain-llm-local", version = "0.16.0" }
-oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.16.0" }
-oxibrain-client = { path = "crates/oxibrain-client", version = "0.16.0" }
-oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.16.0" }
-oxibrain-store = { path = "crates/oxibrain-store", version = "0.16.0" }
-oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.16.0" }
-oxibrain-views = { path = "crates/oxibrain-views", version = "0.16.0" }
-oxibrain-ops = { path = "crates/oxibrain-ops", version = "0.16.0" }
+oxibrain = { path = "crates/oxibrain", version = "0.17.0" }
+oxibrain-core = { path = "crates/oxibrain-core", version = "0.17.0" }
+oxibrain-index = { path = "crates/oxibrain-index", version = "0.17.0" }
+oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.17.0" }
+oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.17.0" }
+oxibrain-llm-local = { path = "crates/oxibrain-llm-local", version = "0.17.0" }
+oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.17.0" }
+oxibrain-client = { path = "crates/oxibrain-client", version = "0.17.0" }
+oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.17.0" }
+oxibrain-store = { path = "crates/oxibrain-store", version = "0.17.0" }
+oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.17.0" }
+oxibrain-views = { path = "crates/oxibrain-views", version = "0.17.0" }
+oxibrain-ops = { path = "crates/oxibrain-ops", version = "0.17.0" }
+oxibrain-llm-mlx = { path = "crates/oxibrain-llm-mlx", version = "0.17.0" }
 blake3 = "1.5"
 hex = "0.4"
 unicode-normalization = "0.1"
@@ -62,6 +63,8 @@ encoding_rs = "0.8"
 include_dir = "0.7"
 notify = "7"
 glob = "0.3"
+mlx-rs = "0.32"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 toml = "0.8"
 gix = "0.83"
 # Transitive via prodash → gix-features → gix. prodash requires `^1.0.3`;

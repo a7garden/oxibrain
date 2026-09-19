@@ -4,7 +4,38 @@ All notable changes to oxibrain are documented here. Conventional commits;
 squash-merged.
 
 
-## [0.16.0] — 2026-09-19
+
+## [0.17.0] — 2026-09-19
+
+### Added
+
+- **Native in-process MLX engine** (ADR-017). `oxibrain-llm-mlx` (CLI
+  feature `mlx`, off by default) runs Qwen3 dense and MoE
+  `mlx-community` safetensors checkpoints directly on Apple Silicon — no
+  server, no Python, no external app. The engine is chosen per manifest
+  entry: `format = "mlx"` selects MLX, the GGUF default (GBNF,
+  zero-setup) is unchanged. All MLX work runs on a dedicated worker
+  thread (MLX streams are thread-local); the adapter exposes the model's
+  own tokenizer as `TokenizerPort`.
+- Manifest `format` field on model entries (`gguf` default, `mlx`);
+  `admin model list` resolves MLX entries through the HF cache and shows
+  fingerprint status; `admin extract --pending` binds the engine-selected
+  provider identity (mechanism `JsonMode` on MLX — schema-and-repair with
+  the validator as the gate).
+- MLX cache fingerprints: blake3 over `config.json` + sorted shard
+  names/sizes — §9.5 cache identity without re-reading 17 GB per open.
+- Graph-parity tests: the full engine forward against an independent f64
+  CPU reference on a synthetic quantized MoE model, plus per-component
+  audits (quantized matmul, SDPA GQA, RoPE, unpacker) against ground
+  truth on the real 30B weights.
+
+### Known issues
+
+- Statically linking llama.cpp and mlx-c in one binary corrupts
+  llama.cpp's GGUF parsing (bge-m3 embedder segfault). `--features mlx`
+  builds therefore skip the GGUF embedder: dense retrieval is
+  unavailable, lexical and graph channels are unaffected. GGUF-only
+  builds are unchanged (ADR-017).
 
 ### Added
 

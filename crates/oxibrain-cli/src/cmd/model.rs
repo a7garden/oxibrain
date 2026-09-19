@@ -29,13 +29,31 @@ async fn list(dir: &std::path::Path) -> anyhow::Result<()> {
     );
     println!("{}", "-".repeat(70));
     for entry in &manifest {
-        let path = dir.join(&entry.file);
-        let status = if !path.exists() {
-            "missing"
-        } else if verify_entry(entry, dir).is_ok() {
-            "ok"
+        let status = if entry.format == oxibrain::models::ModelFormat::Mlx {
+            #[cfg(feature = "mlx")]
+            {
+                match oxibrain_llm_mlx::weights::resolve_model_dir(&entry.file) {
+                    Ok(dir) => {
+                        let fp = oxibrain_llm_mlx::weights::model_fingerprint(&dir)
+                            .unwrap_or_default();
+                        if fp == entry.digest { "ok" } else { "stale" }
+                    }
+                    Err(_) => "missing",
+                }
+            }
+            #[cfg(not(feature = "mlx"))]
+            {
+                "unknown(no-mlx-build)"
+            }
         } else {
-            "corrupt"
+            let path = dir.join(&entry.file);
+            if !path.exists() {
+                "missing"
+            } else if verify_entry(entry, dir).is_ok() {
+                "ok"
+            } else {
+                "corrupt"
+            }
         };
         println!(
             "{:<16} {:<24} {:>6} MiB {:>6}  {}",

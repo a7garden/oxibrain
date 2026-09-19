@@ -1,5 +1,10 @@
 # oxibrain — Architecture
-> **Version:** v2.17 · **Date:** 2026-09-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.18 · **Date:** 2026-09-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.18 — Inference: native in-process MLX engine, selected per manifest entry (ADR-017).**
+> `oxibrain-llm-mlx` (feature `mlx`) runs Qwen3 dense/MoE `mlx-community` checkpoints directly
+> — no server, no Python. Manifest `format = "mlx"` picks the engine; GGUF stays the default
+> with GBNF. MLX builds skip the llama.cpp embedder (static-link conflict, ADR-017). The v2.17
+> loopback-server path remains available.
 > **v2.17 — Inference: MLX weights are served through loopback OpenAI-compatible servers (ADR-016).**
 > `OXIBRAIN_LLM_PROVIDER=loopback` names a user-run local server (LM Studio's MLX engine,
 > `mlx_lm.server`, llama.cpp `server`); structured output rides the server's `json_schema`
@@ -1364,7 +1369,8 @@ makes for SQLite.
 |---|---|---|
 | `oxibrain-llm-local` | `LlmPort` + `TokenizerPort` — GGUF, CPU/Metal/CUDA | **yes** |
 | `oxibrain-embed-local` | `EmbeddingPort` — multilingual encoder | **yes** |
-| `oxibrain-llm-http` | `LlmPort` — Anthropic / OpenAI / loopback (MLX via LM Studio or `mlx_lm.server`, ADR-016) | feature |
+| `oxibrain-llm-http` | `LlmPort` — Anthropic / OpenAI / loopback (ADR-016) | feature |
+| `oxibrain-llm-mlx` | `LlmPort` + `TokenizerPort` — native MLX, Qwen3 dense+MoE, Apple Silicon (ADR-017) | feature `mlx` |
 | `oxibrain-embed-http` | `EmbeddingPort` — hosted encoders | feature |
 | `oxibrain-mcp` sampling | `LlmPort` — the client's model | capability, off by default |
 
@@ -1381,14 +1387,15 @@ already bundle C for SQLite via `rusqlite/bundled`, so the machinery and cross-c
 story exist. `candle` and `mistral.rs` are re-examined at the M7 gate; because this is an
 adapter, switching is a crate swap.
 
-**MLX weights arrive through the HTTP tier, not a native engine** (ADR-016). `mlx-lm` is
-Python (barred by the stack contract), and a hand-rolled MLX runner would duplicate a model
-runtime while still forfeiting GBNF. Instead, any loopback OpenAI-compatible server — LM
-Studio's MLX engine, `mlx_lm.server`, a llama.cpp `server` — is a named provider
-(`OXIBRAIN_LLM_PROVIDER=loopback`, mechanism `JsonSchema`): structured output comes from the
-server, the validator still gates every claim, and the C2 local-GGUF default remains the
-zero-setup path. A native MLX engine stays gated on the same M7 question: bring constrained
-decoding or a proven quality win worth the duplicated runtime.
+**MLX runs two ways; the engine is chosen per manifest entry** (ADR-016,
+ADR-017). `format = "mlx"` loads `mlx-community` safetensors checkpoints
+in-process through `oxibrain-llm-mlx` (Qwen3 dense + MoE, feature `mlx`,
+mechanism `JsonMode` — no GBNF in MLX, so schema-and-repair with the
+validator as the gate). `OXIBRAIN_LLM_PROVIDER=loopback` remains for
+user-run servers (LM Studio, `mlx_lm.server`). The C2 local-GGUF default
+remains the zero-setup path. Known cost of `mlx` builds: statically linking
+llama.cpp and mlx-c corrupts llama.cpp's GGUF parsing, so those builds skip
+the GGUF embedder (dense retrieval off; lexical/graph channels intact).
 
 **Model selection is config, not code.** The architecture fixes requirements:
 

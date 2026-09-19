@@ -12,7 +12,20 @@ use oxibrain_embed_local::{LocalEmbedder, LocalEmbedderOptions};
 use std::sync::Arc;
 
 /// Open the manifest's `embed`-role model when it is present on disk.
+///
+/// MLX-enabled builds skip the llama.cpp embedder: statically linking
+/// llama.cpp and mlx-c in one binary corrupts llama.cpp's GGUF parsing
+/// (segfault in `gguf_get_key`, verified on the bge-m3 loader — ADR-017).
+/// Query surfaces degrade to the lexical/graph channels; GGUF-only builds
+/// keep the dense channel.
 fn open_embedder() -> Option<LocalEmbedder> {
+    if cfg!(feature = "mlx") {
+        tracing::warn!(
+            "mlx build: the llama.cpp embedder is disabled (static-link \
+             conflict with mlx-c, ADR-017); dense retrieval is unavailable"
+        );
+        return None;
+    }
     let dir = model_dir();
     let manifest = load_manifest_at(&dir).ok()?;
     let entry = manifest.into_iter().find(|e| e.role == ModelRole::Embed)?;

@@ -27,6 +27,10 @@ path = "src/lib.rs"
 # local model (Task 3 §3, doc/spec/oxi-foundation-v1.md §0).
 default = []
 os-keychain = ["dep:keyring"]
+# In-process Apple MLX engine (ADR-017): manifest entries with
+# `format = "mlx"` load mlx-community safetensors models natively. Off by
+# default so non-Apple and standalone builds pull no MLX toolchain.
+mlx = ["dep:oxibrain-llm-mlx"]
 
 [dependencies]
 oxibrain.workspace = true
@@ -46,6 +50,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 anyhow.workspace = true
+oxibrain-llm-mlx = { workspace = true, optional = true }
 serde_json.workspace = true
 tempfile.workspace = true
 toml = "0.8"
