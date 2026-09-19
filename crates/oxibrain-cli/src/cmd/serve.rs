@@ -39,6 +39,7 @@ pub async fn run(
         Err(e) => return Err(e.into()),
     };
     let brain = super::embed::try_attach_local_embedder(brain);
+    let brain = super::llm::bind_extract_identity(brain);
 
     if let Some(addr_str) = http {
         let addr: std::net::SocketAddr = addr_str

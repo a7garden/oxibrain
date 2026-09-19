@@ -34,7 +34,6 @@ const IM_END: &str = "<|im_end|>";
 struct Inner {
     model: Qwen3Model,
     tokenizer: Tokenizer,
-    dir: PathBuf,
     n_ctx: i32,
 }
 
@@ -121,7 +120,7 @@ fn load_inner(dir: &std::path::Path, n_ctx: i32) -> Result<Inner, String> {
     let model = Qwen3Model::load(cfg, &w, eos)?;
     let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json"))
         .map_err(|e| format!("load tokenizer.json: {e}"))?;
-    Ok(Inner { model, tokenizer, dir: dir.to_path_buf(), n_ctx })
+    Ok(Inner { model, tokenizer, n_ctx })
 }
 
 /// ChatML prompt, byte-identical to the `oxibrain-llm-local` contract so
@@ -154,7 +153,6 @@ fn mlx_err(e: mlx_rs::error::Exception) -> BrainError {
 
 /// Greedy generation on the worker thread.
 fn generate(g: &mut Inner, prompt: String, max_tokens: u32) -> Result<LlmResponse, BrainError> {
-    let _ = &g.dir;
     let mut tokens = encode(&g.tokenizer, &prompt)?;
     let max_new = i32::try_from(max_tokens).unwrap_or(i32::MAX / 2);
     let budget = (g.n_ctx - max_new.min(g.n_ctx / 2)).max(1);

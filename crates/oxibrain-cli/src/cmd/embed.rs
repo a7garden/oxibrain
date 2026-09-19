@@ -50,6 +50,12 @@ pub fn try_attach_local_embedder(brain: Brain) -> Brain {
 /// dense channel (`admin index --embed`): silently skipping would report
 /// "dense coverage: n/a" as if nothing were wrong.
 pub fn require_local_embedder(brain: Brain) -> anyhow::Result<Brain> {
+    if cfg!(feature = "mlx") {
+        anyhow::bail!(
+            "this oxibrain build links mlx-c and cannot load the llama.cpp \
+             embedder (ADR-017); use a non-mlx build for dense indexing"
+        );
+    }
     match open_embedder() {
         Some(emb) => Ok(brain.with_embedder(Arc::new(emb))),
         None => Err(anyhow::anyhow!(
@@ -57,3 +63,4 @@ pub fn require_local_embedder(brain: Brain) -> anyhow::Result<Brain> {
         )),
     }
 }
+
