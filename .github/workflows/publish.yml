@@ -100,6 +100,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # mlx-sys compiles MLX's Metal kernels, which need recent Metal
+      # shader headers (metal::remove_addrspace_t); the macos-14 default
+      # Xcode is older than that.
+      - name: Select latest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+
       - name: Build release binary
         run: cargo build --release -p oxibrain-cli
 
