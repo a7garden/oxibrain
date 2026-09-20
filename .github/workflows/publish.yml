@@ -103,13 +103,22 @@ jobs:
       - name: Build release binary
         run: cargo build --release -p oxibrain-cli
 
-      - name: Package tarball and sha256
+      - name: Build MLX release binary
+        run: cargo build --release -p oxibrain-cli --features mlx
+
+      - name: Package tarballs and checksums
         run: |
           dir=$(mktemp -d)
           cp target/release/oxibrain "$dir/oxibrain"
           tar -czf "oxibrain-aarch64-apple-darwin.tar.gz" -C "$dir" oxibrain
           shasum -a 256 "oxibrain-aarch64-apple-darwin.tar.gz" \
             > "oxibrain-aarch64-apple-darwin.tar.gz.sha256"
+          # MLX engine build: same binary plus the in-process MLX engine
+          # (ADR-017). The GGUF embedder is unavailable in this build.
+          cp target/release/oxibrain "$dir/oxibrain-mlx"
+          tar -czf "oxibrain-mlx-aarch64-apple-darwin.tar.gz" -C "$dir" oxibrain-mlx
+          shasum -a 256 "oxibrain-mlx-aarch64-apple-darwin.tar.gz" \
+            > "oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256"
 
       - name: Upload release assets
         env:
@@ -119,4 +128,6 @@ jobs:
           gh release upload "$TAG" \
             "oxibrain-aarch64-apple-darwin.tar.gz" \
             "oxibrain-aarch64-apple-darwin.tar.gz.sha256" \
+            "oxibrain-mlx-aarch64-apple-darwin.tar.gz" \
+            "oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256" \
             --clobber

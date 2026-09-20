@@ -422,8 +422,10 @@ fn select_extract_entry(
     if wants_mlx {
         return entries
             .iter()
-            .find(|e| e.role == oxibrain::models::ModelRole::Extract
-                && e.format == oxibrain::models::ModelFormat::Mlx)
+            .find(|e| {
+                e.role == oxibrain::models::ModelRole::Extract
+                    && e.format == oxibrain::models::ModelFormat::Mlx
+            })
             .or_else(|| extract_entry(entries));
     }
     extract_entry(entries)
@@ -486,7 +488,7 @@ async fn ensure_local_model_present() -> anyhow::Result<()> {
 /// GGUF, and expose its tokenizer (§7.5). Lazy-pulls the model on first use
 /// so `oxibrain init` does not have to download anything.
 async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
-    #[cfg_attr(feature = "mlx", allow(unused_imports))]
+    #[cfg_attr(all(feature = "mlx", target_vendor = "apple"), allow(unused_imports))]
     use oxibrain::models::{ModelFormat, load_manifest, model_dir, verify_entry};
 
     ensure_local_model_present().await?;
@@ -494,7 +496,7 @@ async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
     let manifest = load_manifest().context("load model manifest")?;
     let entry = select_extract_entry(&manifest)
         .ok_or_else(|| anyhow::anyhow!("local extract model could not be resolved after pull"))?;
-    #[cfg_attr(feature = "mlx", allow(unused_variables))]
+    #[cfg_attr(all(feature = "mlx", target_vendor = "apple"), allow(unused_variables))]
     let dir = model_dir();
 
     // The engine is chosen per manifest entry (ADR-017): GGUF loads through
@@ -502,7 +504,7 @@ async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
     // Silicon (schema-and-repair; the validator stays the gate).
     match entry.format {
         ModelFormat::Mlx => {
-            #[cfg(feature = "mlx")]
+            #[cfg(all(feature = "mlx", target_vendor = "apple"))]
             {
                 let dir = oxibrain_llm_mlx::weights::resolve_model_dir(&entry.file)
                     .map_err(|e| anyhow::anyhow!("resolve MLX model `{}`: {e}", entry.file))?;
@@ -527,7 +529,7 @@ async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
                     source: ResolutionSource::Local,
                 })
             }
-            #[cfg(not(feature = "mlx"))]
+            #[cfg(not(all(feature = "mlx", target_vendor = "apple")))]
             anyhow::bail!(
                 "manifest entry `{}` has format = \"mlx\" but this oxibrain \
                  binary was built without the `mlx` feature; rebuild with \
@@ -539,7 +541,7 @@ async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
             // mlx builds statically link llama.cpp AND mlx-c; llama.cpp's
             // GGUF parsing segfaults in that binary (ADR-017). Refuse the
             // load loudly instead of crashing.
-            #[cfg(feature = "mlx")]
+            #[cfg(all(feature = "mlx", target_vendor = "apple"))]
             anyhow::bail!(
                 "manifest entry `{}` has format = \"gguf\" but this oxibrain \
                  build links mlx-c alongside llama.cpp and cannot load GGUF \
@@ -547,10 +549,11 @@ async fn local_from_manifest() -> anyhow::Result<ProviderLlm> {
                  entry",
                 entry.name
             );
-            #[cfg(not(feature = "mlx"))]
+            #[cfg(not(all(feature = "mlx", target_vendor = "apple")))]
             {
-                verify_entry(entry, &dir)
-                    .map_err(|e| anyhow::anyhow!("model digest mismatch for {}: {e}", entry.name))?;
+                verify_entry(entry, &dir).map_err(|e| {
+                    anyhow::anyhow!("model digest mismatch for {}: {e}", entry.name)
+                })?;
                 let path = dir.join(&entry.file);
                 let llm = Arc::new(
                     oxibrain_llm_local::LocalLlm::open(
@@ -596,28 +599,24 @@ fn identity_from_env_or_manifest() -> Option<oxibrain_core::extraction::Extracto
     let model_for = |prefix: &str| std::env::var(format!("{prefix}_MODEL")).ok();
     if let Some(name) = explicit.as_deref() {
         return match name {
-            "anthropic" => model_for("ANTHROPIC").map(|m| {
-                config(m, ExtractMechanism::ToolCall, None, None)
-            }),
-            "openai" => model_for("OPENAI").map(|m| {
-                config(m, ExtractMechanism::JsonSchema, None, None)
-            }),
-            "loopback" | "lmstudio" | "mlx" => {
-                std::env::var("OXIBRAIN_LLM_MODEL").ok().map(|m| {
-                    config(m, ExtractMechanism::JsonSchema, None, None)
-                })
+            "anthropic" => {
+                model_for("ANTHROPIC").map(|m| config(m, ExtractMechanism::ToolCall, None, None))
             }
+            "openai" => {
+                model_for("OPENAI").map(|m| config(m, ExtractMechanism::JsonSchema, None, None))
+            }
+            "loopback" | "lmstudio" | "mlx" => std::env::var("OXIBRAIN_LLM_MODEL")
+                .ok()
+                .map(|m| config(m, ExtractMechanism::JsonSchema, None, None)),
             "local" => None, // fall through to the manifest below
             _ => None,
         };
     }
     if std::env::var_os("ANTHROPIC_API_KEY").is_some() {
-        return model_for("ANTHROPIC")
-            .map(|m| config(m, ExtractMechanism::ToolCall, None, None));
+        return model_for("ANTHROPIC").map(|m| config(m, ExtractMechanism::ToolCall, None, None));
     }
     if std::env::var_os("OPENAI_API_KEY").is_some() {
-        return model_for("OPENAI")
-            .map(|m| config(m, ExtractMechanism::JsonSchema, None, None));
+        return model_for("OPENAI").map(|m| config(m, ExtractMechanism::JsonSchema, None, None));
     }
     // Local: derive from the manifest extract entry (no weights loaded).
     let dir = oxibrain::models::model_dir();
@@ -626,13 +625,13 @@ fn identity_from_env_or_manifest() -> Option<oxibrain_core::extraction::Extracto
     let entry = select_extract_entry(&manifest)
         .or_else(|| defaults.iter().find(|e| e.role == ModelRole::Extract))?;
     let digest = if entry.format == ModelFormat::Mlx {
-        #[cfg(feature = "mlx")]
+        #[cfg(all(feature = "mlx", target_vendor = "apple"))]
         {
             oxibrain_llm_mlx::weights::resolve_model_dir(&entry.file)
                 .ok()
                 .and_then(|d| oxibrain_llm_mlx::weights::model_fingerprint(&d).ok())
         }
-        #[cfg(not(feature = "mlx"))]
+        #[cfg(not(all(feature = "mlx", target_vendor = "apple")))]
         {
             None
         }
@@ -645,12 +644,7 @@ fn identity_from_env_or_manifest() -> Option<oxibrain_core::extraction::Extracto
         ExtractMechanism::Grammar
     };
     let _ = dir;
-    Some(config(
-        entry.name.clone(),
-        mechanism,
-        digest,
-        None,
-    ))
+    Some(config(entry.name.clone(), mechanism, digest, None))
 }
 
 /// Build a default extractor config from the env-resolved model + mechanism.
@@ -734,9 +728,19 @@ mod tests {
         let saved = std::env::var_os("OXIBRAIN_ENGINE");
         // SAFETY: env vars are serialised via ENV_LOCK in this module.
         unsafe { std::env::remove_var("OXIBRAIN_ENGINE") };
-        assert_eq!(select_extract_entry(&as_entries(entries.clone())).unwrap().name, "daily-gguf");
+        assert_eq!(
+            select_extract_entry(&as_entries(entries.clone()))
+                .unwrap()
+                .name,
+            "daily-gguf"
+        );
         unsafe { std::env::set_var("OXIBRAIN_ENGINE", "mlx") };
-        assert_eq!(select_extract_entry(&as_entries(entries.clone())).unwrap().name, "big-mlx");
+        assert_eq!(
+            select_extract_entry(&as_entries(entries.clone()))
+                .unwrap()
+                .name,
+            "big-mlx"
+        );
         // SAFETY: see above.
         unsafe {
             match saved {
@@ -754,10 +758,18 @@ mod tests {
     }
     impl ModelEntryShim {
         fn gguf(name: &str) -> Self {
-            Self { name: name.into(), file: format!("{name}.gguf"), format: oxibrain::models::ModelFormat::Gguf }
+            Self {
+                name: name.into(),
+                file: format!("{name}.gguf"),
+                format: oxibrain::models::ModelFormat::Gguf,
+            }
         }
         fn mlx(name: &str) -> Self {
-            Self { name: name.into(), file: name.into(), format: oxibrain::models::ModelFormat::Mlx }
+            Self {
+                name: name.into(),
+                file: name.into(),
+                format: oxibrain::models::ModelFormat::Mlx,
+            }
         }
     }
 

@@ -57,6 +57,7 @@ mod tests {
             digest: String::new(),
             size_mb: 1,
             license: String::new(),
+            format: crate::models::ModelFormat::Gguf,
         }
     }
 
@@ -88,6 +89,7 @@ mod tests {
         std::fs::write(&file, content).unwrap();
         let actual = crate::models::digest_file(&file).unwrap();
         let manifest = vec![ModelEntry {
+            format: crate::models::ModelFormat::Gguf,
             role: ModelRole::Extract,
             name: "qwen".into(),
             file: "qwen.gguf".into(),
@@ -106,6 +108,7 @@ mod tests {
         let file = temp.path().join("qwen.gguf");
         std::fs::write(&file, b"placeholder").unwrap();
         let manifest = vec![ModelEntry {
+            format: crate::models::ModelFormat::Gguf,
             role: ModelRole::Extract,
             name: "qwen".into(),
             file: "qwen.gguf".into(),

@@ -76,7 +76,12 @@ async fn remember_extracts_under_bound_identity() {
     let brain = brain_with(&dir, llm, cfg.clone()).await;
 
     let outcome = brain
-        .remember("test", "test.md".into(), content(), Timestamp::from_millis(20000))
+        .remember(
+            "test",
+            "test.md".into(),
+            content(),
+            Timestamp::from_millis(20000),
+        )
         .await
         .unwrap();
     assert!(
@@ -105,7 +110,12 @@ async fn same_identity_cache_hits_weight_change_re_extracts() {
     );
     let brain1 = brain_with(&dir, llm1, cfg_a.clone()).await;
     brain1
-        .remember("test", "test.md".into(), content(), Timestamp::from_millis(20000))
+        .remember(
+            "test",
+            "test.md".into(),
+            content(),
+            Timestamp::from_millis(20000),
+        )
         .await
         .unwrap();
 

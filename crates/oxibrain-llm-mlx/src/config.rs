@@ -79,9 +79,10 @@ impl Qwen3Config {
 
     /// Default quantization when the model ships quantized weights.
     pub fn default_quant(&self) -> Option<QuantParams> {
-        self.quantization
-            .as_ref()
-            .map(|q| QuantParams { group_size: q.group_size, bits: q.bits })
+        self.quantization.as_ref().map(|q| QuantParams {
+            group_size: q.group_size,
+            bits: q.bits,
+        })
     }
 
     /// Effective quantization for a weight path. mlx-community quantization
@@ -90,13 +91,22 @@ impl Qwen3Config {
     pub fn quant_for(&self, key: &str) -> Option<QuantParams> {
         let q = self.quantization.as_ref()?;
         if let Some(o) = q.overrides.get(key) {
-            return Some(QuantParams { group_size: o.group_size, bits: o.bits });
+            return Some(QuantParams {
+                group_size: o.group_size,
+                bits: o.bits,
+            });
         }
         let strip = key.strip_prefix("model.").unwrap_or(key);
         if let Some(o) = q.overrides.get(strip) {
-            return Some(QuantParams { group_size: o.group_size, bits: o.bits });
+            return Some(QuantParams {
+                group_size: o.group_size,
+                bits: o.bits,
+            });
         }
-        Some(QuantParams { group_size: q.group_size, bits: q.bits })
+        Some(QuantParams {
+            group_size: q.group_size,
+            bits: q.bits,
+        })
     }
 
     /// End-of-sequence token ids from `generation_config.json` (may be a
@@ -112,9 +122,7 @@ impl Qwen3Config {
                     .map(|x| x as u32)
                     .collect::<Vec<u32>>()
                     .into(),
-                Some(serde_json::Value::Number(n)) => n
-                    .as_u64()
-                    .map(|x| vec![x as u32]),
+                Some(serde_json::Value::Number(n)) => n.as_u64().map(|x| vec![x as u32]),
                 _ => None,
             });
         ids.filter(|v| !v.is_empty())

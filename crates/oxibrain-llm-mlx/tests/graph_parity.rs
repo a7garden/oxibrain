@@ -1,3 +1,4 @@
+#![cfg(target_vendor = "apple")]
 #![allow(clippy::type_complexity, clippy::needless_range_loop)]
 
 //! Graph parity: the engine's `next_token_logits` on the tiny model must
@@ -43,9 +44,7 @@ impl Q {
             .map(|r| {
                 (0..inn)
                     .map(|c| {
-                        let lane = (self.packed[r][c / lanes]
-                            >> ((c % lanes) * self.bits))
-                            & mask;
+                        let lane = (self.packed[r][c / lanes] >> ((c % lanes) * self.bits)) & mask;
                         let g = c / GROUP;
                         lane as f32 * self.scales[r][g] + self.biases[r][g]
                     })
@@ -74,7 +73,10 @@ impl Q {
 struct LayerR {
     attn_norm: Vec<f32>,
     post_norm: Vec<f32>,
-    q: Q, k: Q, v: Q, o: Q,
+    q: Q,
+    k: Q,
+    v: Q,
+    o: Q,
     q_norm: Vec<f32>,
     k_norm: Vec<f32>,
     gate: Vec<Vec<f32>>,
@@ -84,7 +86,10 @@ struct LayerR {
 fn rms64(x: &[f64], w: &[f32]) -> Vec<f64> {
     let mean = x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64;
     let inv = 1.0 / (mean + EPS).sqrt();
-    x.iter().zip(w).map(|(v, g)| v * inv * (*g as f64)).collect()
+    x.iter()
+        .zip(w)
+        .map(|(v, g)| v * inv * (*g as f64))
+        .collect()
 }
 
 fn silu(v: f64) -> f64 {
@@ -98,8 +103,7 @@ fn load_cpu(dir: &std::path::Path) -> (Vec<Vec<f32>>, Vec<LayerR>, Vec<f32>, Vec
     let theta = cfg["rope_theta"].as_f64().unwrap();
 
     let arr32 = |k: &str| -> Vec<f32> {
-        w[k]
-            .as_dtype(mlx_rs::Dtype::Float32)
+        w[k].as_dtype(mlx_rs::Dtype::Float32)
             .unwrap()
             .reshape(&[-1])
             .unwrap()
@@ -152,8 +156,7 @@ fn load_cpu(dir: &std::path::Path) -> (Vec<Vec<f32>>, Vec<LayerR>, Vec<f32>, Vec
             let key = format!("{p}.mlp.switch_mlp.{name}");
             let shape = w[&format!("{key}.weight")].shape().to_vec();
             assert_eq!(shape.len(), 3, "stacked expert tensor {key}");
-            let (e_n, out, packed_cols) =
-                (shape[0] as usize, shape[1] as usize, shape[2] as usize);
+            let (e_n, out, packed_cols) = (shape[0] as usize, shape[1] as usize, shape[2] as usize);
             let pq: Vec<u32> = w[&format!("{key}.weight")]
                 .reshape(&[-1])
                 .unwrap()
@@ -273,8 +276,7 @@ fn forward_cpu(
                 for (u, e) in exps.iter().enumerate() {
                     let wgt = e / total;
                     for d in 0..HEAD_DIM {
-                        att[hdi * HEAD_DIM + d] +=
-                            wgt * v_all[u][kvh * HEAD_DIM + d];
+                        att[hdi * HEAD_DIM + d] += wgt * v_all[u][kvh * HEAD_DIM + d];
                     }
                 }
             }
@@ -377,7 +379,10 @@ fn graph_parity_against_cpu_reference() {
         .map(|(a, b)| (*a as f64 - b).abs())
         .fold(0.0, f64::max);
     println!("engine argmax={engine_argmax} ref argmax={ref_argmax} max_diff={max_diff}");
-    assert_eq!(engine_argmax, ref_argmax, "argmax must match the CPU reference");
+    assert_eq!(
+        engine_argmax, ref_argmax,
+        "argmax must match the CPU reference"
+    );
     assert!(
         max_diff < 0.05,
         "logits must be numerically close to the reference: max diff {max_diff}"

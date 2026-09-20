@@ -9,7 +9,7 @@ use crate::config::{QuantParams, Qwen3Config};
 use mlx_rs::fast;
 use mlx_rs::nn;
 use mlx_rs::ops;
-use mlx_rs::ops::indexing::{argmax_axis, take_along_axis, IndexOp};
+use mlx_rs::ops::indexing::{IndexOp, argmax_axis, take_along_axis};
 use mlx_rs::{Array, Dtype};
 use std::collections::HashMap;
 
@@ -117,7 +117,12 @@ fn dequantize_to_dense(w: &W, key: &str, q: QuantParams) -> Result<Array, String
     dequantize_cpu(qw, scales, biases, q)
 }
 
-fn dequantize_cpu(qw: &Array, scales: &Array, biases: &Array, q: QuantParams) -> Result<Array, String> {
+fn dequantize_cpu(
+    qw: &Array,
+    scales: &Array,
+    biases: &Array,
+    q: QuantParams,
+) -> Result<Array, String> {
     let out = qw.shape()[0] as usize;
     let packed = qw.shape()[1] as usize;
     let lanes = 32 / q.bits as usize;
@@ -150,8 +155,7 @@ fn dequantize_cpu(qw: &Array, scales: &Array, biases: &Array, q: QuantParams) ->
         for (c, cell) in dense[r * inn..(r + 1) * inn].iter_mut().enumerate() {
             let lane = (row_q[c / lanes] >> ((c % lanes) * shift_bits)) & mask;
             let g = c / group_size;
-            *cell =
-                lane as f32 * sbuf[r * groups + g] + bbuf[r * groups + g];
+            *cell = lane as f32 * sbuf[r * groups + g] + bbuf[r * groups + g];
         }
     }
     let arr = Array::from_slice(&dense, &[out as i32, inn as i32]);
@@ -306,8 +310,7 @@ impl Qwen3Model {
             .ok_or("the MLX engine currently requires quantized mlx-community models")?;
         let q_for = |key: &str| cfg.quant_for(key).unwrap_or(default_q);
 
-        let embed = dense_linear(w, "model.embed_tokens", q_for("model.embed_tokens"))?
-            .w; // [vocab, dim]
+        let embed = dense_linear(w, "model.embed_tokens", q_for("model.embed_tokens"))?.w; // [vocab, dim]
         let lm_head = if cfg.tie_word_embeddings {
             Linear { w: embed.clone() }
         } else {
@@ -331,7 +334,8 @@ impl Qwen3Model {
             };
             let mlp = if cfg.is_moe() {
                 // mlx-community names the MoE expert block `switch_mlp`.
-                let gate = dense_linear(w, &format!("{p}.mlp.gate"), q_for(&format!("{p}.mlp.gate")))?;
+                let gate =
+                    dense_linear(w, &format!("{p}.mlp.gate"), q_for(&format!("{p}.mlp.gate")))?;
                 let mut experts = Vec::with_capacity(cfg.num_experts as usize);
                 // mlx-community saves experts either per-expert
                 // (`…experts.{e}.gate_proj.*`) or — the common quantized
@@ -348,9 +352,15 @@ impl Qwen3Model {
                     };
                     Some((qw.clone(), sc.clone(), bi.clone()))
                 };
-                let (sg, su, sd) = (stacked("gate_proj"), stacked("up_proj"), stacked("down_proj"));
+                let (sg, su, sd) = (
+                    stacked("gate_proj"),
+                    stacked("up_proj"),
+                    stacked("down_proj"),
+                );
                 for e in 0..cfg.num_experts {
-                    let ek = |name: &str, stacked: &Option<(Array, Array, Array)>| -> Result<QLinear, String> {
+                    let ek = |name: &str,
+                              stacked: &Option<(Array, Array, Array)>|
+                     -> Result<QLinear, String> {
                         if let Some((qw, sc, bi)) = stacked {
                             let e32 = e;
                             let slice = |a: &Array| -> Result<Array, String> {
@@ -417,7 +427,8 @@ impl Qwen3Model {
     ) -> MlxResult<Array> {
         let l = tokens.len() as i32;
         let ids = Array::from_slice(tokens, &[l]);
-        let mut h = self.embed
+        let mut h = self
+            .embed
             .take_axis(&ids, 0)?
             .expand_dims_axes(&[0])?
             .contiguous()?;
@@ -455,18 +466,23 @@ impl Qwen3Model {
         };
         // mlx-rs 0.32 misreads strided (transposed) views in reductions and
         // fast kernels — materialize contiguous copies at every boundary.
-        let q = rope(&a.q.forward(&normed)?.reshape(&[1, l, heads, hd])?, &a.q_norm)?
-            .transpose_axes(&[0, 2, 1, 3])?
-            .contiguous()?;
-        let k = rope(&a.k.forward(&normed)?.reshape(&[1, l, kv_heads, hd])?, &a.k_norm)?
-            .transpose_axes(&[0, 2, 1, 3])?
-            .contiguous()?;
-        let v = a
-            .v
-            .forward(&normed)?
-            .reshape(&[1, l, kv_heads, hd])?
-            .transpose_axes(&[0, 2, 1, 3])?
-            .contiguous()?;
+        let q = rope(
+            &a.q.forward(&normed)?.reshape(&[1, l, heads, hd])?,
+            &a.q_norm,
+        )?
+        .transpose_axes(&[0, 2, 1, 3])?
+        .contiguous()?;
+        let k = rope(
+            &a.k.forward(&normed)?.reshape(&[1, l, kv_heads, hd])?,
+            &a.k_norm,
+        )?
+        .transpose_axes(&[0, 2, 1, 3])?
+        .contiguous()?;
+        let v =
+            a.v.forward(&normed)?
+                .reshape(&[1, l, kv_heads, hd])?
+                .transpose_axes(&[0, 2, 1, 3])?
+                .contiguous()?;
 
         let (k, v) = match cache.take() {
             Some((ck, cv)) => (
@@ -530,10 +546,7 @@ impl Qwen3Model {
         // Group slots by expert id.
         let flat_idx = idx.reshape(&[slots])?;
         let order = ops::argsort_axis(flat_idx.clone(), 0)?;
-        let sorted_e: Vec<u32> = flat_idx
-            .take_axis(&order, 0)?
-            .as_slice::<u32>()
-            .to_vec();
+        let sorted_e: Vec<u32> = flat_idx.take_axis(&order, 0)?.as_slice::<u32>().to_vec();
         let sorted_x = xe.take_axis(&order, 0)?;
 
         let mut start = 0usize;

@@ -30,18 +30,18 @@ async fn list(dir: &std::path::Path) -> anyhow::Result<()> {
     println!("{}", "-".repeat(70));
     for entry in &manifest {
         let status = if entry.format == oxibrain::models::ModelFormat::Mlx {
-            #[cfg(feature = "mlx")]
+            #[cfg(all(feature = "mlx", target_vendor = "apple"))]
             {
                 match oxibrain_llm_mlx::weights::resolve_model_dir(&entry.file) {
                     Ok(dir) => {
-                        let fp = oxibrain_llm_mlx::weights::model_fingerprint(&dir)
-                            .unwrap_or_default();
+                        let fp =
+                            oxibrain_llm_mlx::weights::model_fingerprint(&dir).unwrap_or_default();
                         if fp == entry.digest { "ok" } else { "stale" }
                     }
                     Err(_) => "missing",
                 }
             }
-            #[cfg(not(feature = "mlx"))]
+            #[cfg(not(all(feature = "mlx", target_vendor = "apple")))]
             {
                 "unknown(no-mlx-build)"
             }

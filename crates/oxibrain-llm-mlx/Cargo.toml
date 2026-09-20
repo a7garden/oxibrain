@@ -15,12 +15,17 @@ blake3.workspace = true
 parking_lot.workspace = true
 oxibrain-ports.workspace = true
 async-trait.workspace = true
-mlx-rs = { workspace = true, features = ["safetensors"] }
 tokenizers.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+# MLX is Apple-only; the crate compiles to an empty surface elsewhere so
+# `cargo build --workspace` and `--all-features` CI legs keep working on
+# Linux runners.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+mlx-rs = { workspace = true, features = ["safetensors"] }
 half = "2"
 
 [dev-dependencies]

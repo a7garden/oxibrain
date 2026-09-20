@@ -65,7 +65,11 @@ async fn spawn_server(reply_content: &'static str) -> (String, Recorder) {
 
                 let mut lines = head.lines();
                 let request_line = lines.next().unwrap_or_default().to_string();
-                let path = request_line.split_whitespace().nth(1).unwrap_or("").to_string();
+                let path = request_line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .to_string();
                 let authorization = lines
                     .find_map(|l| {
                         let (name, value) = l.split_once(':')?;

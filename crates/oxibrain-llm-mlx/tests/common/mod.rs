@@ -1,13 +1,12 @@
 //! Shared tiny-model builder for the MLX engine tests.
 
+use ahash::AHashMap;
 use mlx_rs::ops;
+use oxibrain_llm_mlx::weights::model_fingerprint;
 use serde_json::json;
+use std::path::Path;
 use tokenizers::models::wordlevel::{WordLevel, WordLevelBuilder};
 use tokenizers::{AddedToken, Tokenizer};
-use ahash::AHashMap;
-use oxibrain_llm_mlx::weights::model_fingerprint;
-use std::path::Path;
-
 
 // Tiny geometry: everything divisible by group_size 32.
 pub const DIM: usize = 128;
@@ -27,7 +26,9 @@ fn lcg_values(seed: u64, n: usize) -> Vec<f32> {
     let mut state = seed;
     (0..n)
         .map(|_| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((state >> 33) as f32 / u32::MAX as f32 - 0.5) * 0.1
         })
         .collect()
@@ -49,7 +50,8 @@ pub fn build_tiny_model(dir: &Path) -> (String, String) {
     let mut tensors: Vec<(String, mlx_rs::Array)> = Vec::new();
     let mut seed = 1u64;
 
-    let embed = mlx_rs::Array::from_slice(&lcg_values(seed, VOCAB * DIM), &[VOCAB as i32, DIM as i32]);
+    let embed =
+        mlx_rs::Array::from_slice(&lcg_values(seed, VOCAB * DIM), &[VOCAB as i32, DIM as i32]);
     let (e_q, e_s, e_b) = ops::quantize(&embed, Some(GROUP), Some(4)).unwrap();
     tensors.push(("model.embed_tokens.weight".into(), e_q));
     tensors.push(("model.embed_tokens.scales".into(), e_s));
@@ -71,7 +73,11 @@ pub fn build_tiny_model(dir: &Path) -> (String, String) {
                 "k_proj" | "v_proj" => KV_HEADS * HEAD_DIM,
                 _ => DIM,
             };
-            let inn = if name == "o_proj" { HEADS * HEAD_DIM } else { DIM };
+            let inn = if name == "o_proj" {
+                HEADS * HEAD_DIM
+            } else {
+                DIM
+            };
             let (q, s, b) = quantized(out, inn, seed, 4).unwrap();
             seed += 1;
             tensors.push((format!("{p}.self_attn.{name}.weight"), q));
@@ -120,9 +126,7 @@ pub fn build_tiny_model(dir: &Path) -> (String, String) {
                     .reshape(&[EXPERTS as i32, out as i32, (rows / out) as i32])
                     .unwrap()
             };
-            let rows2 = |parts: &Vec<mlx_rs::Array>| {
-                parts[0].shape()[0] as usize
-            };
+            let rows2 = |parts: &Vec<mlx_rs::Array>| parts[0].shape()[0] as usize;
             let _ = rows2;
             tensors.push((format!("{p}.mlp.switch_mlp.{name}.weight"), stack(qs, out)));
             tensors.push((format!("{p}.mlp.switch_mlp.{name}.scales"), stack(ss, out)));
@@ -189,7 +193,17 @@ pub fn build_tiny_model(dir: &Path) -> (String, String) {
         vocab.insert(w.to_string(), next);
         next += 1;
     };
-    for w in ["system", "user", "assistant", "hello", "world", "foo", "bar", "a", "b"] {
+    for w in [
+        "system",
+        "user",
+        "assistant",
+        "hello",
+        "world",
+        "foo",
+        "bar",
+        "a",
+        "b",
+    ] {
         add(w, &mut vocab);
     }
     // ids 5 and 6 are "hello" and "world" — also the eos list; the adapter
@@ -210,4 +224,3 @@ pub fn build_tiny_model(dir: &Path) -> (String, String) {
     let fp = model_fingerprint(dir).unwrap();
     (shard.display().to_string(), fp)
 }
-

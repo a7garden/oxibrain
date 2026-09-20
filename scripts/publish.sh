@@ -17,9 +17,11 @@ cd "$(dirname "$0")/.."
 
 # Crates published with --no-verify: cargo's verify step rebuilds the crate
 # standalone in a temp dir, and llama-cpp-2 costs ~10 min per crate there.
+# oxibrain-llm-mlx additionally only builds on Apple targets, so a verify
+# step on the Linux runner cannot compile it at all.
 # The `cargo build --workspace` + `cargo test --workspace` gates in the
 # publish workflow already compile and test these exact sources.
-NO_VERIFY="oxibrain-embed-local oxibrain-llm-local"
+NO_VERIFY="oxibrain-embed-local oxibrain-llm-local oxibrain-llm-mlx"
 
 order() {
   python3 - <<'PY'

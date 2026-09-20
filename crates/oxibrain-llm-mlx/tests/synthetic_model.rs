@@ -1,3 +1,5 @@
+#![cfg(target_vendor = "apple")]
+
 //! Synthetic-model tests for the MLX engine (see `common` for the builder).
 
 mod common;
@@ -20,9 +22,14 @@ fn forward_and_adapter_smoke() {
     let cfg = oxibrain_llm_mlx::config::Qwen3Config::load(dir).unwrap();
     assert!(cfg.is_moe());
     assert_eq!(cfg.quant_for("model.layers.0.mlp.gate").unwrap().bits, 8);
-    assert_eq!(cfg.quant_for("model.layers.0.mlp.gate").unwrap().group_size, GROUP);
     assert_eq!(
-        cfg.quant_for("model.layers.0.mlp.switch_mlp.experts.0.gate_proj").unwrap().bits,
+        cfg.quant_for("model.layers.0.mlp.gate").unwrap().group_size,
+        GROUP
+    );
+    assert_eq!(
+        cfg.quant_for("model.layers.0.mlp.switch_mlp.experts.0.gate_proj")
+            .unwrap()
+            .bits,
         4
     );
 

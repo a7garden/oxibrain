@@ -114,8 +114,8 @@ pub fn load_weights(dir: &Path) -> Result<HashMap<String, Array>, String> {
 /// identical sizes would evade it — accepted for v1, see ADR-017.
 pub fn model_fingerprint(dir: &Path) -> Result<String, String> {
     let mut hasher = blake3::Hasher::new();
-    let config = std::fs::read(dir.join("config.json"))
-        .map_err(|e| format!("read config.json: {e}"))?;
+    let config =
+        std::fs::read(dir.join("config.json")).map_err(|e| format!("read config.json: {e}"))?;
     hasher.update(&config);
     for shard in shard_files(dir)? {
         let name = shard
