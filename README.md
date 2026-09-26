@@ -25,6 +25,7 @@ byte for byte.
 
 - [Install](#install)
 - [Quick start](#quick-start)
+- [Backup and restore](#backup-and-restore)
 - [Agent skill](#agent-skill)
 - [Architecture](#architecture)
 - [Project structure](#project-structure)
@@ -89,6 +90,31 @@ are the orientation and introspection entries into the op surface.
 Agents use CLI operations directly or launch a caller-owned `admin serve --stdio`
 child through `oxibrain-client`. The foreground `admin serve --http <address>`
 variant exposes the local operations console.
+
+## Backup and restore
+
+```bash
+oxibrain --dir /path/to/brain admin backup --out /path/to/backup-generation
+oxibrain --dir /path/to/empty-restore-target admin restore /path/to/backup-generation
+```
+
+Backup uses SQLite's online API so a WAL-backed brain can be snapshotted while
+another process writes. The backup directory contains a generation manifest
+with file digests and schema versions. Restore rejects a missing, changed, or
+corrupt artifact and refuses to overwrite an existing directory. Use a new
+directory for an isolated restore check; moving it into service is a separate
+operator step.
+
+The artifact includes brain.db, documents.toml when present, and model weights
+under the brain directory. It excludes the rebuildable documents.db and all
+external document roots and shared vaults; those source documents need their
+own backup. `--no-projection` omits rebuildable memory projection rows.
+`--no-cache` also omits extraction cache and brain-local model weights;
+restore reprojects the ledger, and extracted knowledge needs
+`admin extract --pending` afterward. Model weights configured outside the
+brain directory are never copied. A local backup directory is still on the
+same failure domain until copied to a separate, appropriately protected
+destination and restored there.
 
 ## Agent skill
 

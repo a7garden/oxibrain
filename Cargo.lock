@@ -2807,6 +2807,7 @@ name = "oxibrain-cli"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "keyring",
  "oxibrain",

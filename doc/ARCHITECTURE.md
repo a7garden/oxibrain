@@ -1,5 +1,12 @@
 # oxibrain — Architecture
-> **Version:** v2.18 · **Date:** 2026-09-19 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.19 · **Date:** 2026-09-26 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.19 — Detached backup and restore.** The admin CLI snapshots brain.db
+> through SQLite's online backup API, validates integrity, and records a
+> generation plus per-file BLAKE3 digests. It carries documents.toml and
+> brain-local model weights, but not the disposable documents.db or external
+> document roots and shared vaults. Restore verifies the artifact and writes
+> only to a new directory; any projection omitted from the artifact is rebuilt
+> there before publication. The local artifact is not an off-machine copy.
 > **v2.18 — Inference: native in-process MLX engine, selected per manifest entry (ADR-017).**
 > `oxibrain-llm-mlx` (feature `mlx`) runs Qwen3 dense/MoE `mlx-community` checkpoints directly
 > — no server, no Python. Manifest `format = "mlx"` picks the engine; GGUF stays the default
@@ -2402,8 +2409,17 @@ production callers omit it and use the embedded assets.
 
 - Full-fidelity JSONL export of ledger + cache + audit, round-trip tested: `export | import`
   into an empty store, then `reproject`, yields a byte-identical **truth half**.
-- `oxibrain backup` uses SQLite's online backup API (WAL-safe), with `--no-projection` (always
-  safe) and `--no-cache` (smaller; restore needs re-extraction and a model re-fetch).
+- `oxibrain admin backup` uses SQLite's online backup API (WAL-safe). Its
+  manifest records a generation, schema, exclusions, and a BLAKE3 digest for
+  every included file. The default carries the whole brain.db (including
+  projection and extraction cache), documents.toml when present, and model
+  weights inside the brain directory. `--no-projection` removes rebuildable
+  memory projection rows; `--no-cache` removes extraction cache and model
+  weights and also omits the projection. The disposable documents.db and
+  external document roots/shared vaults are separate backup obligations.
+  `oxibrain admin restore` accepts only an absent `--dir` destination,
+  verifies digests and SQLite integrity, and reprojects when necessary.
+  Cache omission requires re-extraction and possibly a model re-fetch.
 - `BrainError` variants each document whether they are retryable and whose fault they are:
   `Config, Storage, Migration{found,expected}, Locked{holder}, Scope{required}, NotFound,
   `Config, Storage, Migration{found,expected}, Locked{holder}, Busy (documents.db
