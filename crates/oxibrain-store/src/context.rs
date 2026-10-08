@@ -16,6 +16,9 @@ pub struct RecallHints {
     pub topic_changed: bool,
     /// Recent query texts (for salience boost of entities mentioned repeatedly).
     pub recent_queries: Vec<String>,
+    /// The caller's current session id. When set, the SessionSummaries layer
+    /// excludes that session's own summary (prior sessions only).
+    pub session_id: Option<String>,
 }
 
 /// Pack context for a query to a token budget. When `hints` is provided,
@@ -98,7 +101,7 @@ pub fn build_context_input(
         .prepare(
             "SELECT id, content, ingested_at FROM episodes
              WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
-               AND source_kind NOT IN ('document', 'document_revision')
+               AND source_kind NOT IN ('document', 'document_revision', 'session')
              ORDER BY ingested_at DESC LIMIT ?2",
         )
         .map_err(sql_err)?;
@@ -126,7 +129,81 @@ pub fn build_context_input(
     // 5. Summaries with sources (§12.4) — cached Derived-episode summaries.
     load_summaries(conn, space, &mut input)?;
 
+    // 6. Session summaries — prior sessions, newest-first (session memory).
+    // The current session (hints.session_id) is excluded: its summary is
+    // recorded at session end, so recalling mid-session must not see it.
+    load_session_summaries(
+        conn,
+        space,
+        hints.and_then(|h| h.session_id.as_deref()),
+        &mut input,
+    )?;
+
     Ok(input)
+}
+
+/// Session summaries: last 5 session episodes, newest-first by occurred_at,
+/// excluding the caller's current session when given.
+fn load_session_summaries(
+    conn: &Connection,
+    space: &str,
+    exclude_session_id: Option<&str>,
+    input: &mut oxibrain_core::pack::ContextInput,
+) -> Result<(), BrainError> {
+    input
+        .session_summaries
+        .extend(list_session_episodes(conn, space, 5, exclude_session_id)?);
+    Ok(())
+}
+
+/// Session episodes for a space, newest-first by occurred_at. `limit` caps
+/// the result; `exclude_session_id` drops one session (the caller's current
+/// one). Session ids are parsed from the source_ref JSON column.
+pub fn list_session_episodes(
+    conn: &Connection,
+    space: &str,
+    limit: i64,
+    exclude_session_id: Option<&str>,
+) -> Result<Vec<oxibrain_core::pack::SessionSummary>, BrainError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, content, occurred_at, source_ref FROM episodes
+             WHERE space_id = ?1 AND redacted_at IS NULL AND source_kind = 'session'
+               AND (?2 IS NULL OR json_extract(source_ref, '$.session_id') != ?2)
+             ORDER BY occurred_at DESC, id DESC LIMIT ?3",
+        )
+        .map_err(sql_err)?;
+    let rows = stmt
+        .query_map(params![space, exclude_session_id, limit], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(sql_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_err)?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (episode_id, summary, occurred_at, source_ref) in rows {
+        let session_id = source_ref
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| {
+                v.get("session_id")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| episode_id.clone());
+        out.push(oxibrain_core::pack::SessionSummary {
+            session_id,
+            episode_id,
+            occurred_at,
+            summary,
+        });
+    }
+    Ok(out)
 }
 
 /// Profile: beliefs where subject is a pinned/high-salience entity AND the

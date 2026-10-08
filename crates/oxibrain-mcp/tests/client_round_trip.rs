@@ -328,3 +328,61 @@ async fn client_registers_document_root_over_stdio_boundary() {
     assert_eq!(text.matches("[[root]]").count(), 1);
     assert!(text.contains(&path));
 }
+
+#[tokio::test]
+async fn client_round_trips_session_memory() {
+    let (_dir, mut client) = spawn_server().await;
+
+    // Record two session summaries; re-recording identical bytes is idempotent.
+    client
+        .session_record("personal", "sess-1", "Discussed the florb widget redesign.")
+        .await
+        .expect("record sess-1");
+    client
+        .session_record("personal", "sess-2", "Planned the 2027 roadmap offsite.")
+        .await
+        .expect("record sess-2");
+    let replay = client
+        .session_record("personal", "sess-2", "Planned the 2027 roadmap offsite.")
+        .await
+        .expect("idempotent replay");
+    assert!(replay.contains("sess-2"), "{replay}");
+
+    // session_list: newest-first, both sessions present.
+    let list = client.session_list("personal").await.expect("list");
+    let rows = list.as_array().expect("data array");
+    assert_eq!(rows.len(), 2, "{list}");
+    assert_eq!(rows[0]["session_id"], "sess-2");
+    assert_eq!(rows[1]["session_id"], "sess-1");
+    assert!(rows[0]["episode_id"].as_str().is_some());
+
+    // recall with session_id excludes the caller's own session from the
+    // SessionSummaries layer but keeps the prior one.
+    let envelope = client
+        .call_tool_json(
+            "recall",
+            json!({ "query": "roadmap", "space": "personal", "session_id": "sess-2" }),
+        )
+        .await
+        .expect("recall");
+    let layers = serde_json::to_string(&envelope["data"]["layers"]).unwrap();
+    assert!(
+        !layers.contains("sess-2"),
+        "current session must be excluded: {layers}"
+    );
+    assert!(
+        layers.contains("sess-1"),
+        "prior session included: {layers}"
+    );
+    assert!(
+        layers.contains("SessionSummaries") || layers.contains("session_summaries"),
+        "session layer present: {layers}"
+    );
+
+    // Empty session_id is rejected before any write.
+    let err = client
+        .session_record("personal", "  ", "blank id")
+        .await
+        .expect_err("blank session_id rejected");
+    assert!(err.to_string().contains("session_id"), "{err}");
+}

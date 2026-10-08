@@ -70,6 +70,10 @@
             "description": "What information to assemble.",
             "type": "string"
           },
+          "session_id": {
+            "description": "The caller's current session id. Prior-session summaries are included in the SessionSummaries layer; this session's own summary is excluded.",
+            "type": "string"
+          },
           "space": {
             "description": "Space name (required; enumerate with oxibrain describe).",
             "type": "string"
@@ -525,6 +529,61 @@
         "type": "object"
       },
       "name": "redact"
+    },
+    {
+      "description": "Record an agent session summary as a Primary episode with session provenance. occurrence_id is the session_id, so re-recording identical bytes is idempotent. Recall includes prior sessions as the SessionSummaries layer.",
+      "inputSchema": {
+        "properties": {
+          "occurred_at": {
+            "description": "RFC3339 timestamp of the session (default: now).",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "The agent session's id. Event identity — re-recording the same session id with identical bytes is idempotent.",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (required; enumerate with oxibrain describe).",
+            "type": "string"
+          },
+          "summary": {
+            "description": "The session summary text (non-empty).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "session_id",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "name": "session_record"
+    },
+    {
+      "description": "List recorded session summaries for a space, newest-first. Pass session_id to exclude the caller's current session.",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "description": "Maximum sessions returned, newest-first (default: 10, max: 50).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "session_id": {
+            "description": "Exclude this session id (typically the caller's current session).",
+            "type": "string"
+          },
+          "space": {
+            "description": "Space name (required; enumerate with oxibrain describe).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space"
+        ],
+        "type": "object"
+      },
+      "name": "session_list"
     }
   ]
 }

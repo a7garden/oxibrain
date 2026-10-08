@@ -558,6 +558,30 @@ impl BrainClient {
             .await
     }
 
+    /// `session_record` — record a session summary (Ingest cap).
+    pub async fn session_record(
+        &mut self,
+        space: &str,
+        session_id: &str,
+        summary: &str,
+    ) -> Result<String> {
+        self.call_tool(
+            "session_record",
+            json!({
+                "space": space,
+                "session_id": session_id,
+                "summary": summary
+            }),
+        )
+        .await
+    }
+
+    /// `session_list` — newest-first session summaries (Read cap).
+    pub async fn session_list(&mut self, space: &str) -> Result<Value> {
+        self.call_tool_data("session_list", json!({ "space": space }))
+            .await
+    }
+
     /// `why` — provenance and confidence breakdown (Read cap).
     pub async fn why(&mut self, statement_id: &str, space: &str) -> Result<Value> {
         self.call_tool_json(

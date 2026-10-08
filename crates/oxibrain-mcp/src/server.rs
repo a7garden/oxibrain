@@ -178,6 +178,8 @@ impl BrainServer {
             | "traverse" => Some(Capability::Read),
             "ingest" => Some(Capability::Ingest),
             "declare" | "remember" | "retract" | "merge_entities" => Some(Capability::Write),
+            "session_record" => Some(Capability::Ingest),
+            "session_list" => Some(Capability::Read),
             "redact" => Some(Capability::Redact),
             _ => None,
         }
@@ -595,6 +597,8 @@ impl BrainServer {
             "retract" => self.tool_retract(&args).await,
             "merge_entities" => self.tool_merge_entities(&args).await,
             "redact" => self.tool_redact(&args).await,
+            "session_record" => self.tool_session_record(&args).await,
+            "session_list" => self.tool_session_list(&args).await,
             other => return Err((METHOD_NOT_FOUND, format!("unknown tool: {other}"))),
         };
         match outcome {
@@ -658,9 +662,18 @@ impl BrainServer {
         let space_id = self.resolve_space_arg(args).await?;
         let query = str_arg(args, "query")?;
         let budget = u_arg_or(args, "token_budget", 3000);
+        // Session memory: when the caller identifies its session, prior
+        // session summaries are included and its own is excluded.
+        let hints = oxibrain::RecallHints {
+            session_id: args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            ..Default::default()
+        };
         let ctx = self
             .brain
-            .assemble_context(&space_id, query, budget)
+            .assemble_context_with_hints(&space_id, query, budget, &hints)
             .await
             .map_err(ToolErr::run)?;
         // v2.13 P5: the envelope reports what was spent and what was
@@ -1410,6 +1423,66 @@ impl BrainServer {
         self.try_sample_extract(&space_id, &id, session).await
     }
 
+    /// `session_record` — store a session summary as a Primary episode with
+    /// `SourceRef::Session` provenance (session memory). Occurrence id is the
+    /// session id, so re-recording identical bytes is idempotent.
+    async fn tool_session_record(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.resolve_space_arg(args).await?;
+        let session_id = str_arg(args, "session_id")?;
+        if session_id.trim().is_empty() {
+            return Err(ToolErr::Params("session_id must be non-empty".into()));
+        }
+        let summary = str_arg(args, "summary")?;
+        if summary.trim().is_empty() {
+            return Err(ToolErr::Params("summary must be non-empty".into()));
+        }
+        let now = SystemClock.now();
+        let occurred_at = match args.get("occurred_at").and_then(|v| v.as_str()) {
+            Some(rfc3339) => {
+                Timestamp::from_millis(parse_rfc3339_millis(rfc3339).ok_or_else(|| {
+                    ToolErr::Params(format!(
+                        "occurred_at: invalid RFC3339 timestamp '{rfc3339}'"
+                    ))
+                })?)
+            }
+            None => now,
+        };
+        let id = self
+            .brain
+            .record_session(&space_id, session_id, summary.to_string(), occurred_at)
+            .await
+            .map_err(ToolErr::run)?;
+        Ok(format!("Recorded session {session_id} as episode: {id}"))
+    }
+
+    /// `session_list` — newest-first session summaries for a space.
+    async fn tool_session_list(&self, args: &Value) -> Result<String, ToolErr> {
+        let space_id = self.resolve_space_arg(args).await?;
+        let limit = u_arg_or(args, "limit", 10).min(50) as i64;
+        let exclude = args
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let sessions = self
+            .brain
+            .list_sessions(&space_id, limit, exclude.as_deref())
+            .await
+            .map_err(ToolErr::run)?;
+        let rows: Vec<Value> = sessions
+            .iter()
+            .map(|s| {
+                json!({
+                    "session_id": s.session_id,
+                    "occurred_at": s.occurred_at,
+                    "summary": s.summary,
+                    "episode_id": s.episode_id,
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&json!({ "data": rows }))
+            .map_err(|e| ToolErr::Run(format!("serialize: {e}")))
+    }
+
     async fn tool_retract(&self, args: &Value) -> Result<String, ToolErr> {
         let space_id = self.resolve_space_arg(args).await?;
         // Statement-first path: when `statement_id` is given, the declaration
@@ -1813,6 +1886,84 @@ fn validate_id(field: &str, id: &str) -> Result<(), ToolErr> {
              resolve or search op; never guess or construct them"
         )))
     }
+}
+
+/// Parse an RFC3339 timestamp (`Z` or numeric offset, optional fractional
+/// seconds) to millis since the Unix epoch. No external time dependency.
+fn parse_rfc3339_millis(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() < 20 {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (year, month, day) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    if b[4] != b'-' || b[7] != b'-' || !matches!(b[10], b'T' | b't' | b' ') {
+        return None;
+    }
+    let (hour, minute, second) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    if !(0..24).contains(&hour)
+        || !(0..60).contains(&minute)
+        || !(0..62).contains(&second)
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+    {
+        return None;
+    }
+    let mut idx = 19;
+    let mut millis = 0i64;
+    if b.get(idx) == Some(&b'.') {
+        let start = idx + 1;
+        let mut end = start;
+        while end < b.len() && b[end].is_ascii_digit() {
+            end += 1;
+        }
+        if end == start {
+            return None;
+        }
+        let frac = &s[start..end];
+        let scaled: i64 = frac.parse().ok()?;
+        millis = match frac.len() {
+            1 => scaled * 100,
+            2 => scaled * 10,
+            3 => scaled,
+            n => scaled / 10i64.pow((n - 3) as u32),
+        };
+        idx = end;
+    }
+    let offset_min = match b.get(idx)? {
+        b'Z' | b'z' => {
+            if idx + 1 != b.len() {
+                return None;
+            }
+            0
+        }
+        sign @ (b'+' | b'-') => {
+            let sign: i64 = if *sign == b'-' { -1 } else { 1 };
+            if b.get(idx + 3) != Some(&b':') || idx + 6 != b.len() {
+                return None;
+            }
+            let (oh, om): (i64, i64) = (
+                s.get(idx + 1..idx + 3)?.parse().ok()?,
+                s.get(idx + 4..idx + 6)?.parse().ok()?,
+            );
+            sign * (oh * 60 + om)
+        }
+        _ => return None,
+    };
+    let secs = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second
+        - offset_min * 60;
+    Some(secs * 1000 + millis)
+}
+
+/// Days since the Unix epoch for a UTC civil date (Hinnant's algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolErr> {
@@ -2680,16 +2831,16 @@ mod tests {
                 "{expected} schema must require space"
             );
         }
-        // Discovery/handshake MUST NOT change the MCP tool surface. The
-        // contract is "fourteen tools" (v2.13 P3 cutover: −stats,
-        // −review_merges, +resolve; ADR-012).
+        // Discovery/handshake MUST NOT change the MCP tool surface.
+        // v2.13 P3 cutover: −stats, −review_merges, +resolve (ADR-012);
+        // session memory: +session_record, +session_list.
         for gone in ["stats", "review_merges"] {
             assert!(!names.contains(&gone), "{gone} must be off the tool list");
         }
         assert_eq!(
             names.len(),
-            14,
-            "MCP tool count must remain exactly 14; got {}: {:?}",
+            16,
+            "MCP tool count must remain exactly 16; got {}: {:?}",
             names.len(),
             names
         );
@@ -2739,8 +2890,8 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            8,
-            "Read-only surface is exactly 8 ops: {names:?}"
+            9,
+            "Read-only surface is exactly 9 ops: {names:?}"
         );
     }
 

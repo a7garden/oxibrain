@@ -12,6 +12,7 @@ pub mod models;
 pub mod paths;
 pub mod pull_plan;
 mod render;
+mod session;
 pub use config::BrainConfig;
 pub use document_plane::{
     DocumentFreshness, DocumentHit, DocumentRootSpec, IndexOptions, PendingStats,
@@ -30,6 +31,7 @@ pub use oxibrain_ports::{
     SystemClock, Timestamp, TokenizerPort,
 };
 
+pub use oxibrain_store::context::RecallHints;
 use oxibrain_store::documents::DocumentCache;
 pub use oxibrain_store::ledger::IngestAttachment;
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};

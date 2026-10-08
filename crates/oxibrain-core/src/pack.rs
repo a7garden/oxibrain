@@ -103,6 +103,17 @@ pub struct DocumentExcerpt {
     pub score: f32,
 }
 
+/// Prior-session summary line (session memory). One per recorded session
+/// episode; rendered one line each in the `SessionSummaries` layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub episode_id: String,
+    /// Occurrence time (millis since epoch).
+    pub occurred_at: i64,
+    pub summary: String,
+}
+
 /// §12.3 input — the raw material pack turns into a context.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContextInput {
@@ -111,6 +122,10 @@ pub struct ContextInput {
     pub neighborhood: Vec<RenderedEdge>,
     pub episodes: Vec<EpisodeExcerpt>,
     pub summaries: Vec<SummaryWithUncertainty>,
+    /// Prior-session summaries (session memory). Caller-controlled order
+    /// (already newest-first).
+    #[serde(default)]
+    pub session_summaries: Vec<SessionSummary>,
     /// Document-plane excerpts (Daemonless Two-Plane §6.7). Order is
     /// caller-controlled (already ranked by the document plane).
     #[serde(default)]
@@ -376,6 +391,27 @@ pub fn pack(
         &mut remaining,
     );
 
+    // 7. Session summaries — prior sessions, one line each, after
+    // RecentEpisodes (session episodes are excluded from that layer).
+    if !input.session_summaries.is_empty() {
+        let blocks: Vec<(String, String)> = input
+            .session_summaries
+            .iter()
+            .map(|s| (render_session_line(s), s.session_id.clone()))
+            .collect();
+        let ceiling = remaining;
+        let (text, prov, tokens) = fill_lines(&blocks, ceiling, remaining, tokenizer);
+        total_tokens += tokens;
+        if !text.is_empty() {
+            layers.push(ContextLayer {
+                kind: LayerKind::SessionSummaries,
+                text,
+                estimated_tokens: tokens,
+                provenance: prov,
+            });
+        }
+    }
+
     // Post-conditions (defensive; pre-M8 callers ignore them).
     debug_assert!(total_tokens <= budget.max_tokens, "pack exceeded budget");
     ContextResult {
@@ -508,6 +544,34 @@ fn render_episodes(
         });
     }
     truncated
+}
+
+/// One session-summary line: `[session <id> <YYYY-MM-DD>] <first ~200 chars>`.
+fn render_session_line(s: &SessionSummary) -> String {
+    let head: String = s.summary.chars().take(200).collect();
+    format!(
+        "[session {} {}] {}",
+        s.session_id,
+        format_date(s.occurred_at),
+        head
+    )
+}
+
+/// UTC calendar date (YYYY-MM-DD) from millis since epoch. Civil-from-days
+/// (Howard Hinnant's algorithm) — no external time dependency.
+fn format_date(millis: i64) -> String {
+    let days = millis.div_euclid(86_400_000);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 fn expand_score(ep: &EpisodeExcerpt) -> f64 {

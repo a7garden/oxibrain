@@ -3,6 +3,7 @@
 use blake3::Hash;
 use oxibrain_ports::Timestamp;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// BLAKE3 digest over normalized content.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -100,6 +101,7 @@ pub enum SourceRef {
     ArtifactEvent { uri: String },
     WebClip { uri: String },
     CalendarEvent { uri: String },
+    Session { session_id: String },
     Declaration,
     Derived { of: String },
 }
@@ -117,6 +119,11 @@ impl SourceRef {
             Self::ArtifactEvent { uri } => ("artifact_event", Some(uri.clone())),
             Self::WebClip { uri } => ("web_clip", Some(uri.clone())),
             Self::CalendarEvent { uri } => ("calendar_event", Some(uri.clone())),
+            // source_ref column carries {"session_id": …} (TEXT column, no migration).
+            Self::Session { session_id } => (
+                "session",
+                Some(json!({ "session_id": session_id }).to_string()),
+            ),
             Self::Declaration => ("declaration", None),
             Self::Derived { of } => ("derived", Some(of.clone())),
         }

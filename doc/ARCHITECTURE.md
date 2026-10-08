@@ -1,5 +1,5 @@
 # oxibrain — Architecture
-> **Version:** v2.19 · **Date:** 2026-09-26 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.20 · **Date:** 2026-10-08 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **v2.19 — Detached backup and restore.** The admin CLI snapshots brain.db
 > through SQLite's online backup API, validates integrity, and records a
 > generation plus per-file BLAKE3 digests. It carries documents.toml and
@@ -28,6 +28,15 @@
 > ledger/projection split — `documents.db` stays a disposable projection and PDC documents
 > never become episodes.
 >
+> **v2.20 — Session memory (owner decision, 2026-10-08).** Session summaries become first-class
+> provenance: new `SourceRef::Session { session_id }` (source_kind `session`, zero migration),
+> ops `session_record` (event-path Primary episode, occurrence_id = session_id, idempotent
+> replay) and `session_list` (newest-first, limit-capped), and a `SessionSummaries` recall
+> layer (last 5, rendered one line each, placed after RecentEpisodes; session episodes leave
+> the RecentEpisodes layer to avoid double counting). `recall` gains an optional `session_id`
+> that excludes the current session's summary from the layer. The MCP tool surface moves
+> fourteen → sixteen by explicit owner decision; the add-one-remove-one rule remains for
+> future growth.
 > **v2.15 — Unified Oxi home (spec `docs/superpowers/specs/2026-08-29-oxi-home-layout-design.md`, ADR-015).**
 > One discoverable root (`~/.oxi`, override `OXI_HOME`) with strict ownership: `brain/` is
 > oxibrain-private, `spaces/<space>/vault/` is the only shared write area (oximemo owns space
@@ -2051,8 +2060,8 @@ Retrieval quality is not the only axis. Published ablations on wiki-structured r
 memory-as-a-filesystem products reach for the same affordance so agents can explore rather than
 receive.
 
-Two tools. Not more — a large tool surface is a warning, not a target. **Fifteen MCP tools is
-the cap** (§15.2).
+Two tools. Not more — a large tool surface is a warning, not a target. **Sixteen MCP tools is
+the cap** (§15.2; v2.20 session memory).
 
 ```
 brief(target: Entity | Topic | Space, depth) -> Markdown
@@ -2277,9 +2286,13 @@ boundary by construction.
 | `declare` / `retract` | Write | deterministic, no model; `predicate` is a registry-generated enum (v2.13 P3) |
 | `merge_entities` | Write | resolution maintenance |
 | `redact` | Redact | destructive; separate capability on purpose; plan-token guarded (v2.13 P6) |
+| `session_record` | Ingest | v2.20; session summary as Primary episode, `session_id` = occurrence id, idempotent replay |
+| `session_list` | Read | v2.20; newest-first session summaries, limit-capped, optional `session_id` exclusion |
 
-**Fourteen (v2.13, ADR-012; fifteen through v2.12).** The cap rule is unchanged: adding
-one requires removing one. The P3 cutover moves `stats` → the `describe` orientation
+**Sixteen (v2.20: +`session_record`, +`session_list`; fourteen through v2.13, fifteen through
+v2.12).** The cap rule is unchanged — adding one requires removing one; v2.20 grew the surface
+by explicit owner decision (session memory, 2026-10-08). The P3 cutover moves `stats` → the
+`describe` orientation
 resource (+ `admin stats`) and `review_merges` → `admin review`, and adds `resolve`.
 **Discriminator unions (`kind`/`section` switches) are banned inside agent-facing ops** —
 a switch is evidence of two ops; the cap is fed by slot accounting, not union mega-tools.
@@ -2936,7 +2949,7 @@ Considered against working implementations, recorded so they are not re-litigate
 | Materializing a wiki as files | LLM-Wiki, memory-as-filesystem | Violates §1.4, conflicts with P1. §14 delivers the affordance without the maintenance debt |
 | Embedded graph database | Kùzu, Cozo, SurrealDB | **D12** |
 | DSPy-style prompt compilation as a dependency | autoflow | Python. §9.6 keeps the idea and drops the dependency |
-| A large MCP tool surface | Stash (28 tools) | Navigability, not tool count. **Fifteen is the cap** |
+| A large MCP tool surface | Stash (28 tools) | Navigability, not tool count. **Sixteen is the cap** (v2.20) |
 | **Driving the user's agent CLI for inference** | tolaria (`claude_cli.rs`, `codex_cli.rs`, …) | **C2.** Reasonable for an editor whose value is the files. For a memory engine it makes the core capability contingent on other software being installed, and makes extraction quality vary by which CLI is present |
 | Per-language tokenizers behind a detector | the standard CJK recipe | **C3 / §7.2.** Detection fails on short, mixed and code-heavy text; unbounded maintenance; discontinuous behaviour. Fusion replaces routing (§7.4) |
 | Owning the editor | tolaria, Obsidian | §1.4. Editor-agnosticism makes their users our users |

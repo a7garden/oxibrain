@@ -29,6 +29,10 @@ pub enum LayerKind {
     Documents,
     Summaries,
     RecentEpisodes,
+    /// Prior-session summary lines (session memory). Rendered after
+    /// RecentEpisodes; session episodes are excluded from that layer to
+    /// avoid double counting.
+    SessionSummaries,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

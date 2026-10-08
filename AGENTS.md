@@ -39,8 +39,8 @@ service, account, or API key.
   and are not called "semantic".
 - **Tokenization:** behind `TokenizerPort`, supplied by the model. Token budgets
   are counted, never estimated (`ARCHITECTURE.md` §7.5).
-- **MCP:** oxibrain owns tool semantics; **fifteen tools is the cap**
-  (`ARCHITECTURE.md` §16.2).
+- **MCP:** oxibrain owns tool semantics; **sixteen tools is the cap**
+  (`ARCHITECTURE.md` §16.2; v2.20 session memory).
 - **Workspace:** Cargo workspace, crates under `crates/` (`ARCHITECTURE.md` §18).
 - **Frontend:** Vite + React 19 + Tailwind v4, in `apps/`.
 
@@ -170,7 +170,7 @@ if tests pass; changing one requires revising the architecture doc first.**
   connectors. Quick capture writes episodes, never files.
 - Do **not** let extraction output reach `beliefs` without passing the validator.
   Invalid output goes to `extraction_failures`, never silently dropped.
-- Do **not** exceed **fifteen** MCP tools. Adding one requires removing one.
+- Do **not** exceed **sixteen** MCP tools (v2.20 session memory). Adding one requires removing one.
 - Do **not** accept a filter in a type and ignore it in the executor. That
   happened three times (F1, F3, F11) and is why P9 exists.
 

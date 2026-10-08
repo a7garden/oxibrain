@@ -18,12 +18,12 @@ fn generated_skill_lists_every_registry_op() {
             "CONTEXT.md must have a section for {name}"
         );
     }
-    // Count is the contract (ADR-012): 14 ops post-P3 cutover.
+    // Count is the contract (ADR-012 + session memory): 16 ops.
     let listed = skill
         .lines()
         .filter(|l| l.starts_with("- `") && l.contains("` — "))
         .count();
-    assert_eq!(listed, 14, "SKILL.md tool surface lists exactly 14 ops");
+    assert_eq!(listed, 16, "SKILL.md tool surface lists exactly 16 ops");
 }
 
 #[test]

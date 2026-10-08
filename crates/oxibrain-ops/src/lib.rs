@@ -59,7 +59,8 @@ fn recall_schema() -> Value {
         "properties": {
             "query": { "type": "string", "description": "What information to assemble." },
             "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
-            "token_budget": { "type": "integer", "minimum": 1, "description": "Maximum tokens for the assembled context (default: 3000)." }
+            "token_budget": { "type": "integer", "minimum": 1, "description": "Maximum tokens for the assembled context (default: 3000)." },
+            "session_id": { "type": "string", "description": "The caller's current session id. Prior-session summaries are included in the SessionSummaries layer; this session's own summary is excluded." }
         },
         "required": ["query", "space"]
     })
@@ -225,6 +226,31 @@ fn redact_schema() -> Value {
     })
 }
 
+fn session_record_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
+            "session_id": { "type": "string", "description": "The agent session's id. Event identity — re-recording the same session id with identical bytes is idempotent." },
+            "summary": { "type": "string", "description": "The session summary text (non-empty)." },
+            "occurred_at": { "type": "string", "description": "RFC3339 timestamp of the session (default: now)." }
+        },
+        "required": ["space", "session_id", "summary"]
+    })
+}
+
+fn session_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
+            "limit": { "type": "integer", "minimum": 1, "description": "Maximum sessions returned, newest-first (default: 10, max: 50)." },
+            "session_id": { "type": "string", "description": "Exclude this session id (typically the caller's current session)." }
+        },
+        "required": ["space"]
+    })
+}
+
 // ── the registry (order is the tools/list order) ────────────────────────────
 
 pub const OPS: &[OpSpec] = &[
@@ -326,6 +352,20 @@ pub const OPS: &[OpSpec] = &[
         caps: &[CAP_REDACT],
         mutating: true,
     },
+    OpSpec {
+        name: "session_record",
+        summary: "Record an agent session summary as a Primary episode with session provenance. occurrence_id is the session_id, so re-recording identical bytes is idempotent. Recall includes prior sessions as the SessionSummaries layer.",
+        schema: session_record_schema,
+        caps: &[CAP_INGEST],
+        mutating: false,
+    },
+    OpSpec {
+        name: "session_list",
+        summary: "List recorded session summaries for a space, newest-first. Pass session_id to exclude the caller's current session.",
+        schema: session_list_schema,
+        caps: &[CAP_READ],
+        mutating: false,
+    },
 ];
 
 /// The registry, in tools/list order.
@@ -374,13 +414,13 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_fourteen_unique_ops_with_schemas() {
+    fn registry_has_sixteen_unique_ops_with_schemas() {
         let list = tools_list();
         let tools = list["tools"].as_array().unwrap();
         assert_eq!(
             tools.len(),
-            14,
-            "v2.13 P3 cutover: 14 ops (−stats, −review_merges, +resolve; ADR-012)"
+            16,
+            "session memory: 16 ops (ADR-012 14 + session_record + session_list)"
         );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         let mut sorted = names.clone();
