@@ -5,11 +5,22 @@ use crate::project::{ResolutionCache, parse_declaration, project_declaration};
 use crate::sql_err;
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::Connection;
+use serde::Serialize;
+
+/// Outcome summary of a full reprojection replay.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct ReprojectReport {
+    /// Declaration episodes successfully replayed into the projection.
+    pub declarations_replayed: usize,
+    /// Declaration episodes that failed to parse and were skipped (counted,
+    /// logged, never mutated — the ledger is immutable).
+    pub declarations_skipped: usize,
+}
 
 /// Drop all projection tables and replay Declaration episodes in canonical
 /// (seq ASC) order. The result must be byte-identical to the incremental
 /// projection (tested in the integration test suite).
-pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
+pub fn reproject(conn: &Connection) -> Result<ReprojectReport, BrainError> {
     // 1. Delete all projection rows (order respects FK constraints).
     // Beliefs first (FK to statements), then mentions (FK to assertions),
     // then assertions (FK to statements), then statements,
@@ -61,9 +72,24 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
     //    (space, type) for the whole reproject (M9 §10.1 — sublinear per
     //    mention amortized, not just per individual resolution).
     let mut cache = ResolutionCache::new();
-    for (_ep_id, space, content, ingested_at) in &episodes {
-        let decl = parse_declaration(content)?;
+    let mut report = ReprojectReport::default();
+    for (ep_id, space, content, ingested_at) in &episodes {
+        let decl = match parse_declaration(content) {
+            Ok(decl) => decl,
+            Err(e) => {
+                // One unparseable episode must never abort the replay. Count,
+                // log, skip — the episode itself stays untouched in the ledger.
+                tracing::warn!(
+                    episode_id = %ep_id,
+                    error = %e,
+                    "reproject: skipping unparseable declaration episode"
+                );
+                report.declarations_skipped += 1;
+                continue;
+            }
+        };
         project_declaration(conn, space, &decl, Timestamp(*ingested_at), &mut cache)?;
+        report.declarations_replayed += 1;
     }
     drop(episodes);
 
@@ -143,5 +169,5 @@ pub fn reproject(conn: &Connection) -> Result<(), BrainError> {
         crate::communities::rebuild_communities(conn, space)?;
     }
 
-    Ok(())
+    Ok(report)
 }

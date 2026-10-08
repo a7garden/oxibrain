@@ -1197,7 +1197,8 @@ impl BrainServer {
             .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
 
         let completed_at = self.brain.clock_now().0;
-        self.brain
+        let report = self
+            .brain
             .reproject()
             .await
             .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
@@ -1210,6 +1211,8 @@ impl BrainServer {
 
         Ok(json!({
             "completed_at": completed_at,
+            "declarations_replayed": report.declarations_replayed,
+            "declarations_skipped": report.declarations_skipped,
             "entities_reprojected": after.entities,
             "statements_updated": after.statements,
             "before": {

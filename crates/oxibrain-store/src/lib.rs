@@ -38,7 +38,7 @@ pub use project::{
     parse_declaration, project_declaration,
 };
 pub use reader::ReaderPool;
-pub use reproject::reproject;
+pub use reproject::{ReprojectReport, reproject};
 pub use writer::WriterActor;
 
 use oxibrain_ports::BrainError;

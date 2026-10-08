@@ -168,7 +168,8 @@ pub async fn run_restore(dir: &Path, artifact: PathBuf) -> anyhow::Result<()> {
         // Rebuild only inside this isolated directory. No model or document
         // root is read and no daemon is started.
         let store = Store::open(stage.path()).context("open isolated restore")?;
-        oxibrain_store::reproject(store.connection()).context("reproject isolated restore")?;
+        let _report =
+            oxibrain_store::reproject(store.connection()).context("reproject isolated restore")?;
         drop(store);
         backup::inspect_snapshot(&db).context("verify rebuilt restore")?;
     }

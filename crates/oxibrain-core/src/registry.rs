@@ -169,15 +169,20 @@ pub enum LiteralType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PredicateDef {
     pub name: PredicateRef,
+    #[serde(deserialize_with = "deserialize_object_kind", alias = "object")]
     pub object_kind: ObjectKind,
+    #[serde(alias = "subjects")]
     pub subject_types: Vec<EntityTypeRef>,
     pub cardinality: Cardinality,
     pub temporality: Temporality,
     pub invalidation: Invalidation,
     pub symmetric: bool,
+    #[serde(default)]
     pub inverse_of: Option<PredicateRef>,
     pub description: String,
+    #[serde(default)]
     pub examples: Vec<String>,
+    #[serde(default)]
     pub deprecated_by: Option<PredicateRef>,
     /// §12.2 — predicate is "what the user wants in every answer". A predicate
     /// marked here is queried on every Profile render. Defaults to false.
@@ -191,6 +196,53 @@ pub struct PredicateDef {
     /// automatically — no special-casing in the pipeline (P4).
     #[serde(default = "default_confidence_prior")]
     pub confidence_prior: f32,
+}
+
+/// Legacy `object_kind` shapes observed in historical `RegisterPredicate`
+/// def_json (and the persisted `predicates` table):
+/// - `"object": "literal:text"` (compact string scheme),
+/// - `"object": {"kind": "literal", "literal_type": "text"}` (nested map).
+///
+/// Both map mechanically to the current untagged `ObjectKind`; anything else
+/// falls through to the regular untagged deserialization.
+fn deserialize_object_kind<'de, D>(deserializer: D) -> Result<ObjectKind, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    legacy_object_kind(&value)
+        .ok_or_else(|| serde::de::Error::custom(format!("invalid object_kind: {value}")))
+}
+
+fn legacy_object_kind(value: &serde_json::Value) -> Option<ObjectKind> {
+    match value {
+        serde_json::Value::String(s) => {
+            if let Some(lit) = s.strip_prefix("literal:") {
+                let lit: LiteralType =
+                    serde_json::from_value(serde_json::Value::String(lit.into())).ok()?;
+                Some(ObjectKind::Literal(lit))
+            } else if let Some(ty) = s.strip_prefix("entity:") {
+                Some(ObjectKind::Entity(EntityTypes::from(ty)))
+            } else {
+                serde_json::from_value(value.clone()).ok()
+            }
+        }
+        serde_json::Value::Object(map) => match map.get("kind")?.as_str()? {
+            "literal" => {
+                let lit: LiteralType =
+                    serde_json::from_value(map.get("literal_type")?.clone()).ok()?;
+                Some(ObjectKind::Literal(lit))
+            }
+            "entity" => {
+                let types: EntityTypes =
+                    serde_json::from_value(map.get("types").or_else(|| map.get("type")).cloned()?)
+                        .ok()?;
+                Some(ObjectKind::Entity(types))
+            }
+            _ => serde_json::from_value(value.clone()).ok(),
+        },
+        _ => serde_json::from_value(value.clone()).ok(),
+    }
 }
 
 /// Default confidence prior for predicates (§5.5). Normal predicates do not

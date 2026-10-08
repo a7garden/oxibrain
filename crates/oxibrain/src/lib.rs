@@ -463,8 +463,8 @@ impl Brain {
     /// the reproject pass (§7.6, F17): entity texts read via a read-only
     /// connection, embeddings computed outside any store lock, upserts
     /// written in a second short write op.
-    pub async fn reproject(&self) -> Result<(), BrainError> {
-        self.write(oxibrain_store::reproject).await?;
+    pub async fn reproject(&self) -> Result<oxibrain_store::ReprojectReport, BrainError> {
+        let report = self.write(oxibrain_store::reproject).await?;
 
         // Embed after reproject, outside the writer transaction.
         if let Some(emb) = self.embedder.clone() {
@@ -507,7 +507,7 @@ impl Brain {
                 .await?;
             }
         }
-        Ok(())
+        Ok(report)
     }
 
     /// Declare a statement, merge, or retraction. Returns the episode id.
