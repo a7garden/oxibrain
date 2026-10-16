@@ -161,11 +161,14 @@ Rules:
   `Uncertainty` block is mandatory (M10 10.1 dependency). Terminal: no assertion is ever
   extracted from one.
 - **Retrieval adds no layer.** Runbooks ride the existing `Summaries` layer
-  (summary-with-sources); member excerpts expand through `expand_top_k`. An
-  `PackPolicy::experience()` constructor beside `for_budget` — a pure decision (P9),
-  caller-selected like the `Retrieval` presets — raises `expand_top_k` and reserves
-  floor share for the `Summaries` layer. No query-shape conditional: selection is the
-  caller's, not a heuristic the pack layer would have to justify.
+  (summary-with-sources); member excerpts expand through `expand_top_k`. The
+  `PackPolicy::experience()` constructor this spec originally promised is
+  **deferred with evidence**: the measured gate (§5) shows the default policy
+  plus the FTS-matched episode harvest meets every exit criterion (workflow
+  r−b = +3 within the 2,000-token budget), and an unused public constructor
+  with no consumer is API dead weight. It returns when a consumer needs a
+  different expansion shape — the pure-decision seam (P9) it slots into
+  already exists.
 - CLI: `oxibrain admin consolidate [--mode topic|task]` — an admin verb, not an MCP tool;
   the cap is untouched.
 

@@ -50,7 +50,8 @@ pub struct TraceStep<'a> {
 /// an elision marker naming the byte count + last half. Multibyte-safe:
 /// cut points retreat/advance to UTF-8 char boundaries, and the reported
 /// elided count is computed after adjustment, so the output is a pure
-/// function of the input.
+/// function of the input. Caps below 8 bytes are returned unchanged — the
+/// head/tail split would be meaningless at that size.
 pub fn truncate_observation(observation: &str, cap: usize) -> String {
     if observation.len() <= cap || cap < 8 {
         return observation.to_string();

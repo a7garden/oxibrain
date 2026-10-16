@@ -12,8 +12,9 @@
 > atemporal). `Brain::consolidate_runbooks` clusters Task/Code/Artifact-anchored
 > episodes (≥ min members) into runbook `Derived` episodes (summaries cache scope
 > "runbook", Uncertainty mandatory, terminal); CLI `admin consolidate --mode task`.
-> `build_context_input` now harvests FTS-matched episodes before the recency fill
-> (the raw-slice pool — statement-only retrieval cannot see workflow prose).
+> `build_context_input` now harvests FTS-matched **primary** episodes before the
+> recency fill (the raw-slice pool — statement-only retrieval cannot see workflow
+> prose; declarations stay out: their claims already render as beliefs).
 > Evaluation: `eval --suite experience` over `eval/experience/` (2 envs × shared
 > task name, EN+KO, 14 questions, arms a/b/c/r); measured 2026-10-16: ceiling
 > 14/14, gotcha r−b +2, workflow +3, premise +1, r ≤ ~1.3k tokens of a 2k budget.

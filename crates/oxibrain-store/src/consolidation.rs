@@ -653,6 +653,14 @@ pub struct TaskCluster {
 /// `min_members` distinct Primary episodes (via assertions → statements,
 /// subject or object position). Deterministic: anchors ordered by id,
 /// members ordered by id.
+///
+/// Membership notes: (1) discovery rides assertions, so a trajectory
+/// episode that has not been extracted yet (pending backlog) is invisible
+/// to runbooks until extraction lands — runbooks read meaning, not bytes;
+/// (2) the anchor may appear as a statement OBJECT (e.g. a task that
+/// `requires` a Code anchor), so an episode can join a cluster it merely
+/// references. Accepted: deterministic, provenance-carrying, and the
+/// prompt grounds the summary in the episodes regardless.
 pub fn find_task_clusters(
     conn: &Connection,
     space: &str,

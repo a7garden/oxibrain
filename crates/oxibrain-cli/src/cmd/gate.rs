@@ -72,9 +72,7 @@ struct EpisodeFile {
     shape: String,
     #[allow(dead_code)]
     lang: String,
-    #[allow(dead_code)]
     occurred_at: String,
-    #[allow(dead_code)]
     content: String,
     #[serde(default)]
     agent: Option<String>,

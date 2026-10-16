@@ -104,16 +104,25 @@ pub fn build_context_input(
     let mut seen_episodes: std::collections::HashSet<String> = Default::default();
     let mut matched_ids: Vec<String> = Vec::new();
     for index in [crate::query::FtsIndex::Word, crate::query::FtsIndex::Ngram] {
+        // Errors are swallowed on purpose: the episode harvest is a
+        // relevance bonus, never a reason for recall itself to fail.
         for hit in crate::query::fts_search(conn, space, query_text, 64, index).unwrap_or_default()
         {
-            if let oxibrain_core::retrieval::SearchTarget::Episode { id } = hit.target
-                && seen_episodes.insert(id.clone())
-            {
+            if let oxibrain_core::retrieval::SearchTarget::Episode { id } = hit.target {
                 matched_ids.push(id);
             }
         }
     }
+    // Rank-preserving dedup: word-index BM25 order first, then ngram —
+    // truncation must keep the best-scored slices, not an arbitrary id
+    // order.
+    let mut rank_dedup: std::collections::HashSet<String> = Default::default();
+    matched_ids.retain(|id| rank_dedup.insert(id.clone()));
     matched_ids.truncate(episode_cap as usize);
+    // Only PRIMARY episodes join the harvest: declarations are structured
+    // claims already rendered as beliefs — letting their JSON bodies expand
+    // verbatim only spends budget (measured: golden knowledge_update
+    // regressed one answer before this restriction).
     if !matched_ids.is_empty() {
         let placeholders = matched_ids
             .iter()
@@ -124,6 +133,7 @@ pub fn build_context_input(
             "SELECT id, content, ingested_at FROM episodes
              WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
                AND source_kind NOT IN ('document', 'document_revision', 'session')
+               AND kind = 'primary'
                AND id IN ({placeholders})
              ORDER BY id"
         );
@@ -145,6 +155,7 @@ pub fn build_context_input(
             .map_err(sql_err)?;
         drop(stmt);
         for (id, content, ingested_at) in matched {
+            seen_episodes.insert(id.clone());
             input.episodes.push(oxibrain_core::pack::EpisodeExcerpt {
                 episode_id: id,
                 content,
@@ -153,7 +164,7 @@ pub fn build_context_input(
             });
         }
     }
-    let fill = episode_cap - seen_episodes.len() as i64;
+    let fill = episode_cap - input.episodes.len() as i64;
     if fill > 0 {
         let mut stmt = conn
             .prepare(
