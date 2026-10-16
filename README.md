@@ -1,8 +1,8 @@
 # oxibrain
 
 A standalone, local-first second brain for humans and agents: an immutable
-episode ledger plus a knowledge projection that can be rebuilt from it,
-byte for byte.
+episode ledger plus a deterministic semantic truth projection. Derived search
+indexes and ranking metadata can be rebuilt separately.
 
 ## Highlights
 
@@ -11,7 +11,7 @@ byte for byte.
   tier. A default build pulls zero oxi-ecosystem crates.
 - **One engine, three shapes** — a Rust library (`oxibrain`), one binary
   (`oxibrain`: CLI + caller-owned server), and a desktop brain UI.
-- **Agent-native.** Fourteen MCP tools (capped) over caller-owned stdio or a
+- **Agent-native.** Sixteen MCP tools (capped) over caller-owned stdio or a
   foreground loopback HTTP session. Anything reachable over MCP is reachable
   in-process, and vice versa.
 - **Assertions, not facts.** The ledger records who claimed what, over which
@@ -87,9 +87,33 @@ The store lives under `~/.oxi`; every subcommand accepts `--dir <DIR>` (env
 vault directory and document root. `oxibrain describe` and `oxibrain schema`
 are the orientation and introspection entries into the op surface.
 
+Agent `session_record` stores an **Untrusted Primary** with `SourceRef::Session`
+provenance, not an owner declaration. Its event identity is the space, sessions
+source and session ID: identical bytes replay to the same episode; different bytes
+conflict without replacing it. `session_list` can exclude the caller's current
+session. The live `session_record` input schema advertises
+`"x-oxibrain-session-trust": "untrusted"`; callers requiring that trust boundary must
+deny writes when the marker is absent, never substitute Note ingestion.
+
 Agents use CLI operations directly or launch a caller-owned `admin serve --stdio`
 child through `oxibrain-client`. The foreground `admin serve --http <address>`
 variant exposes the local operations console.
+
+## Shared local HTTP inference
+
+Set `OXIBRAIN_LLM_PROVIDER=loopback`, `OXIBRAIN_LLM_BASE_URL=http://127.0.0.1:8768/v1`,
+and `OXIBRAIN_LLM_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit` when using the
+Dyno-owned MLX endpoint. These are process-scoped overrides, not a change to the
+default local engine. The HTTP adapter sends strict `response_format: json_schema`.
+Extraction object variants use `anyOf` with a required `kind` and mutually
+exclusive `entity`/`literal` constants: the accepted language is identical to
+`oneOf`, without decoder coercion. Quote/span and predicate/type validation still
+gate projection.
+
+For a bounded integration check, use a new `OXIBRAIN_DIR`, ingest synthetic
+content, and run `oxibrain admin extract --pending --limit 1`. Verify an accepted
+extraction and its source-backed assertions; exit zero or “processed” alone does
+not prove acceptance. Do not drain an existing backlog as a smoke test.
 
 ## Backup and restore
 
@@ -115,6 +139,15 @@ restore reprojects the ledger, and extracted knowledge needs
 brain directory are never copied. A local backup directory is still on the
 same failure domain until copied to a separate, appropriately protected
 destination and restored there.
+
+`admin reproject` replays declarations and cached extractions together at their
+recorded event times, preserving entity identities, assertion provenance,
+denials, merges and retractions. It uses the extraction cache, not new model
+requests. The ledger remains unchanged. Search indexes, salience and communities
+are rebuilt: scores and ordering can differ from a stale incremental index,
+while semantic truth stays stable; bounded search results may rerank. Repeated
+reprojection is a fixed point of the rebuilt projection. Use an isolated restored
+copy to verify this boundary before any operational reprojection.
 
 ## Agent skill
 
@@ -157,7 +190,7 @@ at the boundary. [ARCHITECTURE.md](doc/ARCHITECTURE.md) is authoritative.
 | `oxibrain-embed-local` | Multilingual embedding adapter |
 | `oxibrain-connectors` | Source connectors — vault readers, file ingest |
 | `oxibrain-client` | Client SDK — caller-owned stdio session |
-| `oxibrain-mcp` | MCP server tools — fourteen-tool cap |
+| `oxibrain-mcp` | MCP server tools — sixteen-tool cap |
 | `oxibrain-cli` | The `oxibrain` binary: CLI + caller-owned server |
 
 ## Oxi ecosystem

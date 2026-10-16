@@ -8,7 +8,7 @@ use oxibrain_ports::{BrainError, Timestamp};
 use oxibrain_store::ledger;
 
 impl Brain {
-    /// Record a session summary as a Primary episode with event identity
+    /// Record a session summary as an Untrusted Primary episode with event identity
     /// `(space, "sessions" source, session_id)`. Re-recording the same
     /// session id with identical bytes is idempotent; different bytes are
     /// [`BrainError::Conflict`] (ledger semantics, §4.2).
@@ -40,7 +40,7 @@ impl Brain {
                 content_hash: ContentHash([0u8; 32]),
                 content: summary,
                 source: SourceRef::Session { session_id: sid },
-                trust: TrustTier::Trusted,
+                trust: TrustTier::Untrusted,
                 kind: EpisodeKind::Primary,
                 occurred_at,
                 ingested_at,

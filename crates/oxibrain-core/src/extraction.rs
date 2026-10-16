@@ -552,13 +552,16 @@ pub fn schema_from_registry(predicates: &[PredicateDef]) -> serde_json::Value {
         "required": ["surface", "entity_type", "quote"]
     });
 
+    // Required `kind` and distinct const values make these branches disjoint.
+    // anyOf therefore accepts exactly the same objects as oneOf, without
+    // requiring a decoder to approximate exclusive-union constraints.
     let object_schema = serde_json::json!({
         "type": "object",
         "properties": {
             "kind": { "type": "string", "enum": ["entity", "literal"] }
         },
         "required": ["kind"],
-        "oneOf": [
+        "anyOf": [
             {
                 "properties": {
                     "kind": { "const": "entity" },

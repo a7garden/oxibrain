@@ -1,5 +1,5 @@
 # oxibrain — Architecture
-> **Version:** v2.20 · **Date:** 2026-10-08 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.21 · **Date:** 2026-10-10 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
 > **v2.19 — Detached backup and restore.** The admin CLI snapshots brain.db
 > through SQLite's online backup API, validates integrity, and records a
 > generation plus per-file BLAKE3 digests. It carries documents.toml and
@@ -37,6 +37,13 @@
 > that excludes the current session's summary from the layer. The MCP tool surface moves
 > fourteen → sixteen by explicit owner decision; the add-one-remove-one rule remains for
 > future growth.
+> **v2.21 — Agent session trust.** Session summaries are agent-generated claims,
+> not authenticated Owner fact declarations. `record_session` records them as
+> `Untrusted`; session provenance and event identity remain unchanged. The
+> generated `session_record` schema publishes
+> `"x-oxibrain-session-trust": "untrusted"` so consumers can verify the deployed
+> engine's semantics before writing. An older engine without this marker must
+> not receive model-generated summaries as trusted session records.
 > **v2.15 — Unified Oxi home (spec `docs/superpowers/specs/2026-08-29-oxi-home-layout-design.md`, ADR-015).**
 > One discoverable root (`~/.oxi`, override `OXI_HOME`) with strict ownership: `brain/` is
 > oxibrain-private, `spaces/<space>/vault/` is the only shared write area (oximemo owns space

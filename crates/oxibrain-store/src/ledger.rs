@@ -474,6 +474,21 @@ fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainEr
         "calendar_event" => Ok(SourceRef::CalendarEvent {
             uri: r#ref.unwrap_or_default(),
         }),
+        "session" => {
+            #[derive(serde::Deserialize)]
+            struct SessionReference {
+                session_id: String,
+            }
+            let reference = r#ref.as_deref().ok_or_else(|| {
+                BrainError::Corruption("missing session source reference".into())
+            })?;
+            let reference: SessionReference = serde_json::from_str(reference).map_err(|error| {
+                BrainError::Corruption(format!("invalid session source reference: {error}"))
+            })?;
+            Ok(SourceRef::Session {
+                session_id: reference.session_id,
+            })
+        }
         "declaration" => Ok(SourceRef::Declaration),
         "derived" => Ok(SourceRef::Derived {
             of: r#ref.unwrap_or_default(),
