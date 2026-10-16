@@ -1,0 +1,16 @@
+# Gate expansion: graph-reasoning line — Grace's skill edge.
+shape = "note"
+lang = "en"
+occurred_at = "2023-03-05"
+content = "Grace has_skill Kubernetes; she is the cluster lead."
+[[entities]]
+surface = "Grace"
+type = "Person"
+[[entities]]
+surface = "Kubernetes"
+type = "Concept"
+[[statements]]
+predicate = "has_skill"
+subject_surface = "Grace"
+object_surface = "Kubernetes"
+valid_from = "2023-03-05"

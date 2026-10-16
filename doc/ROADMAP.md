@@ -21,11 +21,12 @@ M0 through M6 landed, then **M7, M8, and M9 shipped** in sequence. `cargo test -
   with incremental `insert_key` (sublinear per mention on the live path, measured). All five exit
   criteria closed.
 
-The gate (§4) has been run on the expanded golden corpus (25 episodes / 25 questions / 32
-declarations): delta(c−b) = 0 at this scale, tokens/answer M8 902 → M9 538 (−40%). The full
-~200/~100 corpus is the bottleneck for a definitive gate decision. **M10 (§6) and
-M11 — experience memory (§7)** both shipped (2026-10-17 / 2026-10-16); `eval
---suite experience|experiential` measures them.
+The gate (§4) has run on the expanded corpus (43 episodes / 42 questions):
+**c−b = +6 on graph_reasoning (b 3/9 → c 9/9), 0 on knowledge_update and
+temporal (both arms read the same fold — by design)**. Outcome recorded in
+§4 (2026-10-17): D19 demotion does not fire; the graph stays as query
+structure. **M10 (§6) and M11 (§7)** shipped; `eval --suite
+experience|experiential` measures them.
 
 ---
 
@@ -174,7 +175,29 @@ Three outcomes, each with a pre-committed response:
 | Delta small **with the local extractor** | Extraction quality is the problem, not the architecture. Fix extraction, re-run, decide nothing structural yet |
 | Delta small **with a strong extractor** (frontier tier, if run) | **D19's pre-commitment applies:** demote the graph from query structure to ranking signal. Keep the truth half — provenance, `as_of`, contradictions, redaction, byte-identical rebuild — none of which arm (b) can offer at any score. Cut communities to a salience input. `Rerank::GraphDistance` makes this a configuration change, not a rewrite |
 
-Publishing the number regardless of direction is the point.
+
+**Outcome — recorded 2026-10-17** (corpus expanded to 43 episodes / 42 questions,
+concentrated on the decision categories; `eval --suite gate`):
+
+| Category | a ceiling | b lexical | c hybrid | (c) − (b) |
+|---|---|---|---|---|
+| graph_reasoning | 9/9 | 3/9 | 9/9 | **+6** |
+| knowledge_update | 20/20 | 20/20 | 20/20 | 0 |
+| temporal_reasoning | 12/13 | 13/13 | 13/13 | 0 |
+
+Reading: the graph's query-structure dividend is **unambiguous on multi-hop**
+(lexical answers 3/9, hybrid 9/9; the M11 experience corpus shows the same
+shape on gotcha/premise multi-hop). Knowledge-update and temporal delta 0 is
+**by design, not failure**: both arms read the same fold — time-travel and
+supersession correctness are fold properties (13/13 as_of answers correct in
+both arms), not retrieval differentiators; the gate's original framing
+assumed otherwise. The D19 demotion trigger does **not** fire: no outcome row
+matches "delta small" once multi-hop is counted. Decision: the graph stays as
+query structure, the truth half stays regardless (D19 keeps it under every
+branch), and communities remain. Arm r (recall-2k) is reported for budget
+shape, not scored as a retrieval arm — it is context assembly, and it trades
+recall for a 2k-token budget (graph 7/9, ku 18/20, temporal 11/13 at
+~1.7k tokens).
 
 ---
 

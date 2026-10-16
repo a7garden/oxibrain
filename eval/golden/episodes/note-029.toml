@@ -1,0 +1,14 @@
+# Gate expansion: legal-name churn, Frank line (Functional + Supersede).
+shape = "note"
+lang = "en"
+occurred_at = "2023-01-10"
+content = "Frank's full name is Frank Wu."
+[[entities]]
+surface = "Frank"
+type = "Person"
+[[statements]]
+predicate = "full_name"
+subject_surface = "Frank"
+object_literal_type = "text"
+object_literal_value = "Frank Wu"
+valid_from = "2023-01-10"

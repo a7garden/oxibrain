@@ -1,0 +1,16 @@
+# Gate expansion: Grace's project edge.
+shape = "note"
+lang = "en"
+occurred_at = "2023-03-06"
+content = "Grace works_on Platform Migration."
+[[entities]]
+surface = "Grace"
+type = "Person"
+[[entities]]
+surface = "Platform Migration"
+type = "Task"
+[[statements]]
+predicate = "works_on"
+subject_surface = "Grace"
+object_surface = "Platform Migration"
+valid_from = "2023-03-06"

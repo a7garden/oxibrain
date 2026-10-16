@@ -1,0 +1,14 @@
+# Gate expansion: Frank's name change supersedes the earlier value.
+shape = "document"
+lang = "en"
+occurred_at = "2023-09-01"
+content = "Name change recorded: Frank's full name is now Frank Wolfe."
+[[entities]]
+surface = "Frank"
+type = "Person"
+[[statements]]
+predicate = "full_name"
+subject_surface = "Frank"
+object_literal_type = "text"
+object_literal_value = "Frank Wolfe"
+valid_from = "2023-09-01"

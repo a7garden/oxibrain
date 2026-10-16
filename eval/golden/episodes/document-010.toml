@@ -1,0 +1,17 @@
+# Gate expansion: Dana's supersession — the brain must answer Umbrella after
+# 2023-08-15 and Initech before it, retaining both as history.
+shape = "document"
+lang = "en"
+occurred_at = "2023-08-15"
+content = "Dana's move: she left Initech and joined Umbrella as staff engineer."
+[[entities]]
+surface = "Dana"
+type = "Person"
+[[entities]]
+surface = "Umbrella"
+type = "Organization"
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Dana"
+object_surface = "Umbrella"
+valid_from = "2023-08-15"

@@ -1,0 +1,5 @@
+id = "q-040"
+category = "knowledge_update"
+question = "王现在参与哪个项目？"
+answer = "玉衡项目"
+supporting_episodes = ["document-013"]

@@ -1,0 +1,5 @@
+id = "q-036"
+category = "graph_reasoning"
+question = "Which document does the task under Modernization Program require?"
+answer = "Migration Runbook"
+supporting_episodes = ["note-032", "note-033"]

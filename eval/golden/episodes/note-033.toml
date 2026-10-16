@@ -1,0 +1,16 @@
+# Gate expansion: task prerequisite — the second hop target.
+shape = "note"
+lang = "en"
+occurred_at = "2023-03-08"
+content = "Platform Migration requires Migration Runbook."
+[[entities]]
+surface = "Platform Migration"
+type = "Task"
+[[entities]]
+surface = "Migration Runbook"
+type = "Document"
+[[statements]]
+predicate = "requires"
+subject_surface = "Platform Migration"
+object_surface = "Migration Runbook"
+valid_from = "2023-03-08"

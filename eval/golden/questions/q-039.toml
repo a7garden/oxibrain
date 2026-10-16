@@ -1,0 +1,6 @@
+id = "q-039"
+category = "temporal_reasoning"
+question = "수지는 2023-06-01에 어느 회사에 다니고 있었는가?"
+as_of = "2023-06-01"
+answer = "한빛시스템"
+supporting_episodes = ["note-034"]

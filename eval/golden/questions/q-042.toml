@@ -1,0 +1,5 @@
+id = "q-042"
+category = "graph_reasoning"
+question = "Who has_skill Kubernetes?"
+answer = "Grace"
+supporting_episodes = ["note-030"]
