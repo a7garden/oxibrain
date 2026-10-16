@@ -24,7 +24,8 @@ M0 through M6 landed, then **M7, M8, and M9 shipped** in sequence. `cargo test -
 The gate (§4) has been run on the expanded golden corpus (25 episodes / 25 questions / 32
 declarations): delta(c−b) = 0 at this scale, tokens/answer M8 902 → M9 538 (−40%). The full
 ~200/~100 corpus is the bottleneck for a definitive gate decision. **M10** (§6) is the next
-milestone.
+milestone; **M11 — experience memory (§7)** is specced (`doc/spec/experience-memory-v1.md`,
+ADR-018) and sequenced behind it.
 
 ---
 
@@ -250,7 +251,45 @@ Publishing the number regardless of direction is the point.
 
 ---
 
-## 7. Deferred, with reasons
+## 7. M11 — Experience memory · **specced**
+
+> **Goal: agent trajectories become reusable environment experience — workflows, gotchas,
+> premises — without a new store, plane, or tool.**
+> **Delivers:** `doc/spec/experience-memory-v1.md` (ADR-018). **Effort: ≈ 12–16 days.**
+> **Status:** design approved 2026-10-16. Gated on M10: 10.1 (Uncertainty), 10.2
+> (summaries-with-sources), 10.9 (negative predicate family).
+
+### 7.1 Work
+
+| # | Item | Ref | Days |
+|---|---|---|---|
+| 11.1 | Experience predicate family in `core/v1` (minor 4→5): `requires`, `fails_when`, `premise_differs` | spec §3 | 1 |
+| 11.2 | `SourceRef::AgentTrace { agent }` + legacy backfill migration (no schema change) | spec §2.1 | 1–2 |
+| 11.3 | `ingest` additive `trace` payload; event identity + conflict semantics (exit 6) | spec §2.3 | 2 |
+| 11.4 | Rendering contract: step-boundary chunk tests, truncation determinism | spec §2.2 | 1 |
+| 11.5 | Few-shot trajectory examples (EN+KO) in the golden corpus; trace extraction quality | spec §3 | 2–3 |
+| 11.6 | `consolidate(mode = Task)` → runbook Derived episodes; `summaries` cache kind `runbook` | spec §4 | 3 |
+| 11.7 | `oxibrain admin consolidate [--mode topic\|task]` — admin verb, MCP cap untouched | spec §4 | 0.5 |
+| 11.8 | `tests/fixtures/experience-corpus/` + three-arm extension of the gate harness | spec §5 | 3–4 |
+
+### 7.2 Exit criteria
+
+- [ ] On the experience corpus, `recall` within a 2,000-token budget answers gotcha /
+      workflow / premise questions that the chunk-only arm (b) cannot: **(c) − (b) > 0 per
+      category**, tokens/query reported alongside.
+- [ ] Replaying a `(agent, run)` pair with identical bytes is idempotent; the same
+      occurrence with different bytes exits 6 — proven by test, not by reading the code.
+- [ ] Runbooks are terminal: reprojection regenerates identical derived ids from cache,
+      and the no-assertion-from-Derived test covers kind `runbook`.
+- [ ] The P10 post-condition holds for runbooks: a derived episode with empty support is
+      never accepted.
+- [ ] Registry bump is minor — cached extractions from prior extractors remain valid (no
+      forced re-extraction).
+- [ ] Experience corpus covers ≥ 2 writing systems (§7.8 parity rule).
+
+---
+
+## 8. Deferred, with reasons
 
 | Item | Why not now |
 |---|---|
@@ -263,11 +302,11 @@ Publishing the number regardless of direction is the point.
 
 ---
 
-## 8. Risks
+## 9. Risks
 
 | Risk | Severity | Response |
 |---|---|---|
-| **Local extraction quality is poor** | **high** | The gate's per-extractor split diagnoses it directly. Mitigation is tiering (§8.5). If tier 0 is unusable even with grammar constraints, C2 degrades to "no API key needed for retrieval" — a smaller promise, made honestly. **Item 9.1 of §9 tests this on day one** |
+| **Local extraction quality is poor** | **high** | The gate's per-extractor split diagnoses it directly. Mitigation is tiering (§8.5). If tier 0 is unusable even with grammar constraints, C2 degrades to "no API key needed for retrieval" — a smaller promise, made honestly. **The §10 first-week spike tests this on day one** |
 | Gate delta is small | high | Pre-committed response, §4. Not discovered late |
 | `llama-cpp-2` build burden across platforms | medium | We already bundle C for SQLite. Re-examine `candle` / `mistral.rs` at the M7 gate — an adapter swap |
 | Model download hurts onboarding | medium | Weights are Cache-zone and fetched at `init` (§8.4), so `cargo install` stays small. `init` must show progress and be resumable |
@@ -275,10 +314,11 @@ Publishing the number regardless of direction is the point.
 | Scope for a solo developer | medium | Four milestones, each with standalone exit criteria |
 | Views crate becomes a second facade | low | CI rule: `oxibrain-views` must not name `rusqlite` (§18 rule 4) |
 | MCP change breaks a client | low | Verified additive (F29); M8 exit includes a v1.0-client contract test |
+| Experience extraction quality on noisy traces | medium | Same tiering answer as row 1; the 11.8 three-arm corpus is the gate. If (c) − (b) ≤ 0 with a strong extractor, predicates ship as registry data and runbook consolidation goes opt-in (ADR-018) |
 
 ---
 
-## 9. First week · **✅ complete**
+## 10. First week · **✅ complete**
 
 The M7 first-week plan — spike `llama-cpp-2` + GBNF, land `ngram`, split `snapshot_indexes` into
 truth/ranking halves, write the parity corpus skeleton, and `doc/spec/M7-model-and-language.md` —
