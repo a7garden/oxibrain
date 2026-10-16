@@ -280,7 +280,11 @@ Publishing the number regardless of direction is the point.
 - [ ] Replaying a `(agent, run)` pair with identical bytes is idempotent; the same
       occurrence with different bytes exits 6 — proven by test, not by reading the code.
 - [ ] Runbooks are terminal: reprojection regenerates identical derived ids from cache,
-      and the no-assertion-from-Derived test covers kind `runbook`.
+      and the no-assertion-from-Derived test covers runbook-derived episodes (summaries
+      cache kind `runbook`).
+- [ ] Environment scoping holds on the corpus: the two environments' identically-named
+      tasks resolve to **distinct entities**, and a query scoped to one does not surface
+      the other's gotchas (checked via `why` when surfaces collide).
 - [ ] The P10 post-condition holds for runbooks: a derived episode with empty support is
       never accepted.
 - [ ] Registry bump is minor — cached extractions from prior extractors remain valid (no

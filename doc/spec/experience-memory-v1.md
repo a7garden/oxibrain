@@ -73,6 +73,10 @@ observation: <verbatim bytes, deterministically truncated>
   cut at step boundaries: chunks approximate LME-V2's raw-slice pool with **no new index**.
 - Truncation (per-step observation; default 4,096 bytes, policy-configurable): first
   2,048 bytes + `…[truncated N bytes]…` + last 2,048 bytes. Deterministic, byte-counted.
+- Trajectory observations frequently carry secrets (tokens, env vars, key material).
+  Scrubbing before rendering is the **caller's duty**; the in-brain removal path is
+  `redact()` — audited, never silent. oxibrain adds no scrubbing of its own (it cannot
+  know what is secret in the caller's environment).
 - Step timestamps are RFC-3339 UTC; a missing timestamp falls back to the run's
   `occurred_at`.
 - The §9.3 chunk context prefix picks up the agent for free — `SourceRef` is already a
@@ -82,16 +86,21 @@ observation: <verbatim bytes, deterministically truncated>
 
 ```json
 { "content": "<rendered trajectory>", "space": "dev",
-  "trace": { "agent": "claude-code", "run": "2026-10-16-001",
+  "trace": { "agent": "claude-code", "run_id": "2026-10-16-001",
              "occurred_at": "2026-10-16T02:30:00Z" } }
 ```
 
 - The presence of `trace` selects the trajectory path — one optional object with a fixed
   shape, **not** a discriminator union (§16.2 ban). `source_path` is unused on this path.
 - **Trust:** trace episodes are recorded `Untrusted` — the v2.21 rule that agent-generated
-  claims are not owner declarations. Elevation is a source-policy Declaration
-  (`oxibrain admin source policy agent:<agent> --trust <tier>`); `TrustedIngest` remains
-  the sole capability bypass, unchanged.
+  claims are not owner declarations, and a deliberate divergence from the note path's
+  `trusted` default. The `trust` request field keeps its existing capability-gated rules;
+  only the default differs. Elevation is a source-policy Declaration, which keys on a
+  **registered** source (`source_policy_id = blake3(source_id, effective_from)`): the
+  first trace ingest for an `agent` value emits an idempotent `RegisterSource` Declaration
+  episode (`agent:<agent>`) so no projection row exists without a ledger explanation (P1),
+  after which `oxibrain admin source policy agent:<agent> --trust <tier>` applies.
+  `TrustedIngest` remains the sole capability bypass, unchanged.
 - The MCP tool count stays **sixteen**; the schema change is additive, so v1.0 clients are
   unaffected (the §19.4 discipline).
 
@@ -102,7 +111,7 @@ observation: <verbatim bytes, deterministically truncated>
 | subject types | `Task` | `Task, Code, Artifact, Project` | `Task, Concept, Code` |
 | object kind | Entity `Concept, Artifact, Code, Document` | Literal `Text` | Literal `Text` |
 | cardinality | MultiValued | MultiValued | MultiValued |
-| temporality | Interval | Interval | Static |
+| temporality | Interval | Interval | Interval |
 | invalidation | Coexist | Coexist | Coexist |
 | confidence prior | 0.7 | 0.6 | 0.6 |
 | `profile_relevant` | false | false | false |
@@ -131,6 +140,13 @@ Rules:
   with zero pipeline code.
 - Few-shot: trajectory examples in at least English and Korean join the golden corpus;
   selection stays trigram-Jaccard (language-independent, §9.6).
+- **Environment scoping is by subject, not by predicate.** A gotcha or a broken premise
+  is environment-relative, and the registry deliberately has no Environment dimension.
+  The convention: experience subjects are environment-qualified surfaces
+  ("deploy (oxibrain-prod)"), so resolution keeps per-environment entities separate and
+  `fails_when` / `premise_differs` assertions from different environments never co-fold
+  (all three are Coexist). When qualification is missed, `why` remains the discriminator
+  — per-episode provenance shows which environment's trace made the claim.
 
 ## 4. Runbooks — the derived tier
 
@@ -144,9 +160,11 @@ Rules:
   `Uncertainty` block is mandatory (M10 10.1 dependency). Terminal: no assertion is ever
   extracted from one.
 - **Retrieval adds no layer.** Runbooks ride the existing `Summaries` layer
-  (summary-with-sources); member excerpts expand through `expand_top_k`. An `experience`
-  `PackPolicy` preset (config, not code) raises `expand_top_k` for trajectory episodes
-  when the query neighbourhood is task-shaped.
+  (summary-with-sources); member excerpts expand through `expand_top_k`. An
+  `PackPolicy::experience()` constructor beside `for_budget` — a pure decision (P9),
+  caller-selected like the `Retrieval` presets — raises `expand_top_k` and reserves
+  floor share for the `Summaries` layer. No query-shape conditional: selection is the
+  caller's, not a heuristic the pack layer would have to justify.
 - CLI: `oxibrain admin consolidate [--mode topic|task]` — an admin verb, not an MCP tool;
   the cap is untouched.
 
@@ -155,11 +173,18 @@ Rules:
 - Corpus `tests/fixtures/experience-corpus/`: ≥ 2 environments × ≥ 10 trajectories each,
   ≥ 2 writing systems (§7.8 parity rule), annotated questions per category (workflow,
   gotcha, premise — plus static/dynamic controls) with answer-bearing episode labels.
+  The two environments **share task names** (an identically-named task in each) so the
+  environment-scoping rule of §3 is measured, not assumed.
 - **Three-arm extension of the gate harness (R6)** on this corpus: (a) full-context
   ceiling, (b) chunk-only, (c) full stack. Context-gathering formulation: `recall` within
   a 2,000-token budget, fixed reader model, LLM judge for free-form answers. Reported
   quantity: (c) − (b) per category, with tokens/query alongside — the same discipline as
   the M8 gate, so experience memory is priced, not asserted.
+- M11's three-arm corpus **is** the gate for this capability — per the sequencing rule
+  ("features added before the gate are unpriced"), nothing here ships without its number.
+  It is independent of the conversational-corpus gate decision (ROADMAP §4 / D19):
+  predicates and runbooks ride the truth half and the derived half, which are exactly
+  what D19 keeps under either outcome.
 - The public LongMemEval-V2 benchmark remains out of scope.
 
 ## 6. Landing sequence
