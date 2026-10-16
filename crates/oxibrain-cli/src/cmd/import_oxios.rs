@@ -46,7 +46,9 @@ pub async fn run(dir: &Path, db: &Path, space: &str) -> anyhow::Result<()> {
             .ingest(
                 &space_id,
                 content,
-                SourceRef::AgentTrace,
+                SourceRef::AgentTrace {
+                    agent: "import-oxios".into(),
+                },
                 TrustTier::SemiTrusted,
                 "import-oxios/v1",
             )

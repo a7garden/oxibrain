@@ -1,0 +1,23 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-21"
+content = """
+[step 001 · 2026-09-21T02:35:10Z · tool: bash]
+action: warm the vendored crate cache first, then build deploy (shop-prod)
+observation: cache primed; build and ship succeeded without errors
+"""
+
+[[entities]]
+surface = "deploy (shop-prod)"
+type = "Task"
+
+[[entities]]
+surface = "vendored crate cache"
+type = "Concept"
+
+[[statements]]
+predicate = "requires"
+subject_surface = "deploy (shop-prod)"
+object_surface = "vendored crate cache"
+valid_from = "2026-09-21"

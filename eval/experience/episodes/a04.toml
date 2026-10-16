@@ -1,0 +1,31 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-05"
+content = """
+[step 001 · 2026-09-05T02:30:00Z · tool: bash]
+action: warm the vendored crate cache first, then build
+observation: cache primed from the mirror; build succeeded
+
+[step 002 · 2026-09-05T02:41:17Z · tool: bash]
+action: run the migration playbook before shipping
+observation: migrations applied cleanly; deploy (shop-prod) shipped
+"""
+
+[[entities]]
+surface = "deploy (shop-prod)"
+type = "Task"
+
+[[entities]]
+surface = "vendored crate cache"
+type = "Concept"
+
+[[entities]]
+surface = "migration playbook"
+type = "Document"
+
+[[statements]]
+predicate = "requires"
+subject_surface = "deploy (shop-prod)"
+object_surface = "migration playbook"
+valid_from = "2026-09-05"

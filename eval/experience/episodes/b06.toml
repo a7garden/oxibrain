@@ -1,0 +1,20 @@
+shape = "trajectory"
+lang = "ko"
+agent = "codex"
+occurred_at = "2026-09-07"
+content = """
+[step 001 · 2026-09-07T05:50:26Z · tool: bash]
+action: deploy (shop-dev) 아티팩트 업로드
+observation: 실패: 캐시 디렉터리 권한이 읽기 전용이어서 업로드가 거부되었다
+"""
+
+[[entities]]
+surface = "deploy (shop-dev)"
+type = "Task"
+
+[[statements]]
+predicate = "failed_because"
+subject_surface = "deploy (shop-dev)"
+object_literal_type = "text"
+object_literal_value = "캐시 디렉터리 권한이 읽기 전용이었다"
+valid_from = "2026-09-07"

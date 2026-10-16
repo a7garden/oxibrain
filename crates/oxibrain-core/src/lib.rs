@@ -64,6 +64,8 @@ pub use pack::{
 };
 pub mod chunking;
 pub use chunking::{Chunk, ChunkPolicy, render_context_prefix, short_ts, split_into_chunks};
+pub mod trace;
+pub use trace::{TraceRenderPolicy, TraceStep, render_trajectory, truncate_observation};
 pub mod stats;
 pub mod sync;
 pub use security::{

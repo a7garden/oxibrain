@@ -1,0 +1,33 @@
+shape = "trajectory"
+lang = "en"
+occurred_at = "2026-09-20"
+content = """
+[step 001 · 2026-09-20T04:30:00Z · tool: bash]
+action: rotate-secrets (shop-prod) after provisioning a fresh vault lease
+observation: keys rotated cleanly; rotate-secrets (shop-prod) requires the vault lease for the new key material
+
+[step 002 · 2026-09-20T04:33:12Z · tool: bash]
+action: schedule unattended renewal
+observation: docs from the legacy cluster assumed renewal is automatic; here a manual rebind was required, so renewal is not automatic on this account
+"""
+
+[[entities]]
+surface = "rotate-secrets (shop-prod)"
+type = "Task"
+
+[[entities]]
+surface = "vault lease"
+type = "Concept"
+
+[[statements]]
+predicate = "requires"
+subject_surface = "rotate-secrets (shop-prod)"
+object_surface = "vault lease"
+valid_from = "2026-09-20"
+
+[[statements]]
+predicate = "premise_differs"
+subject_surface = "rotate-secrets (shop-prod)"
+object_literal_type = "text"
+object_literal_value = "renewal is automatic"
+valid_from = "2026-09-20"

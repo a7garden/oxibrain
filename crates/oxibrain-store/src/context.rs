@@ -86,9 +86,13 @@ pub fn build_context_input(
     // 3. Query neighborhood — 1-hop edges of the top entities.
     load_neighborhood(conn, space, &ranking, &mut input)?;
 
-    // 4. Recent episodes (wider when hints request it). Legacy document /
-    //    document_revision episodes never enter context (two-plane §8).
-    let recent_limit: i64 = if let Some(h) = hints {
+    // 4. Episodes: FTS query-relevant first, recency fill. The matched
+    //    half is the experience raw-slice pool (spec §2.2) — trajectories
+    //    and notes whose CONTENT answers the query, which statements
+    //    cannot reach (workflow prose). The recency half keeps the layer's
+    //    existing behaviour. Legacy document / document_revision / session
+    //    episodes never enter context (two-plane §8).
+    let episode_cap: i64 = if let Some(h) = hints {
         if h.is_session_start || h.topic_changed {
             20
         } else {
@@ -97,33 +101,90 @@ pub fn build_context_input(
     } else {
         5
     };
-    let mut stmt = conn
-        .prepare(
+    let mut seen_episodes: std::collections::HashSet<String> = Default::default();
+    let mut matched_ids: Vec<String> = Vec::new();
+    for index in [crate::query::FtsIndex::Word, crate::query::FtsIndex::Ngram] {
+        for hit in crate::query::fts_search(conn, space, query_text, 64, index).unwrap_or_default()
+        {
+            if let oxibrain_core::retrieval::SearchTarget::Episode { id } = hit.target
+                && seen_episodes.insert(id.clone())
+            {
+                matched_ids.push(id);
+            }
+        }
+    }
+    matched_ids.truncate(episode_cap as usize);
+    if !matched_ids.is_empty() {
+        let placeholders = matched_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
             "SELECT id, content, ingested_at FROM episodes
              WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
                AND source_kind NOT IN ('document', 'document_revision', 'session')
-             ORDER BY ingested_at DESC LIMIT ?2",
-        )
-        .map_err(sql_err)?;
-    let recent = stmt
-        .query_map(params![space, recent_limit], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-            ))
-        })
-        .map_err(sql_err)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(sql_err)?;
-    drop(stmt);
-    for (id, content, ingested_at) in recent {
-        input.episodes.push(oxibrain_core::pack::EpisodeExcerpt {
-            episode_id: id,
-            content,
-            ingested_at,
-            salience: 0.5,
-        });
+               AND id IN ({placeholders})
+             ORDER BY id"
+        );
+        let mut bind: Vec<&dyn rusqlite::ToSql> = vec![&space];
+        for id in &matched_ids {
+            bind.push(id);
+        }
+        let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+        let matched = stmt
+            .query_map(bind.as_slice(), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(sql_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_err)?;
+        drop(stmt);
+        for (id, content, ingested_at) in matched {
+            input.episodes.push(oxibrain_core::pack::EpisodeExcerpt {
+                episode_id: id,
+                content,
+                ingested_at,
+                salience: 0.9,
+            });
+        }
+    }
+    let fill = episode_cap - seen_episodes.len() as i64;
+    if fill > 0 {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content, ingested_at FROM episodes
+                 WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
+                   AND source_kind NOT IN ('document', 'document_revision', 'session')
+                 ORDER BY ingested_at DESC LIMIT ?2",
+            )
+            .map_err(sql_err)?;
+        let recent = stmt
+            .query_map(params![space, fill], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(sql_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_err)?;
+        drop(stmt);
+        for (id, content, ingested_at) in recent {
+            if seen_episodes.insert(id.clone()) {
+                input.episodes.push(oxibrain_core::pack::EpisodeExcerpt {
+                    episode_id: id,
+                    content,
+                    ingested_at,
+                    salience: 0.5,
+                });
+            }
+        }
     }
 
     // 5. Summaries with sources (§12.4) — cached Derived-episode summaries.

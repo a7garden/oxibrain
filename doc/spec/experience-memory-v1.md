@@ -97,9 +97,10 @@ observation: <verbatim bytes, deterministically truncated>
   `trusted` default. The `trust` request field keeps its existing capability-gated rules;
   only the default differs. Elevation is a source-policy Declaration, which keys on a
   **registered** source (`source_policy_id = blake3(source_id, effective_from)`): the
-  first trace ingest for an `agent` value emits an idempotent `RegisterSource` Declaration
-  episode (`agent:<agent>`) so no projection row exists without a ledger explanation (P1),
-  after which `oxibrain admin source policy agent:<agent> --trust <tier>` applies.
+  first trace ingest for an `agent` value ensures the source row `agent:<agent>` through
+  the same idempotent `INSERT OR IGNORE` path sessions use (`ensure_source`; the
+  `sources` table is not a reprojected projection), after which
+  `oxibrain admin source policy agent:<agent> --trust <tier>` applies.
   `TrustedIngest` remains the sole capability bypass, unchanged.
 - The MCP tool count stays **sixteen**; the schema change is additive, so v1.0 clients are
   unaffected (the §19.4 discipline).
@@ -168,23 +169,38 @@ Rules:
 - CLI: `oxibrain admin consolidate [--mode topic|task]` — an admin verb, not an MCP tool;
   the cap is untouched.
 
-## 5. Evaluation
+## 5. Evaluation — as implemented
 
-- Corpus `tests/fixtures/experience-corpus/`: ≥ 2 environments × ≥ 10 trajectories each,
-  ≥ 2 writing systems (§7.8 parity rule), annotated questions per category (workflow,
-  gotcha, premise — plus static/dynamic controls) with answer-bearing episode labels.
-  The two environments **share task names** (an identically-named task in each) so the
-  environment-scoping rule of §3 is measured, not assumed.
-- **Three-arm extension of the gate harness (R6)** on this corpus: (a) full-context
-  ceiling, (b) chunk-only, (c) full stack. Context-gathering formulation: `recall` within
-  a 2,000-token budget, fixed reader model, LLM judge for free-form answers. Reported
-  quantity: (c) − (b) per category, with tokens/query alongside — the same discipline as
-  the M8 gate, so experience memory is priced, not asserted.
-- M11's three-arm corpus **is** the gate for this capability — per the sequencing rule
-  ("features added before the gate are unpriced"), nothing here ships without its number.
-  It is independent of the conversational-corpus gate decision (ROADMAP §4 / D19):
-  predicates and runbooks ride the truth half and the derived half, which are exactly
-  what D19 keeps under either outcome.
+- Corpus `eval/experience/` (manifest + 22 trajectory episodes + 14 questions): 2
+  environments sharing the task base name "deploy" (environment-qualified surfaces),
+  English + Korean content (≥ 2 writing systems, §7.8 parity rule), questions per
+  category (workflow, gotcha, premise — plus static/dynamic controls) with
+  answer-bearing episode labels. The environment-scoping rule of §3 is exercised by
+  construction: the two envs' identically-named tasks are distinct surfaces and so
+  distinct entities.
+- Suite: `oxibrain admin eval --suite experience` — the gate runner, deterministic and
+  self-contained (no network, no LLM; the house discipline, so the fixed reader and
+  LLM judge of the draft were replaced by word-substring scoring over rendered
+  surfaces). Trajectories are ingested through the real M11 path
+  (`record_trace`, Untrusted, event identity); gold statements are declared.
+- Arms: **(a)** full-context ceiling (answer in the raw corpus), **(b)** lexical
+  statements (the control), **(c)** hybrid search + entity expansion, **(r)** the
+  full-stack context-gathering arm — `recall` within a 2,000-token budget over the
+  assembled layers. Reported per category: a/b/c/r accuracy, (c)−(b), (r)−(b), and
+  tokens/query. The exit criterion's (c) is arm r.
+- **Measured 2026-10-16** (14 questions): ceiling a = 14/14; gotcha r−b = +2,
+  workflow r−b = +3, premise r−b = +1; static/dynamic r−b = 0 (lexical-sufficient
+  controls — honest zeros, not failures); r spends 1,139–1,290 tokens of the 2,000
+  budget. Multi-hop questions (gotcha-2/4, premise-4) are the ones lexical cannot
+  answer — that is the graph + raw-slice dividend, priced.
+- What made workflow reachable: `build_context_input` now harvests **FTS-matched
+  episodes first** (salience 0.9) and fills by recency — the raw-slice pool of §2.2
+  was unreachable from `recall` before; statement-only arms cannot see workflow prose.
+- M11's corpus **is** the gate for this capability — per the sequencing rule
+  ("features added before the gate are unpriced"). It is independent of the
+  conversational-corpus gate decision (ROADMAP §4 / D19): predicates and runbooks
+  ride the truth half and the derived half, which are exactly what D19 keeps under
+  either outcome.
 - The public LongMemEval-V2 benchmark remains out of scope.
 
 ## 6. Landing sequence
@@ -196,7 +212,7 @@ Rules:
 | P3 | `trace` payload, event identity, conflict path | idempotent replay test; byte-mismatch → exit 6 |
 | P4 | rendering-contract chunk behaviour | step-boundary chunk test; truncation determinism property test |
 | P5 | few-shot corpus + trace extraction quality | `eval --suite fast` green; `fabricated_entity_rate` still 0.00 by measurement |
-| P6 | `consolidate(mode = Task)` + runbook cache + admin verb | terminal-episode test extended to `runbook`; P10 post-condition holds |
+| P6 | `consolidate_runbooks` + runbook cache + admin verb | terminal-episode test covers runbook-derived episodes; P10 post-condition holds |
 | P7 | experience corpus + three-arm reporting | M11 exit criteria (ROADMAP §7.2) |
 
 ## 7. Rejected alternatives

@@ -1,0 +1,5 @@
+id = "premise-1"
+category = "premise"
+question = "Which documented assumption is wrong for deploy (shop-prod) on this host?"
+answer = "the docs assume the firewall opens port 5432 by default"
+supporting_episodes = ["a05"]

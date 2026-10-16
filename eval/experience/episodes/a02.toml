@@ -1,0 +1,28 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-03"
+content = """
+[step 001 · 2026-09-03T03:01:12Z · tool: bash]
+action: run deploy (shop-prod) again after the nightly reset
+observation: error: deploy (shop-prod) fails when the vendored crate cache is cold
+
+[step 002 · 2026-09-03T03:03:55Z · tool: bash]
+action: inspect the cache directory
+observation: confirmed the vendored crate cache was cleared overnight
+"""
+
+[[entities]]
+surface = "deploy (shop-prod)"
+type = "Task"
+
+[[entities]]
+surface = "vendored crate cache"
+type = "Concept"
+
+[[statements]]
+predicate = "fails_when"
+subject_surface = "deploy (shop-prod)"
+object_literal_type = "text"
+object_literal_value = "the vendored crate cache is cold"
+valid_from = "2026-09-03"

@@ -1,0 +1,5 @@
+id = "static-1"
+category = "static"
+question = "Which document does deploy (shop-prod) require?"
+answer = "migration playbook"
+supporting_episodes = ["a04"]

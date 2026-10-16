@@ -1,0 +1,5 @@
+id = "gotcha-1"
+category = "gotcha"
+question = "Which condition repeatedly breaks deploy (shop-prod)?"
+answer = "the vendored crate cache is cold"
+supporting_episodes = ["a01", "a02"]

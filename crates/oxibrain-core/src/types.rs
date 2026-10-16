@@ -97,7 +97,7 @@ pub enum SourceRef {
     DocumentRevision { uri: String },
     Conversation,
     Message,
-    AgentTrace,
+    AgentTrace { agent: String },
     ArtifactEvent { uri: String },
     WebClip { uri: String },
     CalendarEvent { uri: String },
@@ -115,7 +115,11 @@ impl SourceRef {
             Self::DocumentRevision { uri } => ("document_revision", Some(uri.clone())),
             Self::Conversation => ("conversation", None),
             Self::Message => ("message", None),
-            Self::AgentTrace => ("agent_trace", None),
+            // source_ref column carries {"agent": …} (TEXT column, no
+            // migration for new rows; legacy NULL refs backfilled by v14).
+            Self::AgentTrace { agent } => {
+                ("agent_trace", Some(json!({ "agent": agent }).to_string()))
+            }
             Self::ArtifactEvent { uri } => ("artifact_event", Some(uri.clone())),
             Self::WebClip { uri } => ("web_clip", Some(uri.clone())),
             Self::CalendarEvent { uri } => ("calendar_event", Some(uri.clone())),

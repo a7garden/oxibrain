@@ -1,0 +1,6 @@
+id = "dynamic-1"
+category = "dynamic"
+question = "Why did rotate-secrets (shop-prod) fail at the time?"
+answer = "the token endpoint rejected the old key"
+as_of = "2026-09-12"
+supporting_episodes = ["a09"]

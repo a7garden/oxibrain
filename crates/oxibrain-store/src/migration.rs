@@ -148,6 +148,15 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.pragma_update(None, "user_version", 13i64)
             .map_err(sql_err)?;
     }
+    if current < 14 {
+        // v14 — AgentTrace carries per-agent identity (experience memory
+        // spec §2.1). Legacy unit-variant rows have a NULL source_ref;
+        // import-oxios is the only known writer, so backfill its tag.
+        let sql = include_str!("migrations/v14.sql");
+        conn.execute_batch(sql).map_err(sql_err)?;
+        conn.pragma_update(None, "user_version", 14i64)
+            .map_err(sql_err)?;
+    }
     let now: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sql_err)?;
@@ -205,5 +214,40 @@ mod tests {
                 expected: LEDGER_SCHEMA_VERSION
             }
         ));
+    }
+
+    #[test]
+    fn v14_backfills_legacy_agent_trace_refs() {
+        ensure_vec_extension();
+        let conn = Connection::open_in_memory().expect("open");
+        run(&conn).expect("migrate");
+        conn.execute(
+            "INSERT INTO spaces (id, name, created_at) VALUES ('s1', 'legacy', 0)",
+            [],
+        )
+        .expect("space");
+        conn.execute(
+            "INSERT INTO episodes (id, space_id, seq, content_hash, content, source_kind, \
+             source_ref, trust, kind, occurred_at, ingested_at) VALUES \
+             ('e1', 's1', 1, x'0000000000000000000000000000000000000000000000000000000000000000', \
+             'old trace', 'agent_trace', NULL, 'semi_trusted', 'primary', 1, 1)",
+            [],
+        )
+        .expect("legacy episode");
+        // Roll the version back to simulate a v13 store, then re-run.
+        conn.pragma_update(None, "user_version", 13i64)
+            .expect("set");
+        let v = run(&conn).expect("migrate");
+        assert_eq!(v, LEDGER_SCHEMA_VERSION);
+        let r: Option<String> = conn
+            .query_row("SELECT source_ref FROM episodes WHERE id = 'e1'", [], |r| {
+                r.get(0)
+            })
+            .expect("query");
+        assert_eq!(
+            r.as_deref(),
+            Some(r#"{"agent":"import-oxios"}"#),
+            "legacy unit-variant rows must backfill with the import-oxios tag"
+        );
     }
 }

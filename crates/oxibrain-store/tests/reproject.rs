@@ -234,7 +234,6 @@ fn reproject_skips_garbage_declaration_and_continues() {
     assert!(alice >= 1, "valid declaration must project");
 }
 
-
 /// The incremental path projects an extraction when the extractor ran and a
 /// declaration when it was declared. Entity ids derive from the first event
 /// that creates the entity, and belief folds cut assertion visibility at the
@@ -266,7 +265,7 @@ fn reproject_preserves_mixed_extraction_and_declaration_identity() {
     let result = oxibrain_core::extraction::validate_claims(
         &response.claims,
         "Alice works on ProjectX at Acme.",
-        &oxibrain_core::registry::core_v1(),
+        oxibrain_core::registry::core_v1(),
     );
     assert!(!result.valid.is_empty(), "fixture claim must validate");
     let mut cache = ResolutionCache::new();
@@ -310,7 +309,10 @@ fn reproject_preserves_mixed_extraction_and_declaration_identity() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(beliefs_before, 0, "fully denied statement must hold no belief");
+    assert_eq!(
+        beliefs_before, 0,
+        "fully denied statement must hold no belief"
+    );
 
     let before = oxibrain_store::index_ops::snapshot_truth(&conn, "s1").unwrap();
 

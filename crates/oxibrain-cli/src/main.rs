@@ -116,6 +116,11 @@ async fn main() -> anyhow::Result<()> {
             }
             AdminCmd::Index { documents, embed } => cmd::index::run(&dir, documents, embed).await,
             AdminCmd::Reextract { space } => cmd::reextract::run(&dir, &space).await,
+            AdminCmd::Consolidate {
+                space,
+                mode,
+                min_members,
+            } => cmd::consolidate::run(&dir, &space, &mode, min_members).await,
             AdminCmd::Model { command } => cmd::model::run(&command).await,
             AdminCmd::Migrate { dry_run } => cmd::migrate::run(dry_run),
             AdminCmd::Eval { suite } => cmd::eval::run(&suite).await,

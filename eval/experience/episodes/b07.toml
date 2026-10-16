@@ -1,0 +1,23 @@
+shape = "trajectory"
+lang = "ko"
+agent = "codex"
+occurred_at = "2026-09-08"
+content = """
+[step 001 · 2026-09-08T06:00:39Z · tool: edit]
+action: 배포 대시보드에 롤백 버튼 추가 후 deploy (shop-dev) 게시
+observation: 게시 완료. 배포 대시보드에서 상태 확인 가능
+"""
+
+[[entities]]
+surface = "deploy (shop-dev)"
+type = "Task"
+
+[[entities]]
+surface = "배포 대시보드"
+type = "Document"
+
+[[statements]]
+predicate = "requires"
+subject_surface = "deploy (shop-dev)"
+object_surface = "배포 대시보드"
+valid_from = "2026-09-08"

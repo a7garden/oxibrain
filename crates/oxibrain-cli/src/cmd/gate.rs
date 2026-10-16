@@ -76,6 +76,8 @@ struct EpisodeFile {
     occurred_at: String,
     #[allow(dead_code)]
     content: String,
+    #[serde(default)]
+    agent: Option<String>,
     entities: Vec<EpisodeEntity>,
     statements: Vec<EpisodeStatement>,
 }
@@ -154,8 +156,8 @@ struct ArmResult {
 // ── Public entry point ────────────────────────────────────────────────────
 
 pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
-    if suite != "gate" {
-        bail!("gate runner only handles the 'gate' suite (got '{suite}')");
+    if !matches!(suite, "gate" | "experience") {
+        bail!("gate runner handles the 'gate' and 'experience' suites (got '{suite}')");
     }
     let manifest_path = corpus_dir.join("manifest.toml");
     let manifest_text = std::fs::read_to_string(&manifest_path)
@@ -175,6 +177,7 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
     let space_id = brain.ensure_space(space).await.context("ensure space")?;
 
     let mut ingested = 0usize;
+    let mut corpus_text = String::new();
     // All entity surfaces in the corpus — used to derive keyword queries
     // from question text (a real agent queries the entity name, not the
     // whole NL sentence; arm (b) lexical cannot match an entire question).
@@ -185,6 +188,8 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
             .with_context(|| format!("read {}", ep_path.display()))?;
         let ep: EpisodeFile =
             toml::from_str(&ep_text).with_context(|| format!("parse {}", ep_path.display()))?;
+        corpus_text.push_str(&ep.content);
+        corpus_text.push('\n');
         for e in &ep.entities {
             entity_surfaces.push(e.surface.clone());
         }
@@ -195,6 +200,26 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
                 .await
                 .with_context(|| format!("declare from {}", ep_entry.id))?;
             ingested += 1;
+        }
+        // Experience suite: the trajectory text is ALSO ingested as a real
+        // Primary episode through the M11 path — the raw-slice pool the
+        // statements cannot represent (workflow prose). Event identity is
+        // (space, "agent:<agent>", <corpus episode id>).
+        if suite == "experience"
+            && let Some(agent) = &ep.agent
+        {
+            let occurred = parse_iso_to_timestamp(&ep.occurred_at)?;
+            brain
+                .record_trace(
+                    &space_id,
+                    agent,
+                    &ep_entry.id,
+                    ep.content.clone(),
+                    occurred,
+                    oxibrain_core::TrustTier::Untrusted,
+                )
+                .await
+                .with_context(|| format!("record_trace {}", ep_entry.id))?;
         }
     }
     entity_surfaces.sort();
@@ -218,6 +243,33 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
         // Keyword query: the entity surface(s) named in the question.
         let keyword = extract_keywords(&q.question, &entity_surfaces);
         let as_of = q.as_of.as_deref().map(parse_iso_to_timestamp).transpose()?;
+        let arm_a = answer_matches(&q.answer.to_lowercase(), &corpus_text.to_lowercase());
+        // Arm R (experience): full-stack context gathering — `recall`
+        // within a 2,000-token budget, answer matched against the
+        // assembled layers (statements + episodes + summaries).
+        let recall2k = brain
+            .assemble_context_with_hints(
+                &space_id,
+                &keyword,
+                2000,
+                &oxibrain::RecallHints {
+                    is_session_start: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .context("assemble_context (arm R)")?;
+        let rendered_r: String = recall2k
+            .layers
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let arm_r = ArmResult {
+            passed: !rendered_r.is_empty()
+                && answer_matches(&q.answer.to_lowercase(), &rendered_r.to_lowercase()),
+            approx_tokens: recall2k.total_tokens,
+        };
         let arm_b = run_arm(&brain, &space_id, &keyword, Arm::B, as_of, &q.answer).await?;
         let arm_c = run_arm(&brain, &space_id, &keyword, Arm::C, as_of, &q.answer).await?;
         // M9 exit criterion: tokens per answered question must DECREASE
@@ -232,8 +284,10 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
             id: q.id,
             category: q.category,
             answer: q.answer,
+            arm_a,
             arm_b,
             arm_c,
+            arm_r,
             recall_tokens,
             brief_tokens,
         });
@@ -250,8 +304,13 @@ struct QuestionResult {
     id: String,
     category: String,
     answer: String,
+    /// Arm a: full-context ceiling — the answer exists verbatim somewhere
+    /// in the raw corpus text (experience memory spec §5).
+    arm_a: bool,
     arm_b: ArmResult,
     arm_c: ArmResult,
+    /// Arm r: full-stack context gathering (recall, 2,000-token budget).
+    arm_r: ArmResult,
     /// M8 recall-only context tokens (assemble_context budget=3000).
     recall_tokens: usize,
     /// M9 brief/navigate path tokens (brief pages for the top entities).
@@ -487,43 +546,56 @@ fn answer_matches(needle: &str, haystack_lower: &str) -> bool {
 }
 
 fn print_report(results: &[QuestionResult], ingested: usize) {
-    println!("═══ oxibrain gate (golden-only) ═══");
+    println!("═══ oxibrain gate ═══");
     println!("Episodes ingested: {ingested} declarations");
     println!("Questions:         {}", results.len());
     println!();
     // Per-question detail.
     for r in results {
+        let mark_a = if r.arm_a { "✓" } else { "✗" };
         let mark_b = if r.arm_b.passed { "✓" } else { "✗" };
         let mark_c = if r.arm_c.passed { "✓" } else { "✗" };
+        let mark_r = if r.arm_r.passed { "✓" } else { "✗" };
         println!(
-            "  {} [{}]  b={} ({:>3} tok)  c={} ({:>3} tok)  answer: {}",
+            "  {} [{}]  a={}  b={} ({:>3} tok)  c={} ({:>3} tok)  r={} ({:>3} tok)  answer: {}",
             r.id,
             r.category,
+            mark_a,
             mark_b,
             r.arm_b.approx_tokens,
             mark_c,
             r.arm_c.approx_tokens,
+            mark_r,
+            r.arm_r.approx_tokens,
             truncate(&r.answer, 40),
         );
     }
     println!();
-    // Per-category delta (c − b accuracy).
+    // Per-category delta (c − b accuracy; experience memory also reports
+    // the full-stack arm r and the full-context ceiling a).
     let categories: std::collections::BTreeSet<&str> =
         results.iter().map(|r| r.category.as_str()).collect();
-    println!("Per-category accuracy (c − b):");
+    println!("Per-category accuracy (a ceiling · b lexical · c hybrid · r recall-2k):");
     for cat in categories {
         let in_cat: Vec<&QuestionResult> = results.iter().filter(|r| r.category == cat).collect();
-        let n = in_cat.len() as f64;
-        let b = in_cat.iter().filter(|r| r.arm_b.passed).count() as f64;
-        let c = in_cat.iter().filter(|r| r.arm_c.passed).count() as f64;
+        let n = in_cat.len();
+        let a = in_cat.iter().filter(|r| r.arm_a).count();
+        let b = in_cat.iter().filter(|r| r.arm_b.passed).count();
+        let c = in_cat.iter().filter(|r| r.arm_c.passed).count();
+        let r_ok = in_cat.iter().filter(|r| r.arm_r.passed).count();
         println!(
-            "  {:<22}  b={:.0}/{:.0}  c={:.0}/{:.0}  delta(c−b) = {:+.0}",
+            "  {:<22}  a={}/{}  b={}/{}  c={}/{}  r={}/{}  delta(c−b) = {:+}  delta(r−b) = {:+}",
             cat,
+            a,
+            n,
             b,
             n,
             c,
             n,
-            (c - b),
+            r_ok,
+            n,
+            c as isize - b as isize,
+            r_ok as isize - b as isize,
         );
     }
     println!();
@@ -558,28 +630,32 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// Entry point used by the CLI dispatcher — supports the `gate` suite
-/// with a corpus-dir argument. The CLI passes the path to `eval/golden/`
-/// (resolved relative to the manifest via the `--corpus` flag, defaulting
-/// to `eval/golden` from the workspace root).
+/// Entry point used by the CLI dispatcher — supports the `gate` and
+/// `experience` suites with a corpus-dir argument, defaulting to
+/// `eval/golden/` and `eval/experience/` respectively (resolved from the
+/// workspace root).
 pub async fn run_with_dir(suite: &str, corpus_dir: Option<PathBuf>) -> Result<()> {
     let dir = match corpus_dir {
         Some(d) => d,
-        None => default_corpus_dir()?,
+        None => default_corpus_dir(suite)?,
     };
     run(suite, &dir).await
 }
 
-fn default_corpus_dir() -> Result<PathBuf> {
-    // Walk up from CWD until we find `eval/golden/manifest.toml`.
+fn default_corpus_dir(suite: &str) -> Result<PathBuf> {
+    // Walk up from CWD until we find the suite's corpus manifest.
+    let leaf = match suite {
+        "experience" => "experience",
+        _ => "golden",
+    };
     let mut here = std::env::current_dir().context("cwd")?;
     loop {
-        let candidate = here.join("eval").join("golden");
+        let candidate = here.join("eval").join(leaf);
         if candidate.join("manifest.toml").is_file() {
             return Ok(candidate);
         }
         if !here.pop() {
-            bail!("could not locate eval/golden/manifest.toml from CWD");
+            bail!("could not locate eval/{leaf}/manifest.toml from CWD");
         }
     }
 }

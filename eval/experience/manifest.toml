@@ -1,0 +1,232 @@
+# Experience-memory corpus (doc/spec/experience-memory-v1.md §5, M11).
+#
+# Two environments sharing the task base name "deploy" (environment-qualified
+# surfaces), English + Korean content, gold statements over the experience
+# predicate family. Ingested declaratively by `oxibrain eval --suite
+# experience` — deterministic, no LLM. Questions are scored per category
+# (workflow / gotcha / premise / static / dynamic) across arms:
+#   a = full-context ceiling, b = lexical statements, c = hybrid + expansion,
+#   r = recall (full stack, 2,000-token budget).
+version = "1"
+
+[[categories]]
+name = "workflow"
+description = "Ordered procedure knowledge — lives in episode content, not statements."
+
+[[categories]]
+name = "gotcha"
+description = "Recurring failure conditions (fails_when / failed_because)."
+
+[[categories]]
+name = "premise"
+description = "Assumptions valid elsewhere, wrong here (premise_differs / assumed)."
+
+[[categories]]
+name = "static"
+description = "Stable prerequisites (requires)."
+
+[[categories]]
+name = "dynamic"
+description = "Time-scoped answers (as_of over the bi-temporal fold)."
+
+[[episodes]]
+id = "a01"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a01.toml"
+
+[[episodes]]
+id = "a02"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a02.toml"
+
+[[episodes]]
+id = "a03"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a03.toml"
+
+[[episodes]]
+id = "a04"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a04.toml"
+
+[[episodes]]
+id = "a05"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a05.toml"
+
+[[episodes]]
+id = "a06"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a06.toml"
+
+[[episodes]]
+id = "a07"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a07.toml"
+
+[[episodes]]
+id = "a08"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a08.toml"
+
+[[episodes]]
+id = "a09"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a09.toml"
+
+[[episodes]]
+id = "a10"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a10.toml"
+
+[[episodes]]
+id = "a11"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a11.toml"
+
+[[episodes]]
+id = "a12"
+shape = "trajectory"
+lang = "en"
+file = "episodes/a12.toml"
+
+[[episodes]]
+id = "b01"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b01.toml"
+
+[[episodes]]
+id = "b02"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b02.toml"
+
+[[episodes]]
+id = "b03"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b03.toml"
+
+[[episodes]]
+id = "b04"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b04.toml"
+
+[[episodes]]
+id = "b05"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b05.toml"
+
+[[episodes]]
+id = "b06"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b06.toml"
+
+[[episodes]]
+id = "b07"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b07.toml"
+
+[[episodes]]
+id = "b08"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b08.toml"
+
+[[episodes]]
+id = "b09"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b09.toml"
+
+[[episodes]]
+id = "b10"
+shape = "trajectory"
+lang = "ko"
+file = "episodes/b10.toml"
+
+[[questions]]
+id = "gotcha-1"
+category = "gotcha"
+file = "questions/gotcha-1.toml"
+
+[[questions]]
+id = "gotcha-2"
+category = "gotcha"
+file = "questions/gotcha-2.toml"
+
+[[questions]]
+id = "gotcha-3"
+category = "gotcha"
+file = "questions/gotcha-3.toml"
+
+[[questions]]
+id = "gotcha-4"
+category = "gotcha"
+file = "questions/gotcha-4.toml"
+
+[[questions]]
+id = "premise-4"
+category = "premise"
+file = "questions/premise-4.toml"
+
+[[questions]]
+id = "workflow-1"
+category = "workflow"
+file = "questions/workflow-1.toml"
+
+[[questions]]
+id = "workflow-2"
+category = "workflow"
+file = "questions/workflow-2.toml"
+
+[[questions]]
+id = "workflow-3"
+category = "workflow"
+file = "questions/workflow-3.toml"
+
+[[questions]]
+id = "premise-1"
+category = "premise"
+file = "questions/premise-1.toml"
+
+[[questions]]
+id = "premise-2"
+category = "premise"
+file = "questions/premise-2.toml"
+
+[[questions]]
+id = "premise-3"
+category = "premise"
+file = "questions/premise-3.toml"
+
+[[questions]]
+id = "static-1"
+category = "static"
+file = "questions/static-1.toml"
+
+[[questions]]
+id = "static-2"
+category = "static"
+file = "questions/static-2.toml"
+
+[[questions]]
+id = "dynamic-1"
+category = "dynamic"
+file = "questions/dynamic-1.toml"

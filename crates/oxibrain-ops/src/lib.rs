@@ -110,8 +110,8 @@ fn ingest_schema() -> Value {
             "content": { "type": "string", "description": "The text to ingest." },
             "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
             "source_path": { "type": "string", "description": "Optional source label, e.g. a file path (default: mcp)." },
-            "extract": { "type": "boolean", "description": "If true, extract claims via client sampling immediately (default: false)." },
-            "trust": { "type": "string", "enum": ["trusted","semi_trusted","untrusted"], "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted (parity with the note path until the policy engine lands)." }
+            "trace": { "type": "object", "description": "Trajectory provenance (experience memory). Presence selects the agent-trace path: event identity (space, agent:<agent>, run_id), trust defaults to untrusted (agent-generated claims; an explicit trust keeps its capability-gated rules). Render steps as '[step N · RFC3339 UTC · tool: X]' blocks with 'action:'/'observation:' lines, separated by blank lines; scrub secrets before rendering.", "properties": { "agent": { "type": "string", "description": "Agent identity, e.g. claude-code." }, "run_id": { "type": "string", "description": "Stable run identifier; replaying it with identical bytes is idempotent, with different bytes is a conflict." }, "occurred_at": { "type": "string", "description": "RFC3339 UTC timestamp of the run (default: now)." } }, "required": ["agent", "run_id"] },
+            "trust": { "type": "string", "enum": ["trusted","semi_trusted","untrusted"], "description": "Requested trust tier. Requires trusted_ingest capability for 'trusted'. Default: trusted on the note path, untrusted when 'trace' is present (v2.21)." }
         },
         "required": ["content", "space"]
     })
@@ -399,7 +399,6 @@ pub fn tools_list() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn registry_has_sixteen_unique_ops_with_schemas() {

@@ -108,19 +108,28 @@ pub fn reproject(conn: &Connection) -> Result<ReprojectReport, BrainError> {
         /// before extractions within the same millisecond, extractor id).
         fn key(&self) -> (i64, i64, u8, &str) {
             match self {
-                ReplayEvent::Declaration { ingested_at, seq, .. } => {
-                    (*ingested_at, *seq, 0, "")
-                }
-                ReplayEvent::Extraction { created_at, seq, extractor_id, .. } => {
-                    (*created_at, *seq, 1, extractor_id)
-                }
+                ReplayEvent::Declaration {
+                    ingested_at, seq, ..
+                } => (*ingested_at, *seq, 0, ""),
+                ReplayEvent::Extraction {
+                    created_at,
+                    seq,
+                    extractor_id,
+                    ..
+                } => (*created_at, *seq, 1, extractor_id),
             }
         }
     }
 
     let mut events: Vec<ReplayEvent> = Vec::with_capacity(episodes.len());
     for (ep_id, space, content, ingested_at, seq) in episodes {
-        events.push(ReplayEvent::Declaration { ep_id, space, content, ingested_at, seq });
+        events.push(ReplayEvent::Declaration {
+            ep_id,
+            space,
+            content,
+            ingested_at,
+            seq,
+        });
     }
 
     // 3.5. Collect cached extractions (deterministic — no LLM call). Each
@@ -155,7 +164,15 @@ pub fn reproject(conn: &Connection) -> Result<ReprojectReport, BrainError> {
 
     events.reserve(extractions.len());
     for (ep_id, space, content, created_at, seq, extractor_id, raw) in extractions {
-        events.push(ReplayEvent::Extraction { ep_id, space, content, created_at, seq, extractor_id, raw });
+        events.push(ReplayEvent::Extraction {
+            ep_id,
+            space,
+            content,
+            created_at,
+            seq,
+            extractor_id,
+            raw,
+        });
     }
 
     events.sort_unstable_by(|a, b| a.key().cmp(&b.key()));
@@ -164,7 +181,13 @@ pub fn reproject(conn: &Connection) -> Result<ReprojectReport, BrainError> {
     let mut report = ReprojectReport::default();
     for event in &events {
         match event {
-            ReplayEvent::Declaration { ep_id, space, content, ingested_at, .. } => {
+            ReplayEvent::Declaration {
+                ep_id,
+                space,
+                content,
+                ingested_at,
+                ..
+            } => {
                 let decl = match parse_declaration(content) {
                     Ok(decl) => decl,
                     Err(e) => {
@@ -183,7 +206,15 @@ pub fn reproject(conn: &Connection) -> Result<ReprojectReport, BrainError> {
                 project_declaration(conn, space, &decl, Timestamp(*ingested_at), &mut cache)?;
                 report.declarations_replayed += 1;
             }
-            ReplayEvent::Extraction { ep_id, space, content, created_at, extractor_id, raw, .. } => {
+            ReplayEvent::Extraction {
+                ep_id,
+                space,
+                content,
+                created_at,
+                extractor_id,
+                raw,
+                ..
+            } => {
                 crate::extraction::project_from_cache(
                     conn,
                     space,

@@ -634,6 +634,170 @@ pub fn belief_stats_for_entities(
     })
 }
 
+// ── Runbook clusters (experience memory spec §4, M11) ───────────────────────
+
+/// Anchor entity types eligible for runbook clustering. Data, not code:
+/// these are the experience-subject types of `core/v1`.
+pub const RUNBOOK_ANCHOR_TYPES: &[&str] = &["Task", "Code", "Artifact"];
+
+/// A runbook cluster: one anchor entity of an experience type and the
+/// distinct, non-redacted Primary episodes that mention it.
+#[derive(Debug, Clone)]
+pub struct TaskCluster {
+    pub anchor_entity: String,
+    pub anchor_type: String,
+    pub episode_ids: Vec<String>,
+}
+
+/// Find runbook clusters: anchor entities appearing in at least
+/// `min_members` distinct Primary episodes (via assertions → statements,
+/// subject or object position). Deterministic: anchors ordered by id,
+/// members ordered by id.
+pub fn find_task_clusters(
+    conn: &Connection,
+    space: &str,
+    min_members: usize,
+) -> Result<Vec<TaskCluster>, BrainError> {
+    let mut anchors: Vec<(String, String)> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.id, e.type_name
+                 FROM entities e
+                 WHERE e.space_id = ?1
+                   AND e.merged_into IS NULL
+                   AND e.type_name IN ('Task', 'Code', 'Artifact')
+                   AND (SELECT COUNT(DISTINCT ep.id)
+                        FROM assertions a
+                        JOIN statements st ON st.id = a.statement_id
+                        JOIN episodes ep ON ep.id = a.episode_id
+                        WHERE (st.subject_id = e.id OR st.object_entity = e.id)
+                          AND ep.kind = 'primary'
+                          AND ep.redacted_at IS NULL) >= ?2
+                 ORDER BY e.id",
+            )
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map(rusqlite::params![space, min_members as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .map_err(sql_err)?;
+        for row in rows {
+            anchors.push(row.map_err(sql_err)?);
+        }
+    }
+    let mut out = Vec::with_capacity(anchors.len());
+    for (anchor_entity, anchor_type) in anchors {
+        let mut episode_ids: Vec<String> = Vec::new();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT ep.id
+                 FROM assertions a
+                 JOIN statements st ON st.id = a.statement_id
+                 JOIN episodes ep ON ep.id = a.episode_id
+                 WHERE (st.subject_id = ?1 OR st.object_entity = ?1)
+                   AND ep.kind = 'primary'
+                   AND ep.redacted_at IS NULL
+                 ORDER BY ep.id",
+            )
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map(rusqlite::params![anchor_entity], |r| r.get(0))
+            .map_err(sql_err)?;
+        for row in rows {
+            episode_ids.push(row.map_err(sql_err)?);
+        }
+        out.push(TaskCluster {
+            anchor_entity,
+            anchor_type,
+            episode_ids,
+        });
+    }
+    Ok(out)
+}
+
+/// Deterministic hash for a runbook member set: mixes the runbook scope
+/// and the anchor entity id so it can collide with neither an episode
+/// cluster hash nor another anchor's runbook (mirrors
+/// `hash_community_member_set`).
+pub fn hash_runbook_member_set(anchor: &str, episode_ids: &[String]) -> [u8; 32] {
+    let mut sorted: Vec<&str> = episode_ids.iter().map(|s| s.as_str()).collect();
+    sorted.sort();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"runbook\x00");
+    hasher.update(anchor.as_bytes());
+    hasher.update(&[0u8]);
+    for id in sorted {
+        hasher.update(id.as_bytes());
+        hasher.update(&[0u8]);
+    }
+    hasher.finalize().into()
+}
+
+/// The anchor's display surface: first key by id (deterministic pick
+/// among aliases).
+pub fn anchor_surface(conn: &Connection, anchor: &str) -> Result<String, BrainError> {
+    conn.query_row(
+        "SELECT surface FROM entity_keys WHERE entity_id = ?1 ORDER BY id LIMIT 1",
+        rusqlite::params![anchor],
+        |r| r.get(0),
+    )
+    .map_err(sql_err)
+}
+
+/// Build the LLM prompt for a runbook: ordered steps, gotchas, and broken
+/// premises, strictly grounded in the member episodes.
+pub fn build_runbook_prompt(
+    conn: &Connection,
+    space: &str,
+    cluster: &TaskCluster,
+) -> Result<String, BrainError> {
+    let surface = anchor_surface(conn, &cluster.anchor_entity)?;
+    let mut prompt = format!(
+        "Write a runbook for the {} \"{}\" from the agent trajectories below. \
+         Use ONLY the episodes shown. Structure the output as:\n\
+         ## Runbook: {surface}\n\
+         ### Steps — ordered, terse, one action per line\n\
+         ### Gotchas — recurring conditions under which this fails here\n\
+         ### Broken premises — assumptions valid elsewhere that are wrong here\n\
+         Do not invent steps, gotchas, or premises the episodes do not show. \
+         Omit a section if the episodes support nothing for it.\n\n",
+        cluster.anchor_type, surface
+    );
+    for ep_id in &cluster.episode_ids {
+        let content: String = conn
+            .query_row(
+                "SELECT content FROM episodes WHERE id = ?1 AND space_id = ?2",
+                rusqlite::params![ep_id, space],
+                |r| r.get(0),
+            )
+            .map_err(sql_err)?;
+        prompt.push_str(&format!("--- Episode {ep_id} ---\n{content}\n\n"));
+    }
+    Ok(prompt)
+}
+
+/// Filter task clusters to those without a completed checkpoint for this
+/// extractor (runbook scope). In-progress checkpoints are intentionally
+/// NOT filtered — a crashed run must resume (same contract as
+/// [`filter_pending_clusters`]). Input order preserved.
+pub fn filter_pending_task_clusters(
+    conn: &Connection,
+    extractor_id: &str,
+    clusters: &[TaskCluster],
+) -> Result<Vec<TaskCluster>, BrainError> {
+    let done = completed_clusters(conn, extractor_id)?;
+    let mut out = Vec::with_capacity(clusters.len());
+    for cluster in clusters {
+        let hash = hash_runbook_member_set(&cluster.anchor_entity, &cluster.episode_ids);
+        let key = hex::encode(hash);
+        if !done.contains(&key) {
+            out.push(cluster.clone());
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

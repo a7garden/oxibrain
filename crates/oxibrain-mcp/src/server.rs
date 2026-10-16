@@ -814,6 +814,11 @@ impl BrainServer {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let now = SystemClock.now();
+        if let Some(trace) = args.get("trace") {
+            return self
+                .tool_ingest_trace(args, trace, &space_id, content, extract, session, now)
+                .await;
+        }
         let trust = self.resolve_trust(args);
         let attachment = self
             .build_attachment(&space_id, &path, content, now)
@@ -835,6 +840,67 @@ impl BrainServer {
             return self.try_sample_extract(&space_id, &id, session).await;
         }
         Ok(format!("Ingested as episode: {id}"))
+    }
+    /// Trajectory path of `ingest` (experience memory spec §2.3): the
+    /// optional `trace` object selects event identity
+    /// `(space, "agent:<agent>", run_id)` and an Untrusted default —
+    /// agent-generated claims are not owner declarations (v2.21). An
+    /// explicit `trust` keeps its capability-gated rules; only the default
+    /// differs from the note path. Same run id with different bytes is a
+    /// conflict (exit 6).
+    #[allow(clippy::too_many_arguments)]
+    async fn tool_ingest_trace(
+        &self,
+        args: &Value,
+        trace: &Value,
+        space_id: &str,
+        content: &str,
+        extract: bool,
+        session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
+        now: Timestamp,
+    ) -> Result<String, ToolErr> {
+        let agent = trace.get("agent").and_then(|v| v.as_str()).unwrap_or("");
+        let run_id = trace.get("run_id").and_then(|v| v.as_str()).unwrap_or("");
+        if agent.trim().is_empty() {
+            return Err(ToolErr::Params("trace.agent must be non-empty".into()));
+        }
+        if run_id.trim().is_empty() {
+            return Err(ToolErr::Params("trace.run_id must be non-empty".into()));
+        }
+        let occurred_at = match trace.get("occurred_at").and_then(|v| v.as_str()) {
+            Some(rfc3339) => {
+                Timestamp::from_millis(parse_rfc3339_millis(rfc3339).ok_or_else(|| {
+                    ToolErr::Params(format!(
+                        "trace.occurred_at: invalid RFC3339 timestamp '{rfc3339}'"
+                    ))
+                })?)
+            }
+            None => now,
+        };
+        // Same capability-gated request field as the note path; only the
+        // default differs (Untrusted — v2.21).
+        let trust = match args.get("trust").and_then(|v| v.as_str()) {
+            Some("trusted") => TrustTier::Trusted,
+            Some("semi_trusted") => TrustTier::SemiTrusted,
+            Some("untrusted") => TrustTier::Untrusted,
+            _ => TrustTier::Untrusted,
+        };
+        let id = self
+            .brain
+            .record_trace(
+                space_id,
+                agent,
+                run_id,
+                content.to_string(),
+                occurred_at,
+                trust,
+            )
+            .await
+            .map_err(ToolErr::run)?;
+        if extract {
+            return self.try_sample_extract(space_id, &id, session).await;
+        }
+        Ok(format!("Ingested as trajectory episode: {id}"))
     }
 
     /// Whether sampling is available for this session. A trusted local channel

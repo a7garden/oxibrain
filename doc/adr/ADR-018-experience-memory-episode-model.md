@@ -1,6 +1,6 @@
 # ADR-018 — Experience memory rides the episode model
 
-Status: proposed (design accepted 2026-10-16; lands with M11). Date: 2026-10-16.
+Status: accepted — implemented 2026-10-16 (M11 shipped; `doc/ROADMAP.md` §7). Date: 2026-10-16.
 
 ## Context
 

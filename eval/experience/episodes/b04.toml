@@ -1,0 +1,20 @@
+shape = "trajectory"
+lang = "ko"
+agent = "codex"
+occurred_at = "2026-09-05"
+content = """
+[step 001 · 2026-09-05T05:30:47Z · tool: bash]
+action: deploy (shop-dev) 헬스체크를 데이터베이스에 연결
+observation: 연결 거부. 문서는 방화벽이 5432 포트를 기본으로 연다고 가정하지만 이 호스트에서는 그렇지 않다
+"""
+
+[[entities]]
+surface = "deploy (shop-dev)"
+type = "Task"
+
+[[statements]]
+predicate = "premise_differs"
+subject_surface = "deploy (shop-dev)"
+object_literal_type = "text"
+object_literal_value = "문서는 방화벽이 5432 포트를 기본으로 연다고 가정하지만 이 호스트에서는 그렇지 않다"
+valid_from = "2026-09-05"

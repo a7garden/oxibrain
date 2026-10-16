@@ -1,0 +1,5 @@
+id = "workflow-1"
+category = "workflow"
+question = "What is the first step of a successful deploy (shop-prod) run?"
+answer = "warm the vendored crate cache first"
+supporting_episodes = ["a04", "a11"]

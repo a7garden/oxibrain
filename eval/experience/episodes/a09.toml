@@ -1,0 +1,21 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-10"
+content = """
+[step 001 · 2026-09-10T04:10:00Z · tool: bash]
+action: rotate-secrets (shop-prod) with the legacy key pair
+observation: error: rotate-secrets (shop-prod) failed because the token endpoint rejected the old key
+"""
+
+[[entities]]
+surface = "rotate-secrets (shop-prod)"
+type = "Task"
+
+[[statements]]
+predicate = "failed_because"
+subject_surface = "rotate-secrets (shop-prod)"
+object_literal_type = "text"
+object_literal_value = "the token endpoint rejected the old key"
+valid_from = "2026-09-10"
+valid_to = "2026-09-15"

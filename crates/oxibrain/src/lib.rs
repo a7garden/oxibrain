@@ -13,6 +13,7 @@ pub mod paths;
 pub mod pull_plan;
 mod render;
 mod session;
+mod trace;
 pub use config::BrainConfig;
 pub use document_plane::{
     DocumentFreshness, DocumentHit, DocumentRootSpec, IndexOptions, PendingStats,
@@ -1142,6 +1143,19 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<Vec<String>, BrainError> {
         self.consolidate_impl(space, config).await
+    }
+
+    /// Runbook consolidation (experience memory, M11): clusters Primary
+    /// episodes sharing a Task/Code/Artifact anchor (≥ `min_members`) and
+    /// writes a Derived runbook episode per cluster. Terminal, cached,
+    /// Uncertainty-bearing (P10).
+    pub async fn consolidate_runbooks(
+        &self,
+        space: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+        min_members: usize,
+    ) -> Result<Vec<String>, BrainError> {
+        self.runbooks_impl(space, config, min_members).await
     }
 
     /// Generate community summary text as cached Derived episodes (§9.4, §5.3).

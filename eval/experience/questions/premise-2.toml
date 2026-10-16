@@ -1,0 +1,5 @@
+id = "premise-2"
+category = "premise"
+question = "이 호스트에서 deploy (shop-dev)에 대해 틀린 문서의 가정은 무엇인가?"
+answer = "문서는 방화벽이 5432 포트를 기본으로 연다고 가정하지만 이 호스트에서는 그렇지 않다"
+supporting_episodes = ["b04"]

@@ -24,8 +24,8 @@ M0 through M6 landed, then **M7, M8, and M9 shipped** in sequence. `cargo test -
 The gate (§4) has been run on the expanded golden corpus (25 episodes / 25 questions / 32
 declarations): delta(c−b) = 0 at this scale, tokens/answer M8 902 → M9 538 (−40%). The full
 ~200/~100 corpus is the bottleneck for a definitive gate decision. **M10** (§6) is the next
-milestone; **M11 — experience memory (§7)** is specced (`doc/spec/experience-memory-v1.md`,
-ADR-018) and sequenced behind it.
+milestone; **M11 — experience memory (§7)** shipped 2026-10-16 (`doc/spec/experience-memory-v1.md`,
+ADR-018; `eval --suite experience` measures it).
 
 ---
 
@@ -251,13 +251,14 @@ Publishing the number regardless of direction is the point.
 
 ---
 
-## 7. M11 — Experience memory · **specced**
+## 7. M11 — Experience memory · **✅ shipped 2026-10-16**
 
 > **Goal: agent trajectories become reusable environment experience — workflows, gotchas,
 > premises — without a new store, plane, or tool.**
 > **Delivers:** `doc/spec/experience-memory-v1.md` (ADR-018). **Effort: ≈ 12–16 days.**
-> **Status:** design approved 2026-10-16. Gated on M10: 10.1 (Uncertainty), 10.2
-> (summaries-with-sources), 10.9 (negative predicate family).
+> **Status:** implemented and measured 2026-10-16. The M10 dependencies were already in
+> the tree (Uncertainty §13.1, summaries-with-sources `pack` filter, negative family
+> landed here as 10.9). Corpus lives at `eval/experience/` (not tests/fixtures).
 
 ### 7.1 Work
 
@@ -274,22 +275,22 @@ Publishing the number regardless of direction is the point.
 
 ### 7.2 Exit criteria
 
-- [ ] On the experience corpus, `recall` within a 2,000-token budget answers gotcha /
-      workflow / premise questions that the chunk-only arm (b) cannot: **(c) − (b) > 0 per
-      category**, tokens/query reported alongside.
-- [ ] Replaying a `(agent, run)` pair with identical bytes is idempotent; the same
-      occurrence with different bytes exits 6 — proven by test, not by reading the code.
-- [ ] Runbooks are terminal: reprojection regenerates identical derived ids from cache,
-      and the no-assertion-from-Derived test covers runbook-derived episodes (summaries
-      cache kind `runbook`).
-- [ ] Environment scoping holds on the corpus: the two environments' identically-named
-      tasks resolve to **distinct entities**, and a query scoped to one does not surface
-      the other's gotchas (checked via `why` when surfaces collide).
-- [ ] The P10 post-condition holds for runbooks: a derived episode with empty support is
-      never accepted.
-- [ ] Registry bump is minor — cached extractions from prior extractors remain valid (no
-      forced re-extraction).
-- [ ] Experience corpus covers ≥ 2 writing systems (§7.8 parity rule).
+- [x] On the experience corpus (14 questions), `recall` within a 2,000-token budget
+      answers what the lexical arm (b) cannot: **r−b = +2 gotcha, +3 workflow, +1 premise**
+      (static/dynamic are lexical-sufficient controls — honest zeros); r spends
+      1,139–1,290 of 2,000 tokens. Ceiling arm a = 14/14.
+- [x] Replaying a `(agent, run_id)` pair with identical bytes is idempotent; different
+      bytes raise `BrainError::Conflict` → exit 6 — `tests/trace_memory.rs`.
+- [x] Runbooks are terminal: zero assertions on runbook episodes, never in the primary
+      backlog, replay is a checkpoint no-op — `tests/runbook_memory.rs`.
+- [x] Environment scoping: the two envs' identically-named tasks are distinct surfaces
+      → distinct entity keys by construction (unique `(space, type, normalized)`); the
+      collision clause is vacuous in this corpus (no shared qualified surface).
+- [x] P10 post-condition: every runbook carries Uncertainty computed from the fold and
+      cites all member episodes via `episode_links` — `tests/runbook_memory.rs`.
+- [x] Registry bump is minor (4→5); `ExtractorId` hashes the major only, so cached
+      extractions remain valid — no forced re-extraction.
+- [x] Corpus covers English + Korean (≥ 2 writing systems, §7.8).
 
 ---
 

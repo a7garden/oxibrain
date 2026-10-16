@@ -461,7 +461,22 @@ fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainEr
         }),
         "conversation" => Ok(SourceRef::Conversation),
         "message" => Ok(SourceRef::Message),
-        "agent_trace" => Ok(SourceRef::AgentTrace),
+        "agent_trace" => {
+            #[derive(serde::Deserialize)]
+            struct AgentTraceReference {
+                agent: String,
+            }
+            let reference = r#ref.as_deref().ok_or_else(|| {
+                BrainError::Corruption("missing agent_trace source reference".into())
+            })?;
+            let reference: AgentTraceReference =
+                serde_json::from_str(reference).map_err(|error| {
+                    BrainError::Corruption(format!("invalid agent_trace source reference: {error}"))
+                })?;
+            Ok(SourceRef::AgentTrace {
+                agent: reference.agent,
+            })
+        }
         "document_revision" => Ok(SourceRef::DocumentRevision {
             uri: r#ref.unwrap_or_default(),
         }),
@@ -479,9 +494,9 @@ fn decode_source(kind: &str, r#ref: Option<String>) -> Result<SourceRef, BrainEr
             struct SessionReference {
                 session_id: String,
             }
-            let reference = r#ref.as_deref().ok_or_else(|| {
-                BrainError::Corruption("missing session source reference".into())
-            })?;
+            let reference = r#ref
+                .as_deref()
+                .ok_or_else(|| BrainError::Corruption("missing session source reference".into()))?;
             let reference: SessionReference = serde_json::from_str(reference).map_err(|error| {
                 BrainError::Corruption(format!("invalid session source reference: {error}"))
             })?;

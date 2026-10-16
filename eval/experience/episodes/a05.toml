@@ -1,0 +1,20 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-06"
+content = """
+[step 001 · 2026-09-06T02:15:44Z · tool: bash]
+action: connect the deploy (shop-prod) health check to the database
+observation: connection refused. the docs assume the firewall opens port 5432 by default, but on this host it does not
+"""
+
+[[entities]]
+surface = "deploy (shop-prod)"
+type = "Task"
+
+[[statements]]
+predicate = "premise_differs"
+subject_surface = "deploy (shop-prod)"
+object_literal_type = "text"
+object_literal_value = "the docs assume the firewall opens port 5432 by default"
+valid_from = "2026-09-06"
