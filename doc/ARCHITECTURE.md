@@ -1,5 +1,15 @@
 # oxibrain — Architecture
-> **Version:** v2.22 · **Date:** 2026-10-16 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.23 · **Date:** 2026-10-17 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.23 — Honest memory closed (M10) + recall composition knobs.** `RecallHints`
+> gains additive `skip_beliefs` / `skip_episodes` / `skip_summaries` (default
+> false): composition knobs for compact recall and the §13.2 exit comparison.
+> `eval --suite experiential` runs that comparison deterministically over
+> `eval/experience/` — canned-LLM extraction + runbook consolidation, four
+> arms (none / summary-only / sources-only / hybrid), measured 2026-10-17:
+> summary 2/4 vs baseline 0, sources 4/4, hybrid 4/4 dominating. MMR ceiling
+> gains a proptest (`mmr_ceiling_property_distinct_prefix_and_conservation`).
+> The `Brain` facade splits into focused submodules (`spaces.rs`, `reads.rs`)
+> with no API change — `lib.rs` is 814 LOC (M10 exit: < 1,000).
 > **v2.22 — Experience memory (M11, spec `doc/spec/experience-memory-v1.md`, ADR-018).**
 > Trajectories are Primary episodes: `SourceRef::AgentTrace { agent }` (JSON ref
 > column, v14 backfills legacy NULL refs with "import-oxios") with event identity

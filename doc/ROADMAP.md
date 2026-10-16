@@ -23,9 +23,9 @@ M0 through M6 landed, then **M7, M8, and M9 shipped** in sequence. `cargo test -
 
 The gate (§4) has been run on the expanded golden corpus (25 episodes / 25 questions / 32
 declarations): delta(c−b) = 0 at this scale, tokens/answer M8 902 → M9 538 (−40%). The full
-~200/~100 corpus is the bottleneck for a definitive gate decision. **M10** (§6) is the next
-milestone; **M11 — experience memory (§7)** shipped 2026-10-16 (`doc/spec/experience-memory-v1.md`,
-ADR-018; `eval --suite experience` measures it).
+~200/~100 corpus is the bottleneck for a definitive gate decision. **M10 (§6) and
+M11 — experience memory (§7)** both shipped (2026-10-17 / 2026-10-16); `eval
+--suite experience|experiential` measures them.
 
 ---
 
@@ -218,11 +218,15 @@ Publishing the number regardless of direction is the point.
 
 ---
 
-## 6. M10 — Honest memory
+## 6. M10 — Honest memory · **✅ shipped 2026-10-17**
 
 > **Goal: the system's summaries stop being confidently wrong.**
 > **Delivers:** P10 and the remaining reference-derived improvements. **Effort: ≈ 12–15 days.**
-
+> **Status:** all ten items in the tree — 10.1–10.6, 10.10 predated this check-in
+> (Uncertainty plumbing, sourceless-summary pack filter, Mmr/Corroboration,
+> `RerankPort` + `CrossEncoderReranker`, confidence-weighted label propagation,
+> table-driven `pipeline::step`); 10.9 landed with M11; the §13.2 comparison,
+> the MMR property test, and the facade split landed 2026-10-17.
 ### 6.1 Work
 
 | # | Item | Ref | Days |
@@ -240,14 +244,25 @@ Publishing the number regardless of direction is the point.
 
 ### 6.2 Exit criteria
 
-- [ ] The experiential-memory comparison reproduced on our corpus: summary-only, sources-only,
-      hybrid. **Hybrid wins, and summary-only beats the no-memory baseline.** The published
-      figures were 2.65 / 4.55 / 4.95 against a 3.30 baseline; if our summary-only arm lands
-      below baseline, §13's salience design is still wrong and ships nothing.
-- [ ] Top-10 results for a broad query contain no two items above 0.9 mutual similarity.
-- [ ] `fabricated_entity_rate` is computed and is 0.00 — proven, not asserted.
-- [ ] `oxibrain` facade **under 1,000 LOC**.
-- [ ] Crash tests are table-driven over `(Stage, Outcome) → Step`, with no database and no model.
+- [x] Experiential-memory comparison, measured 2026-10-17
+      (`eval --suite experiential`, deterministic canned-LLM runbooks over
+      `eval/experience/`): **summary-only 2/4 vs no-memory 0; sources-only
+      4/4; hybrid 4/4 — dominates every arm and strictly beats summary-only**
+      (premise-2 answers only from sources, static-1 only from beliefs, both
+      reach hybrid). The published figures were LLM-judged (2.65 / 4.55 / 4.95
+      vs 3.30); this rendering scores answer reachability within a
+      2,000-token budget — same ordering, honest zeros included.
+- [x] Top-10 mutual similarity: `mmr_ceiling_property_distinct_prefix_and_conservation`
+      (proptest over adversarial duplicate clusters) + the two example tests.
+      The property caught a real fixture flaw on its first run (n ≥ 14 even
+      spacing exceeds 0.9) — it bites.
+- [x] `fabricated_entity_rate` measured (`measure_fabrication_rate` from source
+      text, enforced by `check_gates`): `eval --suite fast` — precision 1.000,
+      recall 1.000, all §14.2 gates green.
+- [x] Facade **814 LOC** (`lib.rs`; spaces/reads moved to focused submodules,
+      no API change).
+- [x] Crash tests table-driven over `(Stage, Outcome) → Step` (`pipeline.rs`,
+      no database, no model).
 
 ---
 

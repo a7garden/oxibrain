@@ -1,5 +1,6 @@
 shape = "trajectory"
 lang = "en"
+agent = "claude-code"
 occurred_at = "2026-09-20"
 content = """
 [step 001 · 2026-09-20T04:30:00Z · tool: bash]
