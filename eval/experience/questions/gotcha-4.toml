@@ -1,0 +1,5 @@
+id = "gotcha-4"
+category = "gotcha"
+question = "The task that requires a vault lease previously failed for which reason?"
+answer = "the token endpoint rejected the old key"
+supporting_episodes = ["a09", "a10"]

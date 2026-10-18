@@ -1,0 +1,16 @@
+# Gate expansion: 수지's move (KO knowledge update).
+shape = "document"
+lang = "ko"
+occurred_at = "2023-10-01"
+content = "수지는 한빛시스템을 떠나 씨앗테크로 이직했다."
+[[entities]]
+surface = "수지"
+type = "Person"
+[[entities]]
+surface = "씨앗테크"
+type = "Organization"
+[[statements]]
+predicate = "employed_by"
+subject_surface = "수지"
+object_surface = "씨앗테크"
+valid_from = "2023-10-01"

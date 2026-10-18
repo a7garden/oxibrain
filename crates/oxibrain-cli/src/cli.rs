@@ -137,6 +137,18 @@ pub enum AdminCmd {
         #[arg(long)]
         space: String,
     },
+    /// Consolidate episodes into Derived summaries (topic) or runbooks (task).
+    Consolidate {
+        #[arg(long)]
+        space: String,
+        /// Clustering mode: topic (shared-statement clusters) or task
+        /// (Task/Code/Artifact runbooks — experience memory M11).
+        #[arg(long, default_value = "topic")]
+        mode: String,
+        /// Minimum distinct episodes per task cluster (task mode only).
+        #[arg(long, default_value_t = 3)]
+        min_members: usize,
+    },
     /// Migrate legacy Oxi-home layouts into the canonical tree (resumable).
     /// Copies `<oxi-home>/models` into `<oxi-home>/brain/models`; the source
     /// is kept as a recoverable backup and the run is journaled, so it is

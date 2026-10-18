@@ -1,0 +1,20 @@
+shape = "trajectory"
+lang = "ko"
+agent = "codex"
+occurred_at = "2026-09-06"
+content = """
+[step 001 · 2026-09-06T05:40:12Z · tool: bash]
+action: 빌드 스크립트 (shop-dev) 대규모 번들 빌드
+observation: 크래시: 빌드 스크립트 (shop-dev)는 NODE_OPTIONS에 --max-old-space-size가 없을 때 실패한다
+"""
+
+[[entities]]
+surface = "빌드 스크립트 (shop-dev)"
+type = "Code"
+
+[[statements]]
+predicate = "fails_when"
+subject_surface = "빌드 스크립트 (shop-dev)"
+object_literal_type = "text"
+object_literal_value = "NODE_OPTIONS에 --max-old-space-size가 없다"
+valid_from = "2026-09-06"

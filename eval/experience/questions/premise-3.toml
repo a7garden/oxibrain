@@ -1,0 +1,5 @@
+id = "premise-3"
+category = "premise"
+question = "What did deploy (shop-prod) assume about the database at start?"
+answer = "the database was empty at start"
+supporting_episodes = ["a06"]

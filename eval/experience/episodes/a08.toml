@@ -1,0 +1,23 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-09"
+content = """
+[step 001 · 2026-09-09T02:55:33Z · tool: bash]
+action: invoke the deploy script from deploy (shop-prod)
+observation: artifact built and signed; deploy (shop-prod) requires the deploy script for signing
+"""
+
+[[entities]]
+surface = "deploy (shop-prod)"
+type = "Task"
+
+[[entities]]
+surface = "deploy script"
+type = "Code"
+
+[[statements]]
+predicate = "requires"
+subject_surface = "deploy (shop-prod)"
+object_surface = "deploy script"
+valid_from = "2026-09-09"

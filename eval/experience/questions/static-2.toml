@@ -1,0 +1,5 @@
+id = "static-2"
+category = "static"
+question = "deploy (shop-dev)는 무엇을 필요로 하는가?"
+answer = "registry 미러 설정"
+supporting_episodes = ["b03", "b08", "b10"]

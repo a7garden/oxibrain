@@ -1,0 +1,5 @@
+id = "q-033"
+category = "knowledge_update"
+question = "What is Frank's current full name?"
+answer = "Frank Wolfe"
+supporting_episodes = ["document-011"]

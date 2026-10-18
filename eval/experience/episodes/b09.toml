@@ -1,0 +1,20 @@
+shape = "trajectory"
+lang = "ko"
+agent = "codex"
+occurred_at = "2026-09-10"
+content = """
+[step 001 · 2026-09-10T06:20:07Z · tool: bash]
+action: deploy (shop-dev) 그린 배포 후 헬스체크
+observation: 헬스체크가 즉시 실패했다가 30초 뒤 통과. 재시도하지 않고 기다리면 된다
+"""
+
+[[entities]]
+surface = "deploy (shop-dev)"
+type = "Task"
+
+[[statements]]
+predicate = "failed_because"
+subject_surface = "deploy (shop-dev)"
+object_literal_type = "text"
+object_literal_value = "그린 배포 직후 헬스체크가 즉시 통과하지 못한다"
+valid_from = "2026-09-10"

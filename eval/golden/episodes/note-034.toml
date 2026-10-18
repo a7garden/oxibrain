@@ -1,0 +1,16 @@
+# Gate expansion: Korean churn — 수지's employer supersession.
+shape = "note"
+lang = "ko"
+occurred_at = "2023-04-01"
+content = "수지는 한빛시스템에 다니고 있다."
+[[entities]]
+surface = "수지"
+type = "Person"
+[[entities]]
+surface = "한빛시스템"
+type = "Organization"
+[[statements]]
+predicate = "employed_by"
+subject_surface = "수지"
+object_surface = "한빛시스템"
+valid_from = "2023-04-01"

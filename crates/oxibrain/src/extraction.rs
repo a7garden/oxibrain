@@ -505,6 +505,144 @@ impl Brain {
         .await
     }
 
+    /// Generate runbook Derived episodes from Task/Code/Artifact clusters
+    /// (experience memory spec §4, M11). Mirrors [`consolidate_impl`] so
+    /// runbooks satisfy the same deterministic consolidation invariants:
+    /// checkpoint BEFORE model work, the LLM call outside any store
+    /// transaction, and cache + derived episode (with Uncertainty) +
+    /// checkpoint-complete in one atomic write op. Runbooks are terminal —
+    /// `EpisodeKind::Derived`, never re-extracted (§5.3).
+    pub(crate) async fn runbooks_impl(
+        &self,
+        space: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+        min_members: usize,
+    ) -> Result<Vec<String>, BrainError> {
+        let llm = self.require_llm()?.clone();
+        let now = self.clock.now();
+        let space_owned = space.to_string();
+        let extractor_id = config.id();
+
+        // 1. Read task clusters + filter to pending ones [read-only].
+        let clusters = {
+            let space_owned = space_owned.clone();
+            let extractor_id = extractor_id.clone();
+            self.read(move |conn| {
+                let all = oxibrain_store::consolidation::find_task_clusters(
+                    conn,
+                    &space_owned,
+                    min_members,
+                )?;
+                oxibrain_store::consolidation::filter_pending_task_clusters(
+                    conn,
+                    &extractor_id,
+                    &all,
+                )
+            })
+            .await?
+        };
+
+        // 2. Per pending cluster: checkpoint first, cache check, LLM only
+        //    on a miss — model calls never inside a store transaction.
+        let mut runbooks: Vec<(oxibrain_store::consolidation::TaskCluster, String)> = Vec::new();
+        for cluster in clusters {
+            let runbook_hash = oxibrain_store::consolidation::hash_runbook_member_set(
+                &cluster.anchor_entity,
+                &cluster.episode_ids,
+            );
+            {
+                let extractor_id = extractor_id.clone();
+                self.write(move |conn| {
+                    oxibrain_store::consolidation::checkpoint_begin(
+                        conn,
+                        &runbook_hash,
+                        &extractor_id,
+                        now,
+                    )
+                })
+                .await?;
+            }
+            let cached = {
+                let extractor_id = extractor_id.clone();
+                self.read(move |conn| {
+                    oxibrain_store::consolidation::get_cached_summary(
+                        conn,
+                        "runbook",
+                        &runbook_hash,
+                        &extractor_id,
+                    )
+                })
+                .await?
+            };
+            if let Some(text) = cached {
+                runbooks.push((cluster, text));
+                continue;
+            }
+            let prompt = {
+                let space_owned = space_owned.clone();
+                let cluster = cluster.clone();
+                self.read(move |conn| {
+                    oxibrain_store::consolidation::build_runbook_prompt(
+                        conn,
+                        &space_owned,
+                        &cluster,
+                    )
+                })
+                .await?
+            };
+            let response = llm
+                .complete(LlmRequest {
+                    model: config.model_id.clone(),
+                    system: Some("You write concise, strictly grounded runbooks.".into()),
+                    prompt,
+                    json_schema: None,
+                    max_tokens: config.max_tokens,
+                })
+                .await?;
+            runbooks.push((cluster, response.text));
+        }
+
+        // 3. One transaction: cache + derived episode + checkpoint-complete.
+        //    Uncertainty is computed for the ANCHOR's beliefs — the runbook
+        //    is about that entity (P10: computed from the fold, never by
+        //    the model).
+        self.write(move |conn| {
+            let mut ids = Vec::new();
+            for (cluster, text) in &runbooks {
+                let runbook_hash = oxibrain_store::consolidation::hash_runbook_member_set(
+                    &cluster.anchor_entity,
+                    &cluster.episode_ids,
+                );
+                let uncertainty = oxibrain_store::consolidation::uncertainty_for_cluster(
+                    conn,
+                    &space_owned,
+                    std::slice::from_ref(&cluster.anchor_entity),
+                    now,
+                )?;
+                oxibrain_store::consolidation::cache_summary(
+                    conn,
+                    "runbook",
+                    &runbook_hash,
+                    &extractor_id,
+                    text,
+                    now,
+                )?;
+                let id = oxibrain_store::consolidation::write_derived_episode(
+                    conn,
+                    &space_owned,
+                    text,
+                    &cluster.episode_ids,
+                    Some(&uncertainty),
+                    now,
+                )?;
+                oxibrain_store::consolidation::checkpoint_complete(conn, &runbook_hash, now)?;
+                ids.push(id);
+            }
+            Ok(ids)
+        })
+        .await
+    }
+
     /// Generate community summary text as cached Derived episodes (§9.4, §5.3).
     ///
     /// Mirrors [`consolidate_impl`] so community summaries satisfy the

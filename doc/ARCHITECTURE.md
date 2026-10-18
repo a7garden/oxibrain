@@ -1,5 +1,33 @@
 # oxibrain — Architecture
-> **Version:** v2.20 · **Date:** 2026-10-08 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.23 · **Date:** 2026-10-17 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.23 — Honest memory closed (M10) + recall composition knobs.** `RecallHints`
+> gains additive `skip_beliefs` / `skip_episodes` / `skip_summaries` (default
+> false): composition knobs for compact recall and the §13.2 exit comparison.
+> `eval --suite experiential` runs that comparison deterministically over
+> `eval/experience/` — canned-LLM extraction + runbook consolidation, four
+> arms (none / summary-only / sources-only / hybrid), measured 2026-10-17:
+> summary 2/4 vs baseline 0, sources 4/4, hybrid 4/4 dominating. MMR ceiling
+> gains a proptest (`mmr_ceiling_property_distinct_prefix_and_conservation`).
+> The `Brain` facade splits into focused submodules (`spaces.rs`, `reads.rs`)
+> with no API change — `lib.rs` is 814 LOC (M10 exit: < 1,000).
+> **v2.22 — Experience memory (M11, spec `doc/spec/experience-memory-v1.md`, ADR-018).**
+> Trajectories are Primary episodes: `SourceRef::AgentTrace { agent }` (JSON ref
+> column, v14 backfills legacy NULL refs with "import-oxios") with event identity
+> `(space, "agent:<agent>" source, run_id)` — idempotent replay, conflict on
+> different bytes — recorded Untrusted (v2.21 rule), per-agent source rows ensured
+> like sessions. `ingest` gains an additive `trace` payload (MCP surface stays
+> sixteen). `core/v1` ships minor 5: the M10 negative family (`failed_because`,
+> `assumed`, `unknown_whether`) plus `requires` / `fails_when` / `premise_differs`
+> — ordered procedures stay prose in the derived half (ADR-018: the truth half is
+> atemporal). `Brain::consolidate_runbooks` clusters Task/Code/Artifact-anchored
+> episodes (≥ min members) into runbook `Derived` episodes (summaries cache scope
+> "runbook", Uncertainty mandatory, terminal); CLI `admin consolidate --mode task`.
+> `build_context_input` now harvests FTS-matched **primary** episodes before the
+> recency fill (the raw-slice pool — statement-only retrieval cannot see workflow
+> prose; declarations stay out: their claims already render as beliefs).
+> Evaluation: `eval --suite experience` over `eval/experience/` (2 envs × shared
+> task name, EN+KO, 14 questions, arms a/b/c/r); measured 2026-10-16: ceiling
+> 14/14, gotcha r−b +2, workflow +3, premise +1, r ≤ ~1.3k tokens of a 2k budget.
 > **v2.19 — Detached backup and restore.** The admin CLI snapshots brain.db
 > through SQLite's online backup API, validates integrity, and records a
 > generation plus per-file BLAKE3 digests. It carries documents.toml and
@@ -37,6 +65,13 @@
 > that excludes the current session's summary from the layer. The MCP tool surface moves
 > fourteen → sixteen by explicit owner decision; the add-one-remove-one rule remains for
 > future growth.
+> **v2.21 — Agent session trust.** Session summaries are agent-generated claims,
+> not authenticated Owner fact declarations. `record_session` records them as
+> `Untrusted`; session provenance and event identity remain unchanged. The
+> generated `session_record` schema publishes
+> `"x-oxibrain-session-trust": "untrusted"` so consumers can verify the deployed
+> engine's semantics before writing. An older engine without this marker must
+> not receive model-generated summaries as trusted session records.
 > **v2.15 — Unified Oxi home (spec `docs/superpowers/specs/2026-08-29-oxi-home-layout-design.md`, ADR-015).**
 > One discoverable root (`~/.oxi`, override `OXI_HOME`) with strict ownership: `brain/` is
 > oxibrain-private, `spaces/<space>/vault/` is the only shared write area (oximemo owns space
@@ -732,8 +767,10 @@ pub struct Episode {
 ```
 
 `SourceRef` — `Conversation | Note{path} | Document{uri} | DocumentRevision{uri} |
-ArtifactEvent{uri} | WebClip{uri} | CalendarEvent{uri} | Message | AgentTrace | Declaration |
-Derived{of}`.
+ArtifactEvent{uri} | WebClip{uri} | CalendarEvent{uri} | Message | AgentTrace{agent} |
+Declaration | Derived{of}`. `AgentTrace{agent}` carries per-agent identity in the ref
+column as JSON (v2.22); event identity for trajectory episodes is
+`(space, "agent:<agent>" source, run_id)`.
 
 ### 5.3 Episode kinds — closing the derived-episode loop
 
@@ -868,10 +905,12 @@ pub struct EntityTypeDef {
 Bool | Enum`. Dates especially must be typed or `timeline` degrades to string comparison.
 
 **Shipping ontology `core/v1`** — entity types `Person, Organization, Project, Concept, Place,
-Event, Artifact, Document, Code, Task`; ~40 predicates, plus a small **negative/uncertain**
-family (`failed_because`, `assumed`, `unknown_whether`) so agent traces can record what did not
-work and what is not known. It is **data seeded by migration**, so projects extend it
-(`oxibrain predicate add`) without forking code.
+Event, Artifact, Document, Code, Task`; ~40 predicates, plus the **negative/uncertain**
+family (`failed_because`, `assumed`, `unknown_whether`) and the **experience family**
+(`requires`, `fails_when`, `premise_differs`) so agent traces can record what did not
+work, what is not known, and what breaks in this environment (v2.22, minor 5). It is
+**data seeded by migration**, so projects extend it (`oxibrain predicate add`) without
+forking code.
 
 **Versioning.** `ExtractorId` includes the registry version (§9.5), so a naive bump invalidates
 every cached extraction and forces a full, paid re-extraction. Therefore:
@@ -2281,7 +2320,7 @@ boundary by construction.
 | `why` | Read | provenance, confidence breakdown, and drops |
 | `contradictions` | Read | contradicted statements |
 | `traverse` | Read | bounded belief-filtered subgraph; `as_of` supported |
-| `ingest` | Ingest | `extract:true` requires ClientSampling; CLI one-shot degrades to local LLM or `pending` (ADR-013 §8) |
+| `ingest` | Ingest | `extract:true` requires ClientSampling; CLI one-shot degrades to local LLM or `pending` (ADR-013 §8); optional `trace {agent, run_id, occurred_at?}` selects the trajectory path (v2.22): event identity, Untrusted default, conflict on rewritten bytes |
 | `remember` | Write | one-shot capture + extraction; same sampling axis; returns `Captured` or `CapturedPending` |
 | `declare` / `retract` | Write | deterministic, no model; `predicate` is a registry-generated enum (v2.13 P3) |
 | `merge_entities` | Write | resolution maintenance |
@@ -2374,6 +2413,7 @@ oxibrain admin document-history <alias> <locator> # §4.2.1 — gix read history
 oxibrain admin predicate add|list | eval [--suite fast|full|bench|parity]
 oxibrain admin source policy <name> --trust <tier>
 oxibrain admin export | import | reproject | reextract | regenerate-summaries
+oxibrain admin consolidate [--space S] --mode topic|task [--min-members N]   # v2.22: runbook consolidation (task)
 oxibrain admin skill install [--target omp]       # generates SKILL.md from the registry (P7)
 # removed in v2.13: ask, page, entity show|merge|alias|retract, timeline, spaces, bare
 #   stats/doctor (→ ops/describe/admin), space default, default_space resolution,

@@ -134,8 +134,13 @@ mod tests {
         custom.description = "A user-registered predicate.".into();
         defs.push(custom);
         let out = render(Path::new("/b"), &defs, true);
+        let core = core_v1().len();
         assert!(
-            out.contains("15 predicates (14 core/v1, 1 custom)"),
+            out.contains(&format!(
+                "{} predicates ({} core/v1, 1 custom)",
+                core + 1,
+                core
+            )),
             "{out}"
         );
         assert!(out.contains("custom_likes [custom]"), "{out}");

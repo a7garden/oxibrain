@@ -19,9 +19,17 @@ pub struct RecallHints {
     /// The caller's current session id. When set, the SessionSummaries layer
     /// excludes that session's own summary (prior sessions only).
     pub session_id: Option<String>,
+    /// Skip the belief-derived layers (HighSalienceBeliefs +
+    /// QueryNeighborhood). Profile always stays — its reserve is a floor.
+    /// Composition knob for cheap/compact recall and the §13.2 exit
+    /// comparison (summary-only / sources-only arms, M10).
+    pub skip_beliefs: bool,
+    /// Skip the episode layers (FTS-matched + recency). Session summaries
+    /// are unaffected.
+    pub skip_episodes: bool,
+    /// Skip the derived-summaries layer (§12.4).
+    pub skip_summaries: bool,
 }
-
-/// Pack context for a query to a token budget. When `hints` is provided,
 /// the layer composition adapts (DESIGN §9.5 proactive recall).
 ///
 /// This is the §12.3 reconstruction path: Profile (predicates marked
@@ -62,72 +70,151 @@ pub fn build_context_input(
     // 1. Profile — beliefs whose predicate is profile_relevant (§12.2).
     load_profile(conn, space, &mut input)?;
 
-    // 2. High-salience beliefs for query-relevant entities (F6 subjects).
-    let q = Query {
-        text: query_text.to_string(),
-        mode: QueryMode::Hybrid,
-        space: space.to_string(),
-        as_of: None,
-        limit: 10,
-        min_confidence: 0.0,
-        // Context assembly reads the memory ledger only; the documents
-        // plane is served by documents.db, never from here.
-        planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
-    };
-    let ranking = query::hybrid_query(conn, &q, None)?;
-    for item in &ranking.items {
-        if let oxibrain_core::TargetId::Statement { id } = &item.target
-            && let Some(entry) = render_belief(conn, space, id)?
-        {
-            input.beliefs.push(entry);
+    // 2.–3. Beliefs + neighborhood — skippable for summary-only /
+    //      sources-only compositions (§13.2 exit comparison, M10).
+    if !hints.is_some_and(|h| h.skip_beliefs) {
+        let q = Query {
+            text: query_text.to_string(),
+            mode: QueryMode::Hybrid,
+            space: space.to_string(),
+            as_of: None,
+            limit: 10,
+            min_confidence: 0.0,
+            // Context assembly reads the memory ledger only; the documents
+            // plane is served by documents.db, never from here.
+            planes: std::iter::once(oxibrain_core::retrieval::SearchPlane::Memory).collect(),
+        };
+        let ranking = query::hybrid_query(conn, &q, None)?;
+        for item in &ranking.items {
+            if let oxibrain_core::TargetId::Statement { id } = &item.target
+                && let Some(entry) = render_belief(conn, space, id)?
+            {
+                input.beliefs.push(entry);
+            }
         }
+
+        // 3. Query neighborhood — 1-hop edges of the top entities.
+        load_neighborhood(conn, space, &ranking, &mut input)?;
     }
-
-    // 3. Query neighborhood — 1-hop edges of the top entities.
-    load_neighborhood(conn, space, &ranking, &mut input)?;
-
-    // 4. Recent episodes (wider when hints request it). Legacy document /
-    //    document_revision episodes never enter context (two-plane §8).
-    let recent_limit: i64 = if let Some(h) = hints {
-        if h.is_session_start || h.topic_changed {
-            20
+    if !hints.is_some_and(|h| h.skip_episodes) {
+        // 4. Episodes: FTS query-relevant first, recency fill. The matched
+        //    half is the experience raw-slice pool (spec §2.2) — trajectories
+        //    and notes whose CONTENT answers the query, which statements
+        //    cannot reach (workflow prose). The recency half keeps the layer's
+        //    existing behaviour. Legacy document / document_revision / session
+        //    episodes never enter context (two-plane §8).
+        let episode_cap: i64 = if let Some(h) = hints {
+            if h.is_session_start || h.topic_changed {
+                20
+            } else {
+                5
+            }
         } else {
             5
+        };
+        let mut seen_episodes: std::collections::HashSet<String> = Default::default();
+        let mut matched_ids: Vec<String> = Vec::new();
+        for index in [crate::query::FtsIndex::Word, crate::query::FtsIndex::Ngram] {
+            // Errors are swallowed on purpose: the episode harvest is a
+            // relevance bonus, never a reason for recall itself to fail.
+            for hit in
+                crate::query::fts_search(conn, space, query_text, 64, index).unwrap_or_default()
+            {
+                if let oxibrain_core::retrieval::SearchTarget::Episode { id } = hit.target {
+                    matched_ids.push(id);
+                }
+            }
         }
-    } else {
-        5
-    };
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, content, ingested_at FROM episodes
+        // Rank-preserving dedup: word-index BM25 order first, then ngram —
+        // truncation must keep the best-scored slices, not an arbitrary id
+        // order.
+        let mut rank_dedup: std::collections::HashSet<String> = Default::default();
+        matched_ids.retain(|id| rank_dedup.insert(id.clone()));
+        matched_ids.truncate(episode_cap as usize);
+        // Only PRIMARY episodes join the harvest: declarations are structured
+        // claims already rendered as beliefs — letting their JSON bodies expand
+        // verbatim only spends budget (measured: golden knowledge_update
+        // regressed one answer before this restriction).
+        if !matched_ids.is_empty() {
+            let placeholders = matched_ids
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT id, content, ingested_at FROM episodes
              WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
                AND source_kind NOT IN ('document', 'document_revision', 'session')
-             ORDER BY ingested_at DESC LIMIT ?2",
-        )
-        .map_err(sql_err)?;
-    let recent = stmt
-        .query_map(params![space, recent_limit], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-            ))
-        })
-        .map_err(sql_err)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(sql_err)?;
-    drop(stmt);
-    for (id, content, ingested_at) in recent {
-        input.episodes.push(oxibrain_core::pack::EpisodeExcerpt {
-            episode_id: id,
-            content,
-            ingested_at,
-            salience: 0.5,
-        });
-    }
+               AND kind = 'primary'
+               AND id IN ({placeholders})
+             ORDER BY id"
+            );
+            let mut bind: Vec<&dyn rusqlite::ToSql> = vec![&space];
+            for id in &matched_ids {
+                bind.push(id);
+            }
+            let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
+            let matched = stmt
+                .query_map(bind.as_slice(), |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(sql_err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sql_err)?;
+            drop(stmt);
+            for (id, content, ingested_at) in matched {
+                seen_episodes.insert(id.clone());
+                input.episodes.push(oxibrain_core::pack::EpisodeExcerpt {
+                    episode_id: id,
+                    content,
+                    ingested_at,
+                    salience: 0.9,
+                });
+            }
+        }
+        let fill = episode_cap - input.episodes.len() as i64;
+        if fill > 0 {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, content, ingested_at FROM episodes
+                 WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
+                   AND source_kind NOT IN ('document', 'document_revision', 'session')
+                 ORDER BY ingested_at DESC LIMIT ?2",
+                )
+                .map_err(sql_err)?;
+            let recent = stmt
+                .query_map(params![space, fill], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(sql_err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sql_err)?;
+            drop(stmt);
+            for (id, content, ingested_at) in recent {
+                if seen_episodes.insert(id.clone()) {
+                    input.episodes.push(oxibrain_core::pack::EpisodeExcerpt {
+                        episode_id: id,
+                        content,
+                        ingested_at,
+                        salience: 0.5,
+                    });
+                }
+            }
+        }
+    } // skip_episodes guard
 
     // 5. Summaries with sources (§12.4) — cached Derived-episode summaries.
-    load_summaries(conn, space, &mut input)?;
+    if !hints.is_some_and(|h| h.skip_summaries) {
+        load_summaries(conn, space, &mut input)?;
+    }
 
     // 6. Session summaries — prior sessions, newest-first (session memory).
     // The current session (hints.session_id) is excluded: its summary is

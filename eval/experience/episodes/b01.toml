@@ -1,0 +1,24 @@
+shape = "trajectory"
+lang = "ko"
+agent = "codex"
+occurred_at = "2026-09-02"
+content = """
+[step 001 · 2026-09-02T05:00:12Z · tool: bash]
+action: deploy (shop-dev) — npm run build
+observation: 에러: deploy (shop-dev)는 프록시 뒤에서 npm 레지스트리에 접근할 수 없어 실패한다
+
+[step 002 · 2026-09-02T05:01:44Z · tool: bash]
+action: 재시도
+observation: 동일 에러 발생
+"""
+
+[[entities]]
+surface = "deploy (shop-dev)"
+type = "Task"
+
+[[statements]]
+predicate = "fails_when"
+subject_surface = "deploy (shop-dev)"
+object_literal_type = "text"
+object_literal_value = "프록시 뒤에서 npm 레지스트리에 접근할 수 없다"
+valid_from = "2026-09-02"

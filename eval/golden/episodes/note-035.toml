@@ -1,0 +1,16 @@
+# Gate expansion: Chinese churn — 王's project change.
+shape = "note"
+lang = "zh"
+occurred_at = "2023-05-01"
+content = "王参与蓝桥项目。"
+[[entities]]
+surface = "王"
+type = "Person"
+[[entities]]
+surface = "蓝桥项目"
+type = "Project"
+[[statements]]
+predicate = "works_on"
+subject_surface = "王"
+object_surface = "蓝桥项目"
+valid_from = "2023-05-01"

@@ -1,0 +1,5 @@
+id = "premise-4"
+category = "premise"
+question = "Which assumption proved wrong for the task that requires the vault lease?"
+answer = "renewal is automatic"
+supporting_episodes = ["a10"]

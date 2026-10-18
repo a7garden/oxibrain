@@ -233,3 +233,99 @@ fn reproject_skips_garbage_declaration_and_continues() {
         .unwrap();
     assert!(alice >= 1, "valid declaration must project");
 }
+
+/// The incremental path projects an extraction when the extractor ran and a
+/// declaration when it was declared. Entity ids derive from the first event
+/// that creates the entity, and belief folds cut assertion visibility at the
+/// event's transaction time — so replay must interleave both event kinds in
+/// true event order and reuse the cached extraction's created_at. Otherwise:
+/// entities first created by a declaration replay get different ids, and an
+/// extraction replay stamped at ingest time hides later assertions from its
+/// fold (a deny declared after extraction would stop clipping the belief).
+#[test]
+fn reproject_preserves_mixed_extraction_and_declaration_identity() {
+    let (conn, clock) = setup();
+
+    // 1. Primary episode at t=1000.
+    conn.execute(
+        "INSERT INTO episodes (id, space_id, seq, content_hash, content, source_kind, trust, kind, occurred_at, ingested_at)
+         VALUES ('ep-primary', 's1', 0, x'00', 'Alice works on ProjectX at Acme.', 'note', 'untrusted', 'primary', 1000, 1000)",
+        [],
+    )
+    .unwrap();
+
+    // 2. Extraction at t=2000: cache + project, mirroring project_from_cache.
+    clock.advance(1000);
+    let now = clock.now();
+    assert_eq!(now.millis(), 2000);
+    let raw = r#"{"claims":[{"predicate":"works_on","subject":{"surface":"Alice","entity_type":"Person","quote":"Alice works on ProjectX"},"object":{"kind":"entity","mention":{"surface":"ProjectX","entity_type":"Project","quote":"ProjectX at Acme"}},"polarity":"affirm","confidence":0.9}]}"#;
+    oxibrain_store::extraction::cache_response(&conn, "ep-primary", "ext1", raw, now).unwrap();
+    let response: oxibrain_core::extraction::ExtractionResponse =
+        serde_json::from_str(raw).unwrap();
+    let result = oxibrain_core::extraction::validate_claims(
+        &response.claims,
+        "Alice works on ProjectX at Acme.",
+        oxibrain_core::registry::core_v1(),
+    );
+    assert!(!result.valid.is_empty(), "fixture claim must validate");
+    let mut cache = ResolutionCache::new();
+    oxibrain_store::extraction::project_extraction(
+        &conn,
+        "s1",
+        "ep-primary",
+        "ext1",
+        &result.valid,
+        now,
+        &mut cache,
+    )
+    .unwrap();
+
+    // 3. Deny the same triple at t=3000. The incremental fold clips the
+    //    affirming interval away — the statement keeps its assertions but
+    //    loses its belief.
+    clock.advance(1000);
+    let deny = Declaration::AddStatement {
+        subject: EntityRef {
+            surface: "Alice".into(),
+            ty: "Person".into(),
+        },
+        predicate: "works_on".into(),
+        object: DeclObject::Entity {
+            surface: "ProjectX".into(),
+            ty: "Project".into(),
+        },
+        polarity: "deny".into(),
+        valid_from: TIME_MIN.millis(),
+        valid_to: TIME_MAX.millis(),
+    };
+    let mut cache = ResolutionCache::new();
+    project_declaration(&conn, "s1", &deny, clock.now(), &mut cache).unwrap();
+
+    let beliefs_before: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM beliefs b JOIN statements s ON b.statement_id = s.id
+             WHERE s.predicate = 'works_on' AND s.subject_id = (SELECT entity_id FROM entity_keys WHERE surface = 'Alice')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        beliefs_before, 0,
+        "fully denied statement must hold no belief"
+    );
+
+    let before = oxibrain_store::index_ops::snapshot_truth(&conn, "s1").unwrap();
+
+    // 4. Reproject: the replay must reproduce the incremental projection
+    //    byte-for-byte — same entity/statement/assertion/mention ids, same
+    //    recorded_at on the extraction assertions, same (absent) belief.
+    let report = reproject::reproject(&conn).unwrap();
+    assert_eq!(report.declarations_skipped, 0);
+    assert_eq!(report.declarations_replayed, 1);
+
+    let after = oxibrain_store::index_ops::snapshot_truth(&conn, "s1").unwrap();
+    assert_eq!(
+        before, after,
+        "reproject must preserve mixed extraction/declaration identity, provenance and beliefs"
+    );
+}

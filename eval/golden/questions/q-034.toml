@@ -1,0 +1,6 @@
+id = "q-034"
+category = "temporal_reasoning"
+question = "What was Frank's full name on 2023-06-01?"
+as_of = "2023-06-01"
+answer = "Frank Wu"
+supporting_episodes = ["note-029"]

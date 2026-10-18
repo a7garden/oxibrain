@@ -11,7 +11,7 @@
 #   (c) oxibrain complete            — treatment
 # Reported quantity: (c) − (b) per category, with tokens/query alongside.
 #
-# Current corpus: 25 episodes (en/ko/zh), 25 questions, 52 declarations.
+# Current corpus: 43 episodes (en/ko/zh), 42 questions. Expanded 2026-10-17 with the gate-decision categories (churn supersession, as_of, multi-hop).
 # The full ~200/~100 corpus is human-curated content added incrementally.
 
 version = "0.2"
@@ -371,3 +371,135 @@ file = "questions/q-029.toml"
 id = "q-030"
 category = "graph_reasoning"
 file = "questions/q-030.toml"
+
+[[episodes]]
+id = "note-028"
+shape = "note"
+lang = "en"
+file = "episodes/note-028.toml"
+
+[[episodes]]
+id = "document-010"
+shape = "document"
+lang = "en"
+file = "episodes/document-010.toml"
+
+[[episodes]]
+id = "note-029"
+shape = "note"
+lang = "en"
+file = "episodes/note-029.toml"
+
+[[episodes]]
+id = "document-011"
+shape = "document"
+lang = "en"
+file = "episodes/document-011.toml"
+
+[[episodes]]
+id = "note-030"
+shape = "note"
+lang = "en"
+file = "episodes/note-030.toml"
+
+[[episodes]]
+id = "note-031"
+shape = "note"
+lang = "en"
+file = "episodes/note-031.toml"
+
+[[episodes]]
+id = "note-032"
+shape = "note"
+lang = "en"
+file = "episodes/note-032.toml"
+
+[[episodes]]
+id = "note-033"
+shape = "note"
+lang = "en"
+file = "episodes/note-033.toml"
+
+[[episodes]]
+id = "note-034"
+shape = "note"
+lang = "ko"
+file = "episodes/note-034.toml"
+
+[[episodes]]
+id = "document-012"
+shape = "document"
+lang = "ko"
+file = "episodes/document-012.toml"
+
+[[episodes]]
+id = "note-035"
+shape = "note"
+lang = "zh"
+file = "episodes/note-035.toml"
+
+[[episodes]]
+id = "document-013"
+shape = "document"
+lang = "zh"
+file = "episodes/document-013.toml"
+
+[[questions]]
+id = "q-031"
+category = "knowledge_update"
+file = "questions/q-031.toml"
+
+[[questions]]
+id = "q-032"
+category = "temporal_reasoning"
+file = "questions/q-032.toml"
+
+[[questions]]
+id = "q-033"
+category = "knowledge_update"
+file = "questions/q-033.toml"
+
+[[questions]]
+id = "q-034"
+category = "temporal_reasoning"
+file = "questions/q-034.toml"
+
+[[questions]]
+id = "q-035"
+category = "graph_reasoning"
+file = "questions/q-035.toml"
+
+[[questions]]
+id = "q-036"
+category = "graph_reasoning"
+file = "questions/q-036.toml"
+
+[[questions]]
+id = "q-037"
+category = "graph_reasoning"
+file = "questions/q-037.toml"
+
+[[questions]]
+id = "q-038"
+category = "knowledge_update"
+file = "questions/q-038.toml"
+
+[[questions]]
+id = "q-039"
+category = "temporal_reasoning"
+file = "questions/q-039.toml"
+
+[[questions]]
+id = "q-040"
+category = "knowledge_update"
+file = "questions/q-040.toml"
+
+[[questions]]
+id = "q-041"
+category = "temporal_reasoning"
+file = "questions/q-041.toml"
+
+[[questions]]
+id = "q-042"
+category = "graph_reasoning"
+file = "questions/q-042.toml"

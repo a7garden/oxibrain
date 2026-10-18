@@ -1,0 +1,20 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-07"
+content = """
+[step 001 · 2026-09-07T02:44:02Z · tool: bash]
+action: seed data before the deploy (shop-prod) smoke test
+observation: duplicate rows. the script assumed the database was empty at start, but the staging seed was already loaded
+"""
+
+[[entities]]
+surface = "deploy (shop-prod)"
+type = "Task"
+
+[[statements]]
+predicate = "assumed"
+subject_surface = "deploy (shop-prod)"
+object_literal_type = "text"
+object_literal_value = "the database was empty at start"
+valid_from = "2026-09-07"

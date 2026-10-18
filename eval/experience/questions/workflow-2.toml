@@ -1,0 +1,5 @@
+id = "workflow-2"
+category = "workflow"
+question = "deploy (shop-dev) 성공 실행의 첫 단계는 무엇인가?"
+answer = "registry 미러 설정을 먼저 적용"
+supporting_episodes = ["b03", "b08", "b10"]

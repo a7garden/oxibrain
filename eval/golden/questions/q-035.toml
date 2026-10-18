@@ -1,0 +1,5 @@
+id = "q-035"
+category = "graph_reasoning"
+question = "Who works on Platform Migration and has_skill Kubernetes?"
+answer = "Grace"
+supporting_episodes = ["note-030", "note-031"]

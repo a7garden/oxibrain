@@ -1,0 +1,24 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-08"
+content = """
+[step 001 · 2026-09-08T02:05:19Z · tool: bash]
+action: build the deploy script on a clean runner
+observation: error: the deploy script fails when it runs without OPENSSL_DIR set
+
+[step 002 · 2026-09-08T02:07:41Z · tool: bash]
+action: export OPENSSL_DIR then rebuild
+observation: build succeeded
+"""
+
+[[entities]]
+surface = "deploy script"
+type = "Code"
+
+[[statements]]
+predicate = "fails_when"
+subject_surface = "deploy script"
+object_literal_type = "text"
+object_literal_value = "runs without OPENSSL_DIR set"
+valid_from = "2026-09-08"

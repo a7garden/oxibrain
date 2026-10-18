@@ -11,8 +11,11 @@ pub mod migrate;
 pub mod models;
 pub mod paths;
 pub mod pull_plan;
+mod reads;
 mod render;
 mod session;
+mod spaces;
+mod trace;
 pub use config::BrainConfig;
 pub use document_plane::{
     DocumentFreshness, DocumentHit, DocumentRootSpec, IndexOptions, PendingStats,
@@ -32,12 +35,9 @@ pub use oxibrain_ports::{
 };
 
 pub use oxibrain_store::context::RecallHints;
-use oxibrain_store::documents::DocumentCache;
 pub use oxibrain_store::ledger::IngestAttachment;
 pub use oxibrain_store::project::{DeclObject, Declaration, EntityRef};
 pub use oxibrain_store::security::AuditRow;
-use oxibrain_store::{ledger, query};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Discriminator for the three `brief` target kinds (M9 §14.1, `brief(entity |
@@ -302,160 +302,6 @@ impl Brain {
         .map_err(|e| BrainError::Storage(format!("join: {e}")))?
     }
 
-    // ── Spaces ────────────────────────────────────────────────────────────
-
-    /// Ensure a space exists. Returns its id.
-    pub async fn ensure_space(&self, name: &str) -> Result<String, BrainError> {
-        let now = self.clock.now();
-        let name = name.to_string();
-        self.write(move |conn| ledger::create_space(conn, &name, now))
-            .await
-    }
-
-    /// Look up a space id by name without creating it (read-only). `Ok(None)`
-    /// when the name has no row. Scope gates call this instead of
-    /// `ensure_space` so denied reads do not create shadow rows.
-    pub async fn lookup_space(&self, name: &str) -> Result<Option<String>, BrainError> {
-        let name = name.to_string();
-        self.read(move |conn| ledger::lookup_space_by_name(conn, &name))
-            .await
-    }
-
-    /// Drop a space row (verified empty by the caller). Spec §4.5.
-    pub async fn drop_space(&self, space_id: &str) -> Result<(), BrainError> {
-        let space_id = space_id.to_string();
-        self.write(move |conn| ledger::drop_space(conn, &space_id))
-            .await
-    }
-
-    /// List all spaces with live counts, ordered by (created_at, id).
-    pub async fn list_spaces(&self) -> Result<Vec<SpaceInfo>, BrainError> {
-        self.read(move |conn| {
-            let rows = ledger::list_spaces(conn)?;
-            Ok(rows
-                .into_iter()
-                .map(|r| SpaceInfo {
-                    id: r.id,
-                    name: r.name,
-                    created_at: Timestamp::from_millis(r.created_at),
-                    episode_count: r.episode_count,
-                    entity_count: r.entity_count,
-                })
-                .collect())
-        })
-        .await
-    }
-
-    /// Predicate registry as persisted in the store — the core/v1 seed plus
-    /// every custom registration — ordered by name. The read path for
-    /// registry introspection (`admin predicate list`); semantics stay in
-    /// the registry (P4).
-    pub async fn list_predicates(&self) -> Result<Vec<oxibrain_core::PredicateDef>, BrainError> {
-        self.read(move |conn| {
-            let mut defs: Vec<oxibrain_core::PredicateDef> =
-                oxibrain_store::registry::load_all_predicates(conn)?
-                    .into_values()
-                    .collect();
-            defs.sort_by(|a, b| a.name.cmp(&b.name));
-            Ok(defs)
-        })
-        .await
-    }
-
-    /// Episode count for one space id (space-remove empty check, spec §4.5).
-    pub async fn episode_count_for_space(&self, space_id: &str) -> Result<i64, BrainError> {
-        let space_id = space_id.to_string();
-        self.read(move |conn| ledger::episode_count_for_space(conn, &space_id))
-            .await
-    }
-
-    /// Document rows in the documents cache for a space NAME (listing, spec §4.2).
-    pub async fn document_count_for_space(&self, space_name: &str) -> Result<u64, BrainError> {
-        let dir = self.config.dir.clone();
-        let name = space_name.to_string();
-        tokio::task::spawn_blocking(move || match DocumentCache::open_ro(&dir) {
-            Ok(cache) => cache.document_count_for_space(&name),
-            Err(BrainError::NotFound(_)) => Ok(0),
-            Err(e) => Err(e),
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
-    }
-
-    /// Chunk count for a space NAME (empty check, spec §4.5).
-    pub async fn chunk_count_for_space(&self, space_name: &str) -> Result<u64, BrainError> {
-        let dir = self.config.dir.clone();
-        let name = space_name.to_string();
-        tokio::task::spawn_blocking(move || match DocumentCache::open_ro(&dir) {
-            Ok(cache) => cache.chunk_count_for_space(&name),
-            Err(BrainError::NotFound(_)) => Ok(0),
-            Err(e) => Err(e),
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
-    }
-
-    /// Purge every documents-cache row for a space NAME (purge step 3).
-    pub async fn purge_documents_for_space(&self, space_name: &str) -> Result<(), BrainError> {
-        let dir = self.config.dir.clone();
-        let name = space_name.to_string();
-        tokio::task::spawn_blocking(move || {
-            let cache = DocumentCache::open_rw(&dir)?;
-            cache.purge_space(&name)
-        })
-        .await
-        .map_err(|e| BrainError::Storage(format!("join: {e}")))?
-    }
-
-    /// Ingest a note episode. Returns the episode id (content-derived).
-    pub async fn ingest_note(
-        &self,
-        space: &str,
-        path: &str,
-        content: String,
-        occurred_at: Timestamp,
-    ) -> Result<String, BrainError> {
-        self.ingest_note_impl(space, path, content, occurred_at)
-            .await
-    }
-
-    /// Note content hashes per source path (live episodes only), for sync
-    /// classification. Read-only; the decision lives in
-    /// [`oxibrain_core::classify_sync`].
-    pub async fn note_hashes(&self, space: &str) -> Result<oxibrain_core::KnownNotes, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| ledger::note_hashes_by_path(conn, &space))
-            .await
-    }
-
-    /// Latest event-path episode state per locator for a source.
-    /// Used by sync to derive occurrence chains (§4.2 pull mode).
-    pub async fn locator_states(
-        &self,
-        space: &str,
-        source_id: &str,
-    ) -> Result<HashMap<String, oxibrain_core::sync::LocatorState>, BrainError> {
-        let space = space.to_string();
-        let source_id = source_id.to_string();
-        self.read(move |conn| ledger::locator_states(conn, &space, &source_id))
-            .await
-    }
-
-    /// Current time from the configured clock. Exposed for callers that need
-    /// a Timestamp without going through an ingest method.
-    pub fn clock_now(&self) -> Timestamp {
-        self.clock.now()
-    }
-
-    pub async fn get_episode(&self, id: &str) -> Result<Option<Episode>, BrainError> {
-        let id = id.to_string();
-        self.read(move |conn| ledger::get_episode(conn, &id)).await
-    }
-
-    pub async fn episode_count(&self) -> Result<i64, BrainError> {
-        self.read(ledger::episode_count).await
-    }
-
     // ── Projection lifecycle ──────────────────────────────────────────────
 
     /// Drop and rebuild the entire projection from the ledger. When an
@@ -525,253 +371,6 @@ impl Brain {
             oxibrain_store::project::project_declaration(conn, &space, &decl, now, &mut cache)
         })
         .await
-    }
-
-    // ── Reads (truth + ranking halves) ────────────────────────────────────
-
-    /// Current beliefs for an entity (follows merge chain).
-    pub async fn beliefs(
-        &self,
-        space: &str,
-        entity_id: &str,
-    ) -> Result<Vec<oxibrain_core::Belief>, BrainError> {
-        let space = space.to_string();
-        let entity_id = entity_id.to_string();
-        self.read(move |conn| query::beliefs_for_entity(conn, &space, &entity_id))
-            .await
-    }
-
-    /// Canonical display surface for an entity id (follows merge chain).
-    /// Used by MCP projections that render human-readable object names.
-    pub async fn entity_surface(&self, space: &str, entity_id: &str) -> Result<String, BrainError> {
-        let space = space.to_string();
-        let entity_id = entity_id.to_string();
-        self.read(move |conn| {
-            oxibrain_store::brief::surface_of(conn, &entity_id)
-                .map_err(|_| BrainError::NotFound(format!("entity {entity_id} in {space}")))
-        })
-        .await
-    }
-
-    /// Rebuild a Retract declaration's inputs from a stored statement —
-    /// the statement-first retract path (the conflicts inbox holds statement
-    /// ids, not resolvable surfaces). Pure read; the caller declares.
-    pub async fn retract_parts(
-        &self,
-        space: &str,
-        statement_id: &str,
-    ) -> Result<
-        (
-            oxibrain_store::project::EntityRef,
-            String,
-            oxibrain_store::project::DeclObject,
-        ),
-        BrainError,
-    > {
-        let space = space.to_string();
-        let statement_id = statement_id.to_string();
-        self.read(move |conn| query::retract_parts(conn, &space, &statement_id))
-            .await
-    }
-
-    /// Beliefs as of a valid-time point.
-    pub async fn beliefs_as_of(
-        &self,
-        space: &str,
-        entity_id: &str,
-        valid_at: oxibrain_ports::Timestamp,
-    ) -> Result<Vec<oxibrain_core::Belief>, BrainError> {
-        let space = space.to_string();
-        let entity_id = entity_id.to_string();
-        self.read(move |conn| query::beliefs_as_of(conn, &space, &entity_id, Some(valid_at), None))
-            .await
-    }
-
-    /// All contradicted statements in a space.
-    pub async fn contradictions(
-        &self,
-        space: &str,
-    ) -> Result<Vec<oxibrain_core::Statement>, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| query::contradictions(conn, &space))
-            .await
-    }
-
-    /// Contradicted statements with surfaces and supporting episodes (UI DTO).
-    pub async fn contradiction_details(
-        &self,
-        space: &str,
-    ) -> Result<Vec<oxibrain_store::query::ContradictionDetail>, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| oxibrain_store::query::contradiction_details(conn, &space))
-            .await
-    }
-
-    /// Aggregate counts for a space (episodes, entities, statements,
-    /// contradicted statements). Used by the `stats` MCP tool and dashboards.
-    pub async fn stats(&self, space: &str) -> Result<oxibrain_core::SpaceStats, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| query::space_stats(conn, &space))
-            .await
-    }
-
-    /// Hybrid (or mode-specific) query. Returns ranked results with provenance.
-    pub async fn query(
-        &self,
-        q: oxibrain_core::retrieval::Query,
-    ) -> Result<oxibrain_core::retrieval::RankingResult, BrainError> {
-        let embedder = self.embedder.clone();
-        self.read(move |conn| query::hybrid_query(conn, &q, embedder.as_deref()))
-            .await
-    }
-
-    /// Memory-plane search for the planes-aware `search` (document_plane).
-    /// Hybrid query projected to UI-ready entity hits. Legacy
-    /// `document` / `document_revision` episodes are excluded at the FTS
-    /// fetch (see `query::fts_search`).
-    pub(crate) async fn search_memory(
-        &self,
-        q: &oxibrain_core::retrieval::Query,
-    ) -> Result<Vec<oxibrain_store::query::SearchResult>, BrainError> {
-        let embedder = self.embedder.clone();
-        let q = q.clone();
-        self.read(move |conn| {
-            let ranking = query::hybrid_query(conn, &q, embedder.as_deref())?;
-            query::search_results(conn, &q.space, &ranking)
-        })
-        .await
-    }
-
-    pub async fn rebuild_indexes(&self, space: &str) -> Result<(), BrainError> {
-        let space = space.to_string();
-        self.write(move |conn| oxibrain_store::index_ops::rebuild_indexes(conn, &space))
-            .await
-    }
-
-    /// Bounded subgraph traversal over a space's statement graph.
-    pub async fn traverse(
-        &self,
-        space: &str,
-        spec: oxibrain_core::retrieval::TraversalSpec,
-    ) -> Result<oxibrain_core::retrieval::TraversalResult, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| query::traverse(conn, &space, &spec))
-            .await
-    }
-
-    /// Look up the entity_id for a surface form + type within a space. Returns
-    /// `None` if the entity hasn't been declared yet.
-    pub async fn resolve_entity_id(
-        &self,
-        space: &str,
-        ty: &str,
-        surface: &str,
-    ) -> Result<Option<String>, BrainError> {
-        let space = space.to_string();
-        let ty = ty.to_string();
-        let surface = surface.to_string();
-        self.read(move |conn| query::resolve_entity_id(conn, &space, &ty, &surface))
-            .await
-    }
-
-    pub async fn list_entities(
-        &self,
-        space: &str,
-        limit: usize,
-    ) -> Result<Vec<oxibrain_core::Entity>, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| oxibrain_store::knowledge::list_entities(conn, &space, limit))
-            .await
-    }
-
-    /// Entities with canonical surfaces resolved, for the `space://` resource.
-    /// One SQL join — no N+1.
-    pub async fn list_entity_cards(
-        &self,
-        space: &str,
-        limit: usize,
-    ) -> Result<Vec<oxibrain_store::knowledge::EntityCard>, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| oxibrain_store::knowledge::list_entity_cards(conn, &space, limit))
-            .await
-    }
-
-    /// List merge records in a space, most recent first.
-    /// Used by the `review_merges` MCP tool.
-    pub async fn list_merges(
-        &self,
-        space: &str,
-    ) -> Result<Vec<oxibrain_core::EntityMerge>, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| oxibrain_store::knowledge::list_merges(conn, &space))
-            .await
-    }
-
-    /// List extraction failures in a space, most recent first.
-    /// Used by the `review_merges` MCP tool (`section: "failures"`).
-    pub async fn list_failures(
-        &self,
-        space: &str,
-    ) -> Result<Vec<oxibrain_store::quarantine::ExtractionFailure>, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| oxibrain_store::quarantine::list_failures(conn, Some(&space)))
-            .await
-    }
-
-    /// List registered sources in a space.
-    /// Used by the `review_merges` MCP tool (`section: "sources"`).
-    pub async fn list_sources(
-        &self,
-        space: &str,
-    ) -> Result<Vec<oxibrain_store::ledger::SourceRow>, BrainError> {
-        let space = space.to_string();
-        self.read(move |conn| oxibrain_store::ledger::list_sources(conn, &space))
-            .await
-    }
-
-    /// Source-registry rows that never produced an episode (doctor report).
-    pub async fn orphan_source_count(&self) -> Result<i64, BrainError> {
-        self.read(oxibrain_store::ledger::count_orphan_sources)
-            .await
-    }
-
-    pub async fn timeline(
-        &self,
-        space: &str,
-        entity_id: &str,
-        from: Option<oxibrain_ports::Timestamp>,
-        to: Option<oxibrain_ports::Timestamp>,
-    ) -> Result<Vec<oxibrain_store::timeline::TimelineEntry>, BrainError> {
-        let space = space.to_string();
-        let entity_id = entity_id.to_string();
-        self.read(move |conn| {
-            oxibrain_store::timeline::timeline(conn, &space, &entity_id, from, to)
-        })
-        .await
-    }
-
-    pub async fn diff(
-        &self,
-        space: &str,
-        entity_id: &str,
-        at_a: oxibrain_ports::Timestamp,
-        at_b: oxibrain_ports::Timestamp,
-    ) -> Result<oxibrain_store::timeline::DiffResult, BrainError> {
-        let space = space.to_string();
-        let entity_id = entity_id.to_string();
-        self.read(move |conn| oxibrain_store::timeline::diff(conn, &space, &entity_id, at_a, at_b))
-            .await
-    }
-
-    pub async fn why(
-        &self,
-        space: &str,
-        statement_id: &str,
-    ) -> Result<oxibrain_store::explain::ExplainBlock, BrainError> {
-        let space = space.to_string();
-        let statement_id = statement_id.to_string();
-        self.read(move |conn| oxibrain_store::explain::why(conn, &space, &statement_id))
-            .await
     }
 
     // ── Briefs ────────────────────────────────────────────────────────────
@@ -1142,6 +741,19 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<Vec<String>, BrainError> {
         self.consolidate_impl(space, config).await
+    }
+
+    /// Runbook consolidation (experience memory, M11): clusters Primary
+    /// episodes sharing a Task/Code/Artifact anchor (≥ `min_members`) and
+    /// writes a Derived runbook episode per cluster. Terminal, cached,
+    /// Uncertainty-bearing (P10).
+    pub async fn consolidate_runbooks(
+        &self,
+        space: &str,
+        config: &oxibrain_core::extraction::ExtractorConfig,
+        min_members: usize,
+    ) -> Result<Vec<String>, BrainError> {
+        self.runbooks_impl(space, config, min_members).await
     }
 
     /// Generate community summary text as cached Derived episodes (§9.4, §5.3).

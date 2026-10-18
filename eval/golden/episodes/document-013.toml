@@ -1,0 +1,16 @@
+# Gate expansion: 王 pivots to 玉衡项目 (ZH knowledge update).
+shape = "document"
+lang = "zh"
+occurred_at = "2023-11-01"
+content = "王转岗到玉衡项目，不再参与蓝桥项目。"
+[[entities]]
+surface = "王"
+type = "Person"
+[[entities]]
+surface = "玉衡项目"
+type = "Project"
+[[statements]]
+predicate = "works_on"
+subject_surface = "王"
+object_surface = "玉衡项目"
+valid_from = "2023-11-01"

@@ -252,7 +252,7 @@ fn default_confidence_prior() -> f32 {
 }
 /// Registry version for this ontology.
 pub const CORE_V1_MAJOR: u32 = 1;
-pub const CORE_V1_MINOR: u32 = 4;
+pub const CORE_V1_MINOR: u32 = 5;
 
 static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::new(|| {
     vec![
@@ -476,6 +476,131 @@ static CORE_V1: std::sync::LazyLock<Vec<PredicateDef>> = std::sync::LazyLock::ne
             deprecated_by: None,
             profile_relevant: false,
             confidence_prior: 0.3,
+        },
+        // ── Negative / uncertain family (§5.5, M10 10.9) ─────────────────
+        // Agent traces record what did not work and what is not known.
+        // Low priors keep beliefs derived from them down-weighted by the
+        // fold — no pipeline special-casing (P4).
+        PredicateDef {
+            name: "failed_because".into(),
+            object_kind: ObjectKind::Literal(LiteralType::Text),
+            subject_types: vec![
+                "Task".into(),
+                "Project".into(),
+                "Code".into(),
+                "Artifact".into(),
+            ],
+            cardinality: Cardinality::MultiValued,
+            temporality: Temporality::Point,
+            invalidation: Invalidation::Coexist,
+            symmetric: false,
+            inverse_of: None,
+            description: "One observed failure and its cause: an attempt at this task, project, code, or artifact failed for the stated reason. Point-in-time; the generalized recurring form is `fails_when`.".into(),
+            examples: vec![
+                "The deploy attempt failed because the migration lock was held".into(),
+            ],
+            deprecated_by: None,
+            profile_relevant: false,
+            confidence_prior: 0.6,
+        },
+        PredicateDef {
+            name: "assumed".into(),
+            object_kind: ObjectKind::Literal(LiteralType::Text),
+            subject_types: vec![
+                "Task".into(),
+                "Concept".into(),
+                "Code".into(),
+                "Person".into(),
+            ],
+            cardinality: Cardinality::MultiValued,
+            temporality: Temporality::Interval,
+            invalidation: Invalidation::Coexist,
+            symmetric: false,
+            inverse_of: None,
+            description: "An assumption made about this subject, stated without verification. Record it as an assumption, not as true.".into(),
+            examples: vec!["The script assumed the database was empty at start".into()],
+            deprecated_by: None,
+            profile_relevant: false,
+            confidence_prior: 0.4,
+        },
+        PredicateDef {
+            name: "unknown_whether".into(),
+            object_kind: ObjectKind::Literal(LiteralType::Text),
+            subject_types: vec![
+                "Task".into(),
+                "Concept".into(),
+                "Project".into(),
+                "Person".into(),
+            ],
+            cardinality: Cardinality::MultiValued,
+            temporality: Temporality::Interval,
+            invalidation: Invalidation::Coexist,
+            symmetric: false,
+            inverse_of: None,
+            description: "An open question about this subject: something explicitly not known or not yet verified.".into(),
+            examples: vec![
+                "It is unknown whether the cache is shared across workers".into(),
+            ],
+            deprecated_by: None,
+            profile_relevant: false,
+            confidence_prior: 0.4,
+        },
+        // ── Experience family (doc/spec/experience-memory-v1.md §3, M11) ─
+        PredicateDef {
+            name: "requires".into(),
+            object_kind: ObjectKind::Entity(["Concept", "Artifact", "Code", "Document"].into()),
+            subject_types: vec!["Task".into()],
+            cardinality: Cardinality::MultiValued,
+            temporality: Temporality::Interval,
+            invalidation: Invalidation::Coexist,
+            symmetric: false,
+            inverse_of: None,
+            description: "A prerequisite for performing this task in its environment: a tool, document, artifact, or concept it depends on.".into(),
+            examples: vec![
+                "Deploying the checkout service requires the migration playbook".into(),
+            ],
+            deprecated_by: None,
+            profile_relevant: false,
+            confidence_prior: 0.7,
+        },
+        PredicateDef {
+            name: "fails_when".into(),
+            object_kind: ObjectKind::Literal(LiteralType::Text),
+            subject_types: vec![
+                "Task".into(),
+                "Code".into(),
+                "Artifact".into(),
+                "Project".into(),
+            ],
+            cardinality: Cardinality::MultiValued,
+            temporality: Temporality::Interval,
+            invalidation: Invalidation::Coexist,
+            symmetric: false,
+            inverse_of: None,
+            description: "A recurring condition under which this task, code, artifact, or project fails in this environment; a gotcha. Assert only when the source shows repetition or states it explicitly.".into(),
+            examples: vec![
+                "The build fails when the vendored crate cache is cold".into(),
+            ],
+            deprecated_by: None,
+            profile_relevant: false,
+            confidence_prior: 0.6,
+        },
+        PredicateDef {
+            name: "premise_differs".into(),
+            object_kind: ObjectKind::Literal(LiteralType::Text),
+            subject_types: vec!["Task".into(), "Concept".into(), "Code".into()],
+            cardinality: Cardinality::MultiValued,
+            temporality: Temporality::Interval,
+            invalidation: Invalidation::Coexist,
+            symmetric: false,
+            inverse_of: None,
+            description: "An assumption that is valid in other environments but is wrong for this subject here.".into(),
+            examples: vec![
+                "The docs assume the firewall opens these ports by default; on this host it does not".into(),
+            ],
+            deprecated_by: None,
+            profile_relevant: false,
+            confidence_prior: 0.6,
         },
     ]
 });

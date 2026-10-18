@@ -1,0 +1,16 @@
+# Gate expansion (2026-10-17): knowledge-update churn, Dana line.
+shape = "note"
+lang = "en"
+occurred_at = "2023-02-01"
+content = "Dana joined Initech as a platform engineer."
+[[entities]]
+surface = "Dana"
+type = "Person"
+[[entities]]
+surface = "Initech"
+type = "Organization"
+[[statements]]
+predicate = "employed_by"
+subject_surface = "Dana"
+object_surface = "Initech"
+valid_from = "2023-02-01"

@@ -1,0 +1,27 @@
+shape = "trajectory"
+lang = "ko"
+agent = "codex"
+occurred_at = "2026-09-11"
+content = """
+[step 001 · 2026-09-11T06:30:29Z · tool: bash]
+action: registry 미러 설정을 먼저 적용한다 — 워커 3대 동기화
+observation: 미러 확인 완료
+
+[step 002 · 2026-09-11T06:32:41Z · tool: bash]
+action: deploy (shop-dev) — 카나리 배포
+observation: 성공. registry 미러 설정이 필요하다는 것이 재확인되었다
+"""
+
+[[entities]]
+surface = "deploy (shop-dev)"
+type = "Task"
+
+[[entities]]
+surface = "registry 미러 설정"
+type = "Concept"
+
+[[statements]]
+predicate = "requires"
+subject_surface = "deploy (shop-dev)"
+object_surface = "registry 미러 설정"
+valid_from = "2026-09-11"

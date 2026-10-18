@@ -50,3 +50,39 @@ async fn session_record_and_recall_layer() {
         "prior session missing: {rendered}"
     );
 }
+
+#[tokio::test]
+async fn generated_session_is_untrusted_and_conflicting_replay_cannot_replace_it() {
+    use oxibrain_core::{EpisodeKind, SourceRef, TrustTier};
+    use oxibrain_ports::{BrainError, Timestamp};
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+    let space = brain.ensure_space("personal").await.unwrap();
+    let summary = "Agent-generated summary, not an owner declaration.";
+    let at = Timestamp::from_millis(1_700_000_000_000);
+    let first = brain
+        .record_session(&space, "stable-session", summary.into(), at)
+        .await
+        .unwrap();
+    let replay = brain
+        .record_session(&space, "stable-session", summary.into(), at)
+        .await
+        .unwrap();
+    assert_eq!(replay, first);
+    let conflict = brain
+        .record_session(&space, "stable-session", "Changed summary.".into(), at)
+        .await;
+    assert!(matches!(conflict, Err(BrainError::Conflict(_))));
+    let episode = brain.get_episode(&first).await.unwrap().unwrap();
+    assert_eq!(episode.content, summary);
+    assert_eq!(episode.trust, TrustTier::Untrusted);
+    assert_eq!(episode.kind, EpisodeKind::Primary);
+    assert_eq!(
+        episode.source,
+        SourceRef::Session {
+            session_id: "stable-session".into()
+        }
+    );
+    assert_eq!(brain.episode_count_for_space(&space).await.unwrap(), 1);
+}

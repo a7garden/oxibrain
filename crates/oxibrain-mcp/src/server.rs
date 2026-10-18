@@ -758,16 +758,23 @@ impl BrainServer {
 
     /// Resolve the trust tier for an ingest call. If the caller passed
     /// `trust` and has the TrustedIngest capability (already gated in
-    /// enforce_scope), honor it. Otherwise default to Trusted — parity with
-    /// the existing `ingest_note` path (ingest.rs uses TrustTier::Trusted).
-    /// Plan 2 replaces this default with `effective_policy_trust` lookup.
-    fn resolve_trust(&self, args: &Value) -> TrustTier {
+    /// enforce_scope), honor it. Otherwise the caller-supplied default
+    /// applies — Trusted on the note path (parity with `ingest_note`),
+    /// Untrusted on the trajectory path (v2.21: agent-generated claims are
+    /// not owner declarations). Plan 2 replaces this default with an
+    /// `effective_policy_trust` lookup.
+    fn resolve_trust_with_default(&self, args: &Value, default: TrustTier) -> TrustTier {
         match args.get("trust").and_then(|v| v.as_str()) {
             Some("trusted") => TrustTier::Trusted,
             Some("semi_trusted") => TrustTier::SemiTrusted,
             Some("untrusted") => TrustTier::Untrusted,
-            _ => TrustTier::Trusted,
+            _ => default,
         }
+    }
+
+    /// Note-path trust default.
+    fn resolve_trust(&self, args: &Value) -> TrustTier {
+        self.resolve_trust_with_default(args, TrustTier::Trusted)
     }
 
     /// Build an IngestAttachment for MCP-originated content.
@@ -814,6 +821,11 @@ impl BrainServer {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let now = SystemClock.now();
+        if let Some(trace) = args.get("trace") {
+            return self
+                .tool_ingest_trace(args, trace, &space_id, content, extract, session, now)
+                .await;
+        }
         let trust = self.resolve_trust(args);
         let attachment = self
             .build_attachment(&space_id, &path, content, now)
@@ -835,6 +847,62 @@ impl BrainServer {
             return self.try_sample_extract(&space_id, &id, session).await;
         }
         Ok(format!("Ingested as episode: {id}"))
+    }
+    /// Trajectory path of `ingest` (experience memory spec §2.3): the
+    /// optional `trace` object selects event identity
+    /// `(space, "agent:<agent>", run_id)` and an Untrusted default —
+    /// agent-generated claims are not owner declarations (v2.21). An
+    /// explicit `trust` keeps its capability-gated rules; only the default
+    /// differs from the note path. Same run id with different bytes is a
+    /// conflict (exit 6).
+    #[allow(clippy::too_many_arguments)]
+    async fn tool_ingest_trace(
+        &self,
+        args: &Value,
+        trace: &Value,
+        space_id: &str,
+        content: &str,
+        extract: bool,
+        session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
+        now: Timestamp,
+    ) -> Result<String, ToolErr> {
+        let agent = trace.get("agent").and_then(|v| v.as_str()).unwrap_or("");
+        let run_id = trace.get("run_id").and_then(|v| v.as_str()).unwrap_or("");
+        if agent.trim().is_empty() {
+            return Err(ToolErr::Params("trace.agent must be non-empty".into()));
+        }
+        if run_id.trim().is_empty() {
+            return Err(ToolErr::Params("trace.run_id must be non-empty".into()));
+        }
+        let occurred_at = match trace.get("occurred_at").and_then(|v| v.as_str()) {
+            Some(rfc3339) => {
+                Timestamp::from_millis(parse_rfc3339_millis(rfc3339).ok_or_else(|| {
+                    ToolErr::Params(format!(
+                        "trace.occurred_at: invalid RFC3339 timestamp '{rfc3339}'"
+                    ))
+                })?)
+            }
+            None => now,
+        };
+        // Same capability-gated request field as the note path; only the
+        // default differs (Untrusted — v2.21).
+        let trust = self.resolve_trust_with_default(args, TrustTier::Untrusted);
+        let id = self
+            .brain
+            .record_trace(
+                space_id,
+                agent,
+                run_id,
+                content.to_string(),
+                occurred_at,
+                trust,
+            )
+            .await
+            .map_err(ToolErr::run)?;
+        if extract {
+            return self.try_sample_extract(space_id, &id, session).await;
+        }
+        Ok(format!("Ingested as trajectory episode: {id}"))
     }
 
     /// Whether sampling is available for this session. A trusted local channel
@@ -5603,6 +5671,100 @@ mod tests {
             resp.get("error").is_none(),
             "ingest without trust param must succeed"
         );
+    }
+
+    /// Trajectory path of `ingest` (experience memory §2.3): the `trace`
+    /// payload records an Untrusted AgentTrace episode with event identity
+    /// — idempotent replay, conflict on rewritten bytes, typed validation,
+    /// and the trust gate inherited from the tool.
+    #[tokio::test]
+    async fn ingest_trace_contract() {
+        let (_dir, server) = fresh_scoped(&[Capability::Ingest], &["personal"]).await;
+        let call = |content: &str| {
+            msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "ingest",
+                    "arguments": {
+                        "content": content,
+                        "space": "personal",
+                        "trace": { "agent": "claude-code", "run_id": "run-1" }
+                    }
+                })),
+            )
+        };
+        let trace =
+            "[step 001 · 2026-10-16T02:11:04Z · tool: bash]\naction: build\nobservation: ok";
+
+        // 1. Records as a trajectory episode.
+        let first = server.handle(call(trace)).await.unwrap();
+        assert!(first.get("error").is_none(), "{first}");
+        let text = first["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Ingested as trajectory episode: "), "{text}");
+
+        // 2. Identical bytes replay idempotently (same episode id).
+        let replay = server.handle(call(trace)).await.unwrap();
+        let replay_text = replay["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(text, replay_text, "replay must return the same episode id");
+
+        // 3. Rewritten bytes on the same run id are a conflict.
+        let conflict = server
+            .handle(call(&format!("{trace}\n\n[step 002 · 2026-10-16T02:12:00Z · tool: bash]\naction: retry\nobservation: ok")))
+            .await
+            .unwrap();
+        let conflict_text = conflict["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            conflict_text.contains("conflict"),
+            "rewritten bytes must surface the typed conflict, got: {conflict_text}"
+        );
+
+        // 4. Missing agent is invalid input.
+        let bad = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "ingest",
+                    "arguments": {
+                        "content": trace,
+                        "space": "personal",
+                        "trace": { "run_id": "run-2" }
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let err = bad.get("error").expect("missing agent must be an error");
+        assert_eq!(err["code"], INVALID_PARAMS);
+
+        // 5. The trust gate covers the trace path too.
+        let gated = server
+            .handle(msg(
+                1,
+                "tools/call",
+                Some(json!({
+                    "name": "ingest",
+                    "arguments": {
+                        "content": trace,
+                        "space": "personal",
+                        "trust": "trusted",
+                        "trace": { "agent": "claude-code", "run_id": "run-3" }
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        let err = gated
+            .get("error")
+            .expect("trusted without capability must fail");
+        assert_eq!(err["code"], UNAUTHORIZED);
     }
 
     /// Event-path wiring: ingest creates an episode with attachment.

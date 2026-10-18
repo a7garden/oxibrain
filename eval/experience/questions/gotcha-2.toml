@@ -1,0 +1,5 @@
+id = "gotcha-2"
+category = "gotcha"
+question = "The task that requires the migration playbook fails under which condition?"
+answer = "the vendored crate cache is cold"
+supporting_episodes = ["a01", "a02", "a04"]

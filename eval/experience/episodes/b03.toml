@@ -1,0 +1,27 @@
+shape = "trajectory"
+lang = "ko"
+agent = "codex"
+occurred_at = "2026-09-04"
+content = """
+[step 001 · 2026-09-04T05:20:31Z · tool: edit]
+action: .npmrc 수정 — registry 미러 설정을 먼저 적용한다
+observation: 미러 적용 완료
+
+[step 002 · 2026-09-04T05:22:03Z · tool: bash]
+action: deploy (shop-dev) — npm run build
+observation: 빌드 성공. deploy (shop-dev)는 registry 미러 설정이 필요하다
+"""
+
+[[entities]]
+surface = "deploy (shop-dev)"
+type = "Task"
+
+[[entities]]
+surface = "registry 미러 설정"
+type = "Concept"
+
+[[statements]]
+predicate = "requires"
+subject_surface = "deploy (shop-dev)"
+object_surface = "registry 미러 설정"
+valid_from = "2026-09-04"

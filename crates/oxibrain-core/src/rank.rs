@@ -1447,4 +1447,95 @@ mod tests {
             "MMR ceiling must not drop items — conservation invariant"
         );
     }
+
+    // ── MMR ceiling, property form (§11.4 exit criterion) ──────────────
+    // For ANY candidate set with at least ten mutually-distinct items
+    // (evenly spaced angles keep pairwise cosine ≤ ~0.87 at n = 16), the
+    // ceiling keeps the top-10 prefix pairwise ≤ 0.9 — near-duplicates
+    // (jittered copies, cosine ≈ 0.999) are deferred regardless of their
+    // fused scores — and no candidate is ever dropped.
+    proptest! {
+        #[test]
+        fn mmr_ceiling_property_distinct_prefix_and_conservation(
+            n_distinct in 10usize..=13,
+            dup_per in 0usize..=3,
+            seed in 0u64..64,
+        ) {
+            use std::collections::HashMap;
+            // Deterministic LCG so each case is reproducible from its seed.
+            let mut state = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let mut next_unit = || {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((state >> 33) as f64) / ((u64::MAX >> 33) as f64)
+            };
+            let mut vectors: HashMap<String, Vec<f32>> = HashMap::new();
+            let mut names: Vec<String> = Vec::new();
+            for i in 0..n_distinct {
+                let name = format!("d{i}");
+                let angle = (i as f64) * 2.0 * std::f64::consts::PI / 13.0;
+                vectors.insert(
+                    name.clone(),
+                    vec![angle.cos() as f32, angle.sin() as f32],
+                );
+                names.push(name);
+                for d in 0..dup_per {
+                    let dup = format!("d{i}x{d}");
+                    let jitter = (next_unit() - 0.5) * 0.02;
+                    let angle = angle + jitter;
+                    vectors.insert(
+                        dup.clone(),
+                        vec![angle.cos() as f32, angle.sin() as f32],
+                    );
+                    names.push(dup);
+                }
+            }
+            // Duplicates get HIGHER fused scores: without the ceiling they
+            // would crowd the top-10 (the adversarial case).
+            let mut items: Vec<RankedItem> = names
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    let boost = if e.contains('x') { 0.5 } else { 0.0 };
+                    RankedItem {
+                        target: TargetId::Entity { id: e.clone() },
+                        facts: facts(TargetId::Entity { id: e.clone() }, 0.8, "works_on"),
+                        fused_score: 1.5 - boost - 0.001 * i as f64,
+                        salience: 0.8,
+                        rank: i,
+                        channels: vec![],
+                    }
+                })
+                .collect();
+            let before = items.len();
+            apply_rerank(
+                &mut items,
+                &Rerank::Mmr {
+                    lambda: 0.5,
+                    max_similarity: Some(0.9),
+                },
+                &vectors,
+            );
+            prop_assert_eq!(items.len(), before, "conservation: nothing dropped");
+            let prefix: Vec<&RankedItem> = items.iter().take(10).collect();
+            for i in 0..prefix.len() {
+                for j in (i + 1)..prefix.len() {
+                    let (TargetId::Entity { id: a_id }, TargetId::Entity { id: b_id }) =
+                        (&prefix[i].target, &prefix[j].target)
+                    else {
+                        continue;
+                    };
+                    let (va, vb) = (vectors.get(a_id).unwrap(), vectors.get(b_id).unwrap());
+                    let sim = cosine_sim(va, vb);
+                    prop_assert!(
+                        sim <= 0.9,
+                        "top-10 pair {a_id}/{b_id} has cosine {sim:.4} > 0.9"
+                    );
+                }
+            }
+        }
+    }
 }

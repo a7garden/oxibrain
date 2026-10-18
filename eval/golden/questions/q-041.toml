@@ -1,0 +1,6 @@
+id = "q-041"
+category = "temporal_reasoning"
+question = "王在2023-07-01参与哪个项目？"
+as_of = "2023-07-01"
+answer = "蓝桥项目"
+supporting_episodes = ["note-035"]

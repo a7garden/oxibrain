@@ -1,0 +1,20 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-22"
+content = """
+[step 001 · 2026-09-22T02:50:48Z · tool: bash]
+action: watch the CDN after shipping deploy (shop-prod)
+observation: the CDN purge timed out once; it is unknown whether the CDN purge delay is configurable on this account
+"""
+
+[[entities]]
+surface = "deploy (shop-prod)"
+type = "Task"
+
+[[statements]]
+predicate = "unknown_whether"
+subject_surface = "deploy (shop-prod)"
+object_literal_type = "text"
+object_literal_value = "the CDN purge delay is configurable"
+valid_from = "2026-09-22"

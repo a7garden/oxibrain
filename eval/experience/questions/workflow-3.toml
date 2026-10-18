@@ -1,0 +1,5 @@
+id = "workflow-3"
+category = "workflow"
+question = "What runs before shipping in a successful deploy (shop-prod)?"
+answer = "run the migration playbook before shipping"
+supporting_episodes = ["a04"]

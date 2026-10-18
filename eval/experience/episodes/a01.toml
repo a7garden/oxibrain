@@ -1,0 +1,28 @@
+shape = "trajectory"
+lang = "en"
+agent = "claude-code"
+occurred_at = "2026-09-02"
+content = """
+[step 001 · 2026-09-02T02:11:04Z · tool: bash]
+action: run deploy (shop-prod) — cargo build --release
+observation: error: deploy (shop-prod) fails when the vendored crate cache is cold
+
+[step 002 · 2026-09-02T02:12:40Z · tool: bash]
+action: retry the build unchanged
+observation: error: deploy (shop-prod) fails when the vendored crate cache is cold
+"""
+
+[[entities]]
+surface = "deploy (shop-prod)"
+type = "Task"
+
+[[entities]]
+surface = "vendored crate cache"
+type = "Concept"
+
+[[statements]]
+predicate = "fails_when"
+subject_surface = "deploy (shop-prod)"
+object_literal_type = "text"
+object_literal_value = "the vendored crate cache is cold"
+valid_from = "2026-09-02"

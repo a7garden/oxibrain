@@ -552,13 +552,16 @@ pub fn schema_from_registry(predicates: &[PredicateDef]) -> serde_json::Value {
         "required": ["surface", "entity_type", "quote"]
     });
 
+    // Required `kind` and distinct const values make these branches disjoint.
+    // anyOf therefore accepts exactly the same objects as oneOf, without
+    // requiring a decoder to approximate exclusive-union constraints.
     let object_schema = serde_json::json!({
         "type": "object",
         "properties": {
             "kind": { "type": "string", "enum": ["entity", "literal"] }
         },
         "required": ["kind"],
-        "oneOf": [
+        "anyOf": [
             {
                 "properties": {
                     "kind": { "const": "entity" },
@@ -787,10 +790,12 @@ pub fn format_few_shot(examples: &[&FewShotExample]) -> String {
 /// Built-in few-shot corpus for the extraction prompt (§9.6, 10.8, ADR-006).
 ///
 /// Multilingual by design (P11): an English person-facts note, a Korean note,
-/// and a literal-value note. Every example is validated against `core_v1()`
-/// and the quote contract by `few_shot_corpus_examples_validate` — a broken
-/// example teaches the model the wrong contract, so the test is load-bearing.
-/// Selection is language-independent (trigram Jaccard, see [`few_shot_examples`]).
+/// a literal-value note, and two trajectory extractions (EN + KO, experience
+/// memory spec §3) teaching the negative/experience families. Every example
+/// is validated against `core_v1()` and the quote contract by
+/// `few_shot_corpus_examples_validate` — a broken example teaches the model
+/// the wrong contract, so the test is load-bearing. Selection is
+/// language-independent (trigram Jaccard, see [`few_shot_examples`]).
 pub fn default_few_shot_corpus() -> Vec<FewShotExample> {
     vec![
         FewShotExample {
@@ -834,6 +839,36 @@ pub fn default_few_shot_corpus() -> Vec<FewShotExample> {
    "subject":{"surface":"Alice","entity_type":"Person","quote":"Alice's full name"},
    "object":{"kind":"entity","mention":{"surface":"Seoul","entity_type":"Place","quote":"born in Seoul"}},
    "polarity":"affirm","confidence":0.9}
+]}"#.into(),
+        },
+        FewShotExample {
+            text: "[step 001 · 2026-10-16T02:11:04Z · tool: bash]\naction: deploy (shop-prod) — cargo build --release\nobservation: error: the build fails when the vendored crate cache is cold\n\n[step 002 · 2026-10-16T02:12:40Z · tool: bash]\naction: deploy (shop-prod) — retry build\nobservation: error: the build fails when the vendored crate cache is cold\n\n[step 003 · 2026-10-16T02:14:02Z · tool: bash]\naction: deploy (shop-prod) — warm the cache first\nobservation: build succeeded. deploy (shop-prod) requires the migration playbook. the docs assume the firewall opens port 5432 by default, but on this host it does not".into(),
+            claims_json: r#"{"claims":[
+  {"predicate":"fails_when",
+   "subject":{"surface":"deploy (shop-prod)","entity_type":"Task","quote":"action: deploy (shop-prod) — cargo build --release"},
+   "object":{"kind":"literal","literal_type":"text","value":"the vendored crate cache is cold","quote":"error: the build fails when the vendored crate cache is cold"},
+   "polarity":"affirm","confidence":0.8},
+  {"predicate":"requires",
+   "subject":{"surface":"deploy (shop-prod)","entity_type":"Task","quote":"deploy (shop-prod) requires the migration playbook"},
+   "object":{"kind":"entity","mention":{"surface":"migration playbook","entity_type":"Document","quote":"requires the migration playbook"}},
+   "polarity":"affirm","confidence":0.8},
+  {"predicate":"premise_differs",
+   "subject":{"surface":"deploy (shop-prod)","entity_type":"Task","quote":"action: deploy (shop-prod) — warm the cache first"},
+   "object":{"kind":"literal","literal_type":"text","value":"the docs assume the firewall opens port 5432 by default","quote":"the docs assume the firewall opens port 5432 by default, but on this host it does not"},
+   "polarity":"affirm","confidence":0.7}
+]}"#.into(),
+        },
+        FewShotExample {
+            text: "[step 001 · 2026-10-16T05:00:12Z · tool: bash]\naction: 배포 (shop-dev) — npm run build\nobservation: 에러: 프록시 뒤에서 npm 레지스트리에 접근할 수 없다\n\n[step 002 · 2026-10-16T05:02:33Z · tool: bash]\naction: 배포 (shop-dev) — .npmrc에 registry 미러 설정 후 재시도\nobservation: 빌드 성공. 배포 (shop-dev)는 registry 미러 설정이 필요하다".into(),
+            claims_json: r#"{"claims":[
+  {"predicate":"fails_when",
+   "subject":{"surface":"배포 (shop-dev)","entity_type":"Task","quote":"action: 배포 (shop-dev) — npm run build"},
+   "object":{"kind":"literal","literal_type":"text","value":"프록시 뒤에서 npm 레지스트리에 접근할 수 없다","quote":"에러: 프록시 뒤에서 npm 레지스트리에 접근할 수 없다"},
+   "polarity":"affirm","confidence":0.8},
+  {"predicate":"requires",
+   "subject":{"surface":"배포 (shop-dev)","entity_type":"Task","quote":"배포 (shop-dev)는 registry 미러 설정이 필요하다"},
+   "object":{"kind":"entity","mention":{"surface":"registry 미러 설정","entity_type":"Concept","quote":".npmrc에 registry 미러 설정 후 재시도"}},
+   "polarity":"affirm","confidence":0.8}
 ]}"#.into(),
         },
     ]
