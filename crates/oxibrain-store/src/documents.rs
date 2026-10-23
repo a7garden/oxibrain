@@ -1022,6 +1022,15 @@ fn apply_file_actions(
     let upsert_by_loc: std::collections::HashMap<&str, &DocumentUpsert> =
         upserts.iter().map(|u| (u.locator.as_str(), u)).collect();
 
+    // A rename preserves the PDC UUID. Release deleted locators before
+    // inserting their replacements, regardless of the planner's ordering.
+    // Both phases remain inside the caller's atomic transaction.
+    for action in actions {
+        if let FileAction::Delete { locator } = action {
+            delete_document(tx, alias, locator)?;
+        }
+    }
+
     for action in actions {
         match action {
             FileAction::Unchanged => {
@@ -1030,9 +1039,7 @@ fn apply_file_actions(
                 // reports separately collect any Skip records the
                 // connector surfaced.
             }
-            FileAction::Delete { locator } => {
-                delete_document(tx, alias, locator)?;
-            }
+            FileAction::Delete { .. } => {}
             FileAction::Add(obs) | FileAction::Replace(obs) => {
                 let upsert = upsert_by_loc.get(obs.locator.as_str()).ok_or_else(|| {
                     BrainError::Invalid(format!(
