@@ -5,7 +5,15 @@ squash-merged.
 
 
 
-## [0.20.0] — 2026-10-23
+## [0.20.1] — 2026-10-23
+
+### Fixed
+
+- Pin the llama.cpp wrapper and FFI to the tested 0.1.156 pair. Fresh registry consumers otherwise select an incompatible vocabulary API despite a passing workspace lockfile build.
+- Check a fresh consumer dependency resolution before publishing the first crate.
+- Supersedes the v0.20.0 source tag, whose workflow was cancelled before package publication.
+
+## [0.20.0] — 2026-10-23 (source tag only; publication cancelled)
 
 ### Added
 

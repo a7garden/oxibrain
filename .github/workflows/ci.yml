@@ -39,6 +39,8 @@ jobs:
           fi
       - name: publish order (cycle + membership guard)
         run: bash scripts/publish.sh --order-only
+      - name: fresh consumer dependencies
+        run: bash scripts/check-consumer.sh
       - name: test
         run: cargo test --all-features
 
