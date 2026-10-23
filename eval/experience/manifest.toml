@@ -8,6 +8,7 @@
 #   a = full-context ceiling, b = lexical statements, c = hybrid + expansion,
 #   r = recall (full stack, 2,000-token budget).
 version = "1"
+read_at = "2026-10-01"
 
 [[categories]]
 name = "workflow"

@@ -574,6 +574,7 @@ pub fn rebuild_indexes(conn: &Connection, space: &str) -> Result<(), BrainError>
     rebuild_tfidf(conn, space, 1024)?;
     rebuild_salience(conn, space)?;
     rebuild_chunks(conn, space)?;
+    crate::read_evidence::rebuild_raw(conn, space)?;
     Ok(())
 }
 

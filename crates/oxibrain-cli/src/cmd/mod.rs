@@ -42,3 +42,5 @@ pub async fn space_id(brain: &Brain, name: &str) -> Result<String> {
         Err(e) => Err(anyhow::anyhow!("lookup space: {e}")),
     }
 }
+
+pub mod recall_eval;

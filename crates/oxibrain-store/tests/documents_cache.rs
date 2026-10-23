@@ -19,6 +19,76 @@ fn open(dir: &Path) -> DocumentCache {
     DocumentCache::open_rw(dir).expect("open_rw")
 }
 
+#[test]
+fn pdc_rename_releases_old_locator_before_add_and_preserves_duplicate_guard() {
+    use oxibrain_core::documents::PdcProjectionMeta;
+    use oxibrain_store::documents::{ApplyPlan, PdcProjectionUpsert, RootApply};
+    let dir = TempDir::new().unwrap();
+    let cache = open(dir.path());
+    let uuid = "01a1294f-ece5-78d0-a9b5-fff73d2ba7e4";
+    let canonical = |locator: &str| {
+        let mut item = ups(locator, "rev1", "rename evidence", 1);
+        item.pdc = Some(PdcProjectionUpsert {
+            uuid: uuid.to_owned(),
+            body_profile: "pdc-markdown/1".to_owned(),
+            meta: PdcProjectionMeta::default(),
+        });
+        item
+    };
+    let plan = |generation, actions, upserts| ApplyPlan {
+        root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
+        roots: vec![RootApply {
+            fingerprint: fp("vault", "personal"),
+            expected_generation: generation,
+            actions,
+            upserts,
+        }],
+    };
+    cache
+        .apply(&plan(
+            0,
+            vec![FileAction::Add(obs("old.md", 15, "rev1"))],
+            vec![canonical("old.md")],
+        ))
+        .unwrap();
+    // The observed production failure: Add sorts before Delete.
+    cache
+        .apply(&plan(
+            1,
+            vec![
+                FileAction::Add(obs("new.md", 15, "rev1")),
+                FileAction::Delete {
+                    locator: "old.md".into(),
+                },
+            ],
+            vec![canonical("new.md")],
+        ))
+        .unwrap();
+    let rows: Vec<(String, String)> = cache
+        .conn
+        .prepare("SELECT locator, pdc_document_id FROM documents")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(rows, vec![("new.md".into(), uuid.into())]);
+    assert_row_counts(&cache, "doc_chunks", 1);
+    assert_row_counts(&cache, "doc_fts_word", 1);
+    // Two live files claiming one UUID must still fail atomically.
+    assert!(
+        cache
+            .apply(&plan(
+                2,
+                vec![FileAction::Add(obs("duplicate.md", 15, "rev1"))],
+                vec![canonical("duplicate.md")]
+            ))
+            .is_err()
+    );
+    assert_row_counts(&cache, "documents", 1);
+    assert_eq!(cache.generation("vault").unwrap(), 2);
+}
+
 fn fp(alias: &str, space: &str) -> RootFingerprint {
     RootFingerprint {
         alias: alias.to_owned(),

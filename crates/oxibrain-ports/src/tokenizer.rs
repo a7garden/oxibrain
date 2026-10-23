@@ -8,14 +8,36 @@ use crate::error::BrainError;
 /// from the loaded model (M7.1); before that, [`CharTokenizer`] is the
 /// fallback (§7.5).
 pub trait TokenizerPort: Send + Sync {
-    /// Exact token count for `text`.
+    /// Count for `text` under the reported quality. Use `count_exact` for a checked receipt.
     fn count(&self, text: &str) -> usize;
 
     /// Truncate `text` to at most `max_tokens` tokens, preserving the prefix.
     fn truncate_to(&self, text: &str, max_tokens: usize) -> String;
 
+    /// Accuracy relative to the tokenizer artifact, independent of extraction.
+    fn quality(&self) -> TokenizerQuality {
+        TokenizerQuality::Unknown
+    }
+
+    /// Checked exact count. Unknown/estimated adapters cannot certify a budget.
+    fn count_exact(&self, text: &str) -> Result<Option<usize>, BrainError> {
+        Ok((self.quality() == TokenizerQuality::Exact).then(|| self.count(text)))
+    }
+
+    /// Optional digest of the tokenizer artifact.
+    fn artifact_digest(&self) -> Option<&str> {
+        None
+    }
+
     /// Model identifier (e.g. `"qwen2.5"` or `"char-fallback"`).
     fn id(&self) -> &str;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenizerQuality {
+    Exact,
+    Estimate,
+    Unknown,
 }
 
 /// Fallback tokenizer using the chars/4 heuristic. Off by roughly fivefold on
@@ -32,6 +54,10 @@ impl TokenizerPort for CharTokenizer {
     fn truncate_to(&self, text: &str, max_tokens: usize) -> String {
         let max_chars = max_tokens.saturating_mul(4);
         text.chars().take(max_chars).collect()
+    }
+
+    fn quality(&self) -> TokenizerQuality {
+        TokenizerQuality::Estimate
     }
 
     fn id(&self) -> &str {

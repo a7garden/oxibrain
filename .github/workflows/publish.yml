@@ -107,21 +107,26 @@ jobs:
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
 
       - name: Build release binary
-        run: cargo build --release -p oxibrain-cli
+        run: |
+          cargo build --release -p oxibrain-cli
+          mkdir -p release-binaries
+          cp target/release/oxibrain release-binaries/oxibrain
 
       - name: Build MLX release binary
-        run: cargo build --release -p oxibrain-cli --features mlx
+        run: |
+          cargo build --release -p oxibrain-cli --features mlx
+          cp target/release/oxibrain release-binaries/oxibrain-mlx
 
       - name: Package tarballs and checksums
         run: |
           dir=$(mktemp -d)
-          cp target/release/oxibrain "$dir/oxibrain"
+          cp release-binaries/oxibrain "$dir/oxibrain"
           tar -czf "oxibrain-aarch64-apple-darwin.tar.gz" -C "$dir" oxibrain
           shasum -a 256 "oxibrain-aarch64-apple-darwin.tar.gz" \
             > "oxibrain-aarch64-apple-darwin.tar.gz.sha256"
           # MLX engine build: same binary plus the in-process MLX engine
           # (ADR-017). The GGUF embedder is unavailable in this build.
-          cp target/release/oxibrain "$dir/oxibrain-mlx"
+          cp release-binaries/oxibrain-mlx "$dir/oxibrain-mlx"
           tar -czf "oxibrain-mlx-aarch64-apple-darwin.tar.gz" -C "$dir" oxibrain-mlx
           shasum -a 256 "oxibrain-mlx-aarch64-apple-darwin.tar.gz" \
             > "oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256"

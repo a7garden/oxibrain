@@ -1,0 +1,105 @@
+{
+  "schema": "implementation-checks/1",
+  "workspace_version": "0.20.0",
+  "base_commit": "1a14f2d",
+  "source_sha256": "067a1aa71a7cadffdb8bfa57721dddd415fa5a6416bc0cf8628761ccc38db3ec",
+  "current_release_sha256": "06cb7e9d707622c6e8483d2905af96e94651a2b54ab0fc04d8b8141428787c1b",
+  "workspace_tests": {
+    "command": "cargo test --workspace --all-features",
+    "passed": 1044,
+    "failed": 0,
+    "ignored": 5,
+    "ignored_reasons": {
+      "requires_model_weights": 4,
+      "slow_measurement": 1
+    }
+  },
+  "checks": {
+    "cargo_build": "passed",
+    "release_cli_build": "passed",
+    "clippy_all_targets_all_features_D_warnings": "passed",
+    "cargo_fmt_check": "passed",
+    "cargo_deny_check": "passed",
+    "standalone_http_llm_build": "passed",
+    "no_oxios_or_oxicode_dependencies": "passed",
+    "truth_reprojection_and_PDC_parity": "passed"
+  },
+  "fixture_evals": {
+    "fast": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "fabrication_rate": 0.0,
+      "live": false
+    },
+    "golden_recall": {
+      "knowledge_update": [
+        20,
+        20
+      ],
+      "temporal_reasoning": [
+        13,
+        13
+      ],
+      "graph_reasoning": [
+        8,
+        9
+      ],
+      "live": false
+    },
+    "experience_recall": {
+      "workflow": [
+        3,
+        3
+      ],
+      "gotcha": [
+        3,
+        4
+      ],
+      "premise": [
+        4,
+        4
+      ],
+      "static": [
+        2,
+        2
+      ],
+      "dynamic": [
+        1,
+        1
+      ],
+      "live": false
+    },
+    "experiential": {
+      "none": [
+        0,
+        4
+      ],
+      "summary": [
+        2,
+        4
+      ],
+      "sources": [
+        4,
+        4
+      ],
+      "hybrid": [
+        4,
+        4
+      ],
+      "exit": "passed",
+      "live": false
+    }
+  },
+  "public_probes": "public-probes.json",
+  "source_support": "source-support.json",
+  "pending": [
+    "Live pinned reader/extraction evaluation was not run.",
+    "Matched real dense and external public benchmark controls were not run.",
+    "M12 supported-answer quality gate remains open."
+  ],
+  "production": {
+    "installed_binary": "0.19.0",
+    "production_store_migrated": false,
+    "committed": false
+  }
+}

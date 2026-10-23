@@ -15,6 +15,7 @@
 # The full ~200/~100 corpus is human-curated content added incrementally.
 
 version = "0.2"
+read_at = "2024-12-01"
 
 [[categories]]
 name = "knowledge_update"

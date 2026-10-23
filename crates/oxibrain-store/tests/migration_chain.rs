@@ -263,3 +263,49 @@ fn newer_db_is_hard_error() {
         }
     ));
 }
+
+#[test]
+fn migrates_v14_to_v15_without_rewriting_truth_or_extracting() {
+    migration::ensure_vec_extension();
+    let conn = Connection::open_in_memory().unwrap();
+    for sql in [
+        include_str!("../src/migrations/v1.sql"),
+        include_str!("../src/migrations/v2.sql"),
+        include_str!("../src/migrations/v3.sql"),
+        include_str!("../src/migrations/v4.sql"),
+        include_str!("../src/migrations/v5.sql"),
+        include_str!("../src/migrations/v6.sql"),
+        include_str!("../src/migrations/v7.sql"),
+        include_str!("../src/migrations/v8.sql"),
+        include_str!("../src/migrations/v9.sql"),
+        include_str!("../src/migrations/v10.sql"),
+        include_str!("../src/migrations/v11.sql"),
+        include_str!("../src/migrations/v12.sql"),
+        include_str!("../src/migrations/v13.sql"),
+        include_str!("../src/migrations/v14.sql"),
+    ] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 14).unwrap();
+    registry::seed_core_v1(&conn).unwrap();
+    insert_test_data(&conn);
+    let before = oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap();
+    assert_eq!(migration::run(&conn).unwrap(), 15);
+    assert_eq!(
+        before,
+        oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap()
+    );
+    assert_eq!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM extractions", [], |r| r.get(0))
+            .unwrap(),
+        0
+    );
+    assert!(has_table(&conn, "memory_chunk_fts_word"));
+    assert!(has_table(&conn, "memory_chunk_fts_ngram"));
+    assert_eq!(
+        conn.query_row::<String, _, _>("SELECT content FROM episodes WHERE id='ep1'", [], |r| r
+            .get(0))
+            .unwrap(),
+        "test content"
+    );
+}

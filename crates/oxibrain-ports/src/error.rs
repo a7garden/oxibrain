@@ -6,6 +6,10 @@ use thiserror::Error;
 pub enum BrainError {
     #[error("configuration error: {0}")]
     Config(String),
+    #[error("unsupported_temporal_scope: {plane}: {fields:?}")]
+    UnsupportedTemporalScope { plane: String, fields: Vec<String> },
+    #[error("tokenizer_unavailable: {0}")]
+    TokenizerUnavailable(String),
     #[error("storage error: {0}")]
     Storage(String),
     #[error("schema version mismatch: found {found}, expected {expected}")]

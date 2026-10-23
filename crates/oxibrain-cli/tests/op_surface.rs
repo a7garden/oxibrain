@@ -165,3 +165,65 @@ fn describe_lists_spaces_as_enum_source() {
         "personal must be listed: {out}"
     );
 }
+
+#[test]
+fn canonical_document_recall_preserves_source_and_enforces_scope_and_exactness() {
+    let store = tempdir().unwrap();
+    let vault = tempdir().unwrap();
+    init_store(store.path());
+    let uuid = "018f47c6-4a77-7c52-9db8-0e5f9bcb1705";
+    let source = format!(
+        "---\nformat: pdc-document/2\nbody: pdc-markdown/1\nid: {uuid}\ncreated: 2026-09-14T12:34:56.789Z\nupdated: 2026-09-14T12:34:56.789Z\ntitle: Recovery\n---\nSiriusRecovery uses checkpoint-93.\n"
+    );
+    let file = vault.path().join("release.md");
+    std::fs::write(&file, &source).unwrap();
+    std::fs::write(
+        store.path().join("documents.toml"),
+        format!(
+            "[[root]]\nalias=\"vault\"\npath={}\nspace=\"personal\"\n",
+            serde_json::to_string(&vault.path().to_string_lossy()).unwrap()
+        ),
+    )
+    .unwrap();
+    let (ok, out) = run_oxibrain_stdin(
+        store.path(),
+        &["recall"],
+        r#"{"space":"personal","query":"SiriusRecovery","planes":["documents"],"token_budget":2000}"#,
+    );
+    assert!(
+        ok && out.contains("checkpoint-93") && out.contains(uuid),
+        "{out}"
+    );
+    let env: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(
+        env["data"]["data"]["evidence"][0]["source"]["revision"]
+            .as_str()
+            .unwrap()
+            .starts_with("blake3:")
+    );
+    assert_eq!(std::fs::read_to_string(file).unwrap(), source);
+    let (ok, out) = run_oxibrain_stdin(
+        store.path(),
+        &["recall"],
+        r#"{"space":"personal","query":"SiriusRecovery","planes":["documents"],"known_at":0}"#,
+    );
+    assert!(!ok && out.contains("unsupported_temporal_scope"), "{out}");
+    let (ok, out) = run_oxibrain_stdin(
+        store.path(),
+        &["recall"],
+        r#"{"space":"personal","query":"SiriusRecovery","planes":"memory"}"#,
+    );
+    assert!(!ok && out.contains("planes must be an array"), "{out}");
+}
+
+#[test]
+fn full_eval_requires_explicit_configuration_before_loading_a_provider() {
+    let out = Command::new(env!("CARGO_BIN_EXE_oxibrain"))
+        .args(["admin", "eval", "--suite", "full"])
+        .env_remove("OXIBRAIN_EVAL_CONFIG")
+        .env_remove("OXIBRAIN_LLM_PROVIDER")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("OXIBRAIN_EVAL_CONFIG"));
+}

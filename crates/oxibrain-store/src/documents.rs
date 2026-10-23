@@ -28,6 +28,7 @@ use oxibrain_core::documents::{
 };
 use oxibrain_index::{dequantize_i8, quantize_i8_unit};
 use oxibrain_ports::BrainError;
+use rusqlite::OptionalExtension;
 use rusqlite::{Connection, params};
 use std::fs::{File, OpenOptions};
 use std::path::Path;
@@ -123,8 +124,14 @@ pub struct ChunkUpsert {
     pub text: String,
 }
 
-/// View of a chunk as materialized from the cache: spans, ordinal, and the
-/// document-level metadata needed to resolve the `doc://` URI.
+/// Materialization receipts captured atomically with cached source ranges.
+pub struct ChunkSnapshot {
+    pub chunks: Vec<CachedChunk>,
+    pub generations: std::collections::BTreeMap<String, i64>,
+    pub uuids: std::collections::BTreeMap<String, Option<String>>,
+}
+
+/// View of a chunk with the document metadata needed to resolve its URI.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CachedChunk {
     pub chunk_id: String,
@@ -404,6 +411,18 @@ impl DocumentCache {
     /// index `idx_documents_pdc_uuid` (v3, pdc-adoption-v2). Returns
     /// `None` when the root has no document carrying that UUID — the
     /// normal case for legacy decoders, which never populate the column.
+    pub fn document_uuid(&self, id: &str) -> Result<Option<String>, BrainError> {
+        self.conn
+            .query_row(
+                "SELECT pdc_document_id FROM documents WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map(|v| v.flatten())
+            .map_err(sql_err)
+    }
+
     pub fn resolve_pdc(
         &self,
         root_alias: &str,
@@ -648,6 +667,35 @@ impl DocumentCache {
     }
 
     /// Load the cached chunk rows for a set of chunk IDs (order preserved).
+    /// Chunk rows, root generations and UUIDs from one short SQLite snapshot.
+    /// The transaction is released before the facade performs filesystem I/O.
+    pub fn chunk_snapshot(&self, ids: &[&str]) -> Result<ChunkSnapshot, BrainError> {
+        let transaction = self.conn.unchecked_transaction().map_err(sql_err)?;
+        let chunks = self.chunks(ids)?;
+        let mut generations = std::collections::BTreeMap::new();
+        let mut uuids = std::collections::BTreeMap::new();
+        for chunk in &chunks {
+            if !generations.contains_key(&chunk.root_alias) {
+                generations.insert(
+                    chunk.root_alias.clone(),
+                    self.generation(&chunk.root_alias)?,
+                );
+            }
+            if !uuids.contains_key(&chunk.document_id) {
+                uuids.insert(
+                    chunk.document_id.clone(),
+                    self.document_uuid(&chunk.document_id)?,
+                );
+            }
+        }
+        transaction.commit().map_err(sql_err)?;
+        Ok(ChunkSnapshot {
+            chunks,
+            generations,
+            uuids,
+        })
+    }
+
     pub fn chunks(&self, ids: &[&str]) -> Result<Vec<CachedChunk>, BrainError> {
         if ids.is_empty() {
             return Ok(Vec::new());
@@ -1022,6 +1070,15 @@ fn apply_file_actions(
     let upsert_by_loc: std::collections::HashMap<&str, &DocumentUpsert> =
         upserts.iter().map(|u| (u.locator.as_str(), u)).collect();
 
+    // A rename preserves the PDC UUID. Release deleted locators before
+    // inserting their replacements, regardless of the planner's ordering.
+    // Both phases remain inside the caller's atomic transaction.
+    for action in actions {
+        if let FileAction::Delete { locator } = action {
+            delete_document(tx, alias, locator)?;
+        }
+    }
+
     for action in actions {
         match action {
             FileAction::Unchanged => {
@@ -1030,9 +1087,7 @@ fn apply_file_actions(
                 // reports separately collect any Skip records the
                 // connector surfaced.
             }
-            FileAction::Delete { locator } => {
-                delete_document(tx, alias, locator)?;
-            }
+            FileAction::Delete { .. } => {}
             FileAction::Add(obs) | FileAction::Replace(obs) => {
                 let upsert = upsert_by_loc.get(obs.locator.as_str()).ok_or_else(|| {
                     BrainError::Invalid(format!(

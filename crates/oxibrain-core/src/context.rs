@@ -49,3 +49,13 @@ pub struct ContextResult {
 pub fn estimate_tokens_rough(text: &str) -> usize {
     (text.chars().count() / 4).max(1)
 }
+
+/// Canonical consumer text; labels and citations are already in each layer.
+pub fn render_context(context: &ContextResult) -> String {
+    context
+        .layers
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}

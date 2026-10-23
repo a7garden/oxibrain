@@ -666,6 +666,32 @@ pub fn config(
     }
 }
 
+/// A read may bind a verified local tokenizer independently of a provider.
+/// Explicit configuration fails closed; reads never download model artifacts.
+pub fn bind_read_tokenizer(
+    brain: oxibrain::Brain,
+) -> Result<oxibrain::Brain, oxibrain_ports::BrainError> {
+    let brain = if let Some(path) = std::env::var_os("OXIBRAIN_READ_POLICY_JSON") {
+        let json = std::fs::read(path).map_err(|e| {
+            oxibrain_ports::BrainError::Config(format!("read policy artifact: {e}"))
+        })?;
+        let policy = serde_json::from_slice(&json).map_err(|e| {
+            oxibrain_ports::BrainError::Config(format!("read policy artifact: {e}"))
+        })?;
+        brain.with_read_policy(policy)?
+    } else {
+        brain
+    };
+    let Some(path) = std::env::var_os("OXIBRAIN_TOKENIZER_JSON") else {
+        return Ok(brain);
+    };
+    Ok(
+        brain.with_tokenizer(Arc::new(oxibrain_tokenizer_local::FileTokenizer::open(
+            std::path::Path::new(&path),
+        )?)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

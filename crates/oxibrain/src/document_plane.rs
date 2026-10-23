@@ -46,7 +46,7 @@ use oxibrain_connectors::documents_config::{
     default_include,
 };
 use oxibrain_connectors::pdc::{BodyProfile, HtmlClassification, MarkdownClassification};
-use oxibrain_connectors::scan::{canonicalize_root, scan_root};
+use oxibrain_connectors::scan::{ScanBudget, canonicalize_root, scan_root_bounded};
 use oxibrain_connectors::{
     DECODER_VERSION, GitDocumentReader, MediaType, PdcDiagnostic, PdcDiagnosticCode, PdcDocument,
     classify_html_transport, decode, parse_djot_document, parse_html_document,
@@ -101,6 +101,12 @@ pub struct DocumentHit {
     pub locator: String,
     pub revision: String,
     pub ordinal: u32,
+    pub root_generation: i64,
+    pub view_digest: String,
+    pub decoder: String,
+    pub span_start: usize,
+    pub span_end: usize,
+    pub document_uuid: Option<String>,
     pub text: UntrustedContent,
     pub modified_at: Timestamp,
     pub score: f64,
@@ -155,6 +161,9 @@ pub struct DocumentFreshness {
     pub query_definitions: u32,
     /// `embedded / total` when the dense channel ran; `None` otherwise.
     pub dense_coverage: Option<f64>,
+    /// Considered document hits omitted by the bounded materializer or source races.
+    #[serde(default)]
+    pub unavailable_hits: usize,
 }
 
 /// Render diagnostic reports as grouped operator-facing lines (`oxibrain
@@ -259,13 +268,13 @@ impl Brain {
     /// plane keeps its existing behavior: legacy `document` /
     /// `document_revision` episodes are excluded at the FTS fetch so they
     /// don't pollute `/ask`.
-    pub async fn search(&self, q: CoreQuery) -> Result<SearchResponse, BrainError> {
+    pub(crate) async fn search_unscoped(&self, q: CoreQuery) -> Result<SearchResponse, BrainError> {
         // Step 1: documents plane (reconcile + search + materialize).
         let mut freshness = DocumentFreshness::default();
         let mut documents: Vec<DocumentHit> = Vec::new();
         let dense_channel_ran;
         if q.planes.contains(&SearchPlane::Documents) {
-            freshness = self.index_documents_in_place().await?;
+            freshness = self.index_documents_for_read().await?;
             // The documents cache is scoped by the root's `space` NAME from
             // documents.toml, while `Query.space` conventionally carries the
             // content-derived id (MCP resolves via `ensure_space`). Translate
@@ -273,7 +282,7 @@ impl Brain {
             // that already pass names keep working.
             let mut doc_q = q.clone();
             doc_q.space = self.resolve_space_name(&q.space).await?;
-            documents = self.search_documents(&doc_q).await?;
+            (documents, freshness.unavailable_hits) = self.search_documents(&doc_q).await?;
             dense_channel_ran = self.embedder.is_some()
                 && matches!(q.mode, CoreQueryMode::Hybrid | CoreQueryMode::Dense);
             if dense_channel_ran {
@@ -323,57 +332,12 @@ impl Brain {
         budget: usize,
         hints: Option<&oxibrain_store::context::RecallHints>,
     ) -> Result<oxibrain_core::context::ContextResult, BrainError> {
-        // Reconcile once so the document cache has fresh state, then fetch
-        // a small Documents layer. Best-effort: a read-only brain skips the
-        // reconcile and packs whatever the cache already holds.
-        if !self.config.read_only {
-            let _ = self.index_documents_in_place().await?;
+        let mut req = crate::RecallRequest::new(space, query, budget);
+        if let Some(h) = hints {
+            req.session_id = h.session_id.clone();
+            req.hints = h.clone();
         }
-        let doc_space = self.resolve_space_name(space).await?;
-        let doc_hits: Vec<DocumentHit> = {
-            let q = CoreQuery {
-                text: query.to_string(),
-                mode: CoreQueryMode::Lexical,
-                space: doc_space,
-                as_of: None,
-                limit: 5,
-                min_confidence: 0.0,
-                planes: [SearchPlane::Documents].into_iter().collect(),
-            };
-            self.search_documents(&q).await?
-        };
-        let documents: Vec<oxibrain_core::pack::DocumentExcerpt> = doc_hits
-            .iter()
-            .map(|h| oxibrain_core::pack::DocumentExcerpt {
-                uri: build_doc_uri(&h.root, &h.locator, &h.revision),
-                // Internal consumer (context packing) unwraps — the
-                // untrusted typing applies to agent-facing boundaries.
-                text: h.text.text.clone(),
-                score: h.score as f32,
-            })
-            .collect();
-
-        let tokenizer = self.tokenizer.clone();
-        let query_owned = query.to_string();
-        let space_owned = space.to_string();
-        let hints_owned = hints.cloned();
-        self.read(move |conn| {
-            let mut input = oxibrain_store::context::build_context_input(
-                conn,
-                &space_owned,
-                &query_owned,
-                hints_owned.as_ref(),
-            )?;
-            input.documents = documents;
-            let policy = oxibrain_core::pack::PackPolicy::for_budget(budget);
-            Ok(oxibrain_core::pack::pack(
-                &input,
-                &oxibrain_core::context::ContextBudget { max_tokens: budget },
-                &policy,
-                tokenizer.as_ref(),
-            ))
-        })
-        .await
+        Ok(self.recall_with_request(req).await?.data.context)
     }
 
     // ─── indexing ──────────────────────────────────────────────────────────
@@ -599,17 +563,28 @@ impl Brain {
     /// freshness outcome. `Busy` ⇒ one rescan + retry; a second `Busy`
     /// surfaces. Read-only brains skip the reconcile entirely and report
     /// what the cache already holds.
+    async fn index_documents_for_read(&self) -> Result<DocumentFreshness, BrainError> {
+        if self.config.read_only {
+            return Ok(DocumentFreshness::default());
+        }
+        self.reconcile_once(Some(ScanBudget {
+            entries: self.read_policy.reconcile_entries,
+            bytes: self.read_policy.materialization_bytes as u64,
+        }))
+        .await
+    }
+
     async fn index_documents_in_place(&self) -> Result<DocumentFreshness, BrainError> {
         if self.config.read_only {
             return Ok(DocumentFreshness::default());
         }
-        match self.reconcile_once().await {
+        match self.reconcile_once(None).await {
             Ok(o) => Ok(o),
             Err(BrainError::Busy(_)) => {
                 // One retry: rescan from scratch so the CAS sees the new
                 // generation, then return the second outcome plainly.
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                self.reconcile_once().await
+                self.reconcile_once(None).await
             }
             Err(e) => Err(e),
         }
@@ -617,7 +592,10 @@ impl Brain {
 
     /// One full reconcile + apply pass: load config, diff root sets, walk
     /// each kept/reset root, decode Add/Replace payloads, apply atomically.
-    async fn reconcile_once(&self) -> Result<DocumentFreshness, BrainError> {
+    async fn reconcile_once(
+        &self,
+        mut budget: Option<ScanBudget>,
+    ) -> Result<DocumentFreshness, BrainError> {
         let dir = self.config.dir.clone();
         let cfg = load_documents_config(&dir)?;
 
@@ -679,7 +657,7 @@ impl Brain {
                 .map(|(_, act)| act.clone())
                 .unwrap_or(RootAction::KeepRoot);
             match self
-                .index_one_root(entry, action, &mut stale_after_retry)
+                .index_one_root(entry, action, &mut stale_after_retry, budget.as_mut())
                 .await
             {
                 Ok(outcome) => {
@@ -699,6 +677,14 @@ impl Brain {
         // One atomic apply. Lock acquisition retries with backoff inside
         // `open_cache_rw_with_retry`; a CAS mismatch (Busy) propagates so
         // `index_documents_in_place` can rescan once.
+        // A budget-limited scan may not publish a reset/remove diff for that root.
+        let root_actions = root_actions
+            .into_iter()
+            .filter(|(alias, action)| {
+                matches!(action, RootAction::RemoveRoot)
+                    || roots_apply.iter().any(|r| &r.fingerprint.alias == alias)
+            })
+            .collect();
         let plan = ApplyPlan {
             root_actions,
             roots: roots_apply,
@@ -719,6 +705,7 @@ impl Brain {
             legacy_document_version,
             query_definitions,
             dense_coverage: None,
+            unavailable_hits: 0,
         })
     }
 
@@ -729,11 +716,18 @@ impl Brain {
         entry: &RootEntry,
         action: RootAction,
         stale: &mut Vec<String>,
+        budget: Option<&mut ScanBudget>,
     ) -> Result<RootIndexOutcome, BrainError> {
         // Canonical path can fail when the root is missing on disk; the
         // facade routes that into `skipped_roots` (caller).
         let canonical = canonicalize_root(&entry.path)?;
-        let scan = scan_root(entry)?;
+        let scan = scan_root_bounded(
+            entry,
+            budget.unwrap_or(&mut ScanBudget {
+                entries: usize::MAX,
+                bytes: u64::MAX,
+            }),
+        )?;
 
         // Cached manifest (read-only open; missing cache = empty manifest).
         let cached_manifest: Vec<CachedFile> = {
@@ -1094,11 +1088,14 @@ impl Brain {
     /// Search the documents plane: both FTS channels (+ knn when the mode
     /// wants dense and an embedder is configured), RRF-fused, then
     /// materialized against the current files.
-    async fn search_documents(&self, q: &CoreQuery) -> Result<Vec<DocumentHit>, BrainError> {
+    async fn search_documents(
+        &self,
+        q: &CoreQuery,
+    ) -> Result<(Vec<DocumentHit>, usize), BrainError> {
         let dir = self.config.dir.clone();
         // Never indexed (or first run before any index op): zero state.
         if !dir.join("documents.db").exists() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), 0));
         }
         let space = q.space.clone();
         let text = q.text.clone();
@@ -1153,38 +1150,53 @@ impl Brain {
         // RRF fusion (k=60) within the documents plane.
         let fused = rrf_fuse(&[&word, &ngram, knn.as_deref().unwrap_or(&[])], 60);
         if fused.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), 0));
         }
-        let ids: Vec<String> = fused.iter().map(|(id, _)| id.clone()).collect();
-        let chunks: Vec<CachedChunk> = {
+        let ids: Vec<String> = fused.iter().take(limit).map(|(id, _)| id.clone()).collect();
+        let snapshot = {
             let dir = dir.clone();
             blocking(move || {
                 let id_refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
                 let cache = DocumentCache::open_ro(&dir)?;
-                cache.chunks(&id_refs)
+                cache.chunk_snapshot(&id_refs)
             })
             .await?
         };
 
         // Materialize per hit; knn is cross-space so enforce the space here.
         let fused_score: std::collections::HashMap<String, f64> = fused.into_iter().collect();
-        let mut out: Vec<DocumentHit> = Vec::with_capacity(chunks.len());
-        for ch in chunks {
+        let mut out: Vec<DocumentHit> = Vec::with_capacity(snapshot.chunks.len());
+        let mut remaining = self.read_policy.materialization_bytes;
+        let mut unavailable = 0;
+        for ch in snapshot.chunks {
             if ch.space != space {
                 continue;
             }
             let score = fused_score.get(&ch.chunk_id).copied().unwrap_or(0.0);
-            let text = match self.materialize_hit(&ch).await {
+            let text = match self.materialize_hit(&ch, &mut remaining).await {
                 Ok(Some(t)) => t,
-                _ => continue, // stale or vanished — drop the hit
+                _ => {
+                    unavailable += 1;
+                    continue;
+                } // stale, capped or vanished
             };
-            let reference = format!("doc://{}/{}?rev={}", ch.root_alias, ch.locator, ch.revision);
+            let reference = build_doc_uri(&ch.root_alias, &ch.locator, &ch.revision);
             out.push(DocumentHit {
                 document_id: text.document_id,
-                root: ch.root_alias,
+                view_digest: text.view_digest,
+                decoder: format!("{}:{}", DECODER_VERSION, ch.media_type),
+                root: ch.root_alias.clone(),
                 locator: ch.locator,
                 revision: ch.revision,
                 ordinal: ch.ordinal,
+                root_generation: snapshot
+                    .generations
+                    .get(&ch.root_alias)
+                    .copied()
+                    .unwrap_or(0),
+                span_start: ch.span_start,
+                span_end: ch.span_end,
+                document_uuid: snapshot.uuids.get(&ch.document_id).cloned().flatten(),
                 text: UntrustedContent {
                     kind: "untrusted_content".to_string(),
                     text: text.text,
@@ -1202,7 +1214,41 @@ impl Brain {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        Ok(out)
+        Ok((out, unavailable))
+    }
+
+    pub(crate) async fn document_hits_live(
+        &self,
+        hits: &[DocumentHit],
+    ) -> Result<bool, BrainError> {
+        let mut remaining = self.read_policy.materialization_bytes;
+        let mut checked = std::collections::BTreeSet::new();
+        for hit in hits {
+            if !checked.insert((&hit.root, &hit.locator)) {
+                continue;
+            }
+            let Some(root) = self.locator_to_root_path(&hit.root) else {
+                return Ok(false);
+            };
+            let Ok(bytes) = read_document_bounded(&root.join(&hit.locator), &mut remaining) else {
+                return Ok(false);
+            };
+            let live = if hit.revision.starts_with("git:") {
+                match GitDocumentReader::open(&root)? {
+                    Some(reader) => {
+                        reader.current_revision(&reader.snapshot()?, &hit.locator, &bytes)?
+                            == hit.revision
+                    }
+                    None => false,
+                }
+            } else {
+                format!("blake3:{}", blake3_hex(&bytes)) == hit.revision
+            };
+            if !live {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Resolve one cached chunk to a materialized slice. Returns `Ok(None)`
@@ -1212,13 +1258,14 @@ impl Brain {
     async fn materialize_hit(
         &self,
         ch: &CachedChunk,
+        remaining: &mut usize,
     ) -> Result<Option<HitMaterialized>, BrainError> {
         let canonical = match self.locator_to_root_path(&ch.root_alias) {
             Some(p) => p,
             None => return Ok(None),
         };
         let path = canonical.join(&ch.locator);
-        let bytes = match std::fs::read(&path) {
+        let bytes = match read_document_bounded(&path, remaining) {
             Ok(b) => b,
             Err(_) => return Ok(None),
         };
@@ -1281,9 +1328,10 @@ impl Brain {
         };
         // Span must stay inside the decoded text and align with UTF-8
         // boundaries; otherwise the cached row is not this file's shape.
-        let span_start = ch.span_start.min(decoded_text.len());
-        let span_end = ch.span_end.min(decoded_text.len());
-        if span_start > span_end
+        let span_start = ch.span_start;
+        let span_end = ch.span_end;
+        if span_end > decoded_text.len()
+            || span_start > span_end
             || !decoded_text.is_char_boundary(span_start)
             || !decoded_text.is_char_boundary(span_end)
         {
@@ -1291,6 +1339,7 @@ impl Brain {
         }
         Ok(Some(HitMaterialized {
             document_id: ch.document_id.clone(),
+            view_digest: blake3_hex(decoded_text.as_bytes()),
             text: decoded_text[span_start..span_end].to_string(),
         }))
     }
@@ -1456,6 +1505,7 @@ enum MaterializeError {
 struct HitMaterialized {
     document_id: String,
     text: String,
+    view_digest: String,
 }
 
 /// Assemble the manifest + chunk payload for one decoded Add/Replace action.
@@ -1776,7 +1826,7 @@ fn fingerprint_from_entry(entry: &RootEntry) -> Result<RootFingerprint, BrainErr
         max_file_bytes: entry.max_file_bytes,
         // Pins the decode semantics: a version bump invalidates every
         // cached fingerprint (equality change ⇒ one-time full rebuild).
-        decoder_version: DECODER_VERSION.to_string(),
+        decoder_version: format!("{DECODER_VERSION}:source-window/1"),
     })
 }
 
@@ -1885,6 +1935,31 @@ fn encode_doc_locator(locator: &str) -> String {
         }
     }
     out
+}
+
+/// Shared materialization budget. A growing file cannot bypass the limit between
+/// metadata and read; `take` bounds allocation and only a verified revision escapes.
+fn read_document_bounded(
+    path: &std::path::Path,
+    remaining: &mut usize,
+) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > *remaining as u64 {
+        return Err(std::io::Error::other(
+            "document materialization byte budget exhausted",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take((*remaining as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > *remaining {
+        return Err(std::io::Error::other(
+            "document materialization byte budget exhausted",
+        ));
+    }
+    *remaining -= bytes.len();
+    Ok(bytes)
 }
 
 #[cfg(test)]

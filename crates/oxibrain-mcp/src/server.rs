@@ -16,7 +16,6 @@ use oxibrain::{
     SourceRef, SpaceInfo, Timestamp, TrustTier,
 };
 use oxibrain_client::protocol::{ClientHello, ClientOperation};
-use oxibrain_core::context::LayerKind;
 use oxibrain_core::retrieval::{
     Direction, PredicateFilter, Query, QueryMode, SearchPlane, Strategy, TraversalSpec,
 };
@@ -53,7 +52,7 @@ const HANDSHAKE_PROTOCOL_MAX: u32 = 1;
 /// Store format revision the daemon ships. Bumped when the on-disk SQLite
 /// schema changes; clients whose `min_store_format_version` exceeds this are
 /// rejected with `StoreTooOld`.
-const HANDSHAKE_STORE_FORMAT_VERSION: u32 = 1;
+const HANDSHAKE_STORE_FORMAT_VERSION: u32 = oxibrain::STORE_FORMAT_VERSION;
 
 const SUPPORTED_OPERATIONS: &[ClientOperation] = ClientOperation::ALL;
 
@@ -564,7 +563,8 @@ impl BrainServer {
             "protocolVersion": version,
             "capabilities": {
                 "tools": { "listChanged": false },
-                "resources": { "listChanged": false, "subscribe": false, "read": true }
+                "resources": { "listChanged": false, "subscribe": false, "read": true },
+                "experimental": {"oxibrain_read_policy":{"version":oxibrain_core::read_scope::ReadPolicy::VERSION,"limits":self.brain.read_policy()}}
             },
             "serverInfo": { "name": "oxibrain", "version": env!("CARGO_PKG_VERSION") }
         })
@@ -636,74 +636,43 @@ impl BrainServer {
             text: query.to_string(),
             mode,
             space: space_id,
-            as_of: i64_arg_opt(args, "as_of").map(oxibrain_ports::Timestamp),
+            as_of: read_timestamp(args, "as_of")?,
             limit,
-            min_confidence: f32_arg_or(args, "min_confidence", 0.0),
+            min_confidence: read_confidence(args)?,
             planes: parse_planes(args)?,
         };
-        let result = self.brain.search(q).await.map_err(ToolErr::run)?;
-        // v2.13 P5: rank's conservation post-condition gives `dropped` for
-        // free via the projection — every candidate lands in items or
-        // dropped, never both, never neither. memory-plane drops surface
-        // here; documents-plane drops live in the documents layer's own
-        // accounting (skipped/stale).
-        let dropped_count = result.memory.len() as u64;
-        let payload = json!({
-            "data": result,
-            "meta": {
-                "dropped": [
-                    { "reason": "below_confidence_or_truncated", "count": dropped_count }
-                ]
-            }
-        });
-        serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
-    }
-    async fn tool_recall(&self, args: &Value) -> Result<String, ToolErr> {
-        let space_id = self.resolve_space_arg(args).await?;
-        let query = str_arg(args, "query")?;
-        let budget = u_arg_or(args, "token_budget", 3000);
-        // Session memory: when the caller identifies its session, prior
-        // session summaries are included and its own is excluded.
-        let hints = oxibrain::RecallHints {
-            session_id: args
-                .get("session_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            ..Default::default()
-        };
-        let ctx = self
+        let mut req: oxibrain::SearchRequest = q.into();
+        req.scope.known_at = read_timestamp(args, "known_at")?;
+        let result = self
             .brain
-            .assemble_context_with_hints(&space_id, query, budget, &hints)
+            .search_with_scope(req)
             .await
             .map_err(ToolErr::run)?;
-        // v2.13 P5: the envelope reports what was spent and what was
-        // discarded. rank's conservation post-condition covers search/recall
-        // for free — every candidate is in items or dropped.
-        let total_tokens = ctx.total_tokens;
-        let budget_max = ctx.budget.max_tokens;
-        let truncated = ctx.truncated;
-        let counted_by = self.brain.tokenizer_id().to_string();
-        let dropped = ctx
-            .layers
-            .iter()
-            .filter(|l| {
-                matches!(
-                    l.kind,
-                    LayerKind::QueryNeighborhood | LayerKind::HighSalienceBeliefs
-                )
-            })
-            .count() as u64;
-        let payload = json!({
-            "data": ctx,
-            "meta": {
-                "tokens": { "spent": total_tokens, "budget": budget_max, "counted_by": counted_by },
-                "dropped": [
-                    { "reason": "truncated_by_budget", "count": if truncated { 1 } else { 0 } }
-                ],
-                "layers_kept": dropped as u64
-            }
-        });
-        serde_json::to_string_pretty(&payload).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
+        serde_json::to_string_pretty(&result).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
+    }
+    async fn tool_recall(&self, args: &Value) -> Result<String, ToolErr> {
+        let space = self.resolve_space_arg(args).await?;
+        let mut req = oxibrain::RecallRequest::new(
+            space,
+            str_arg(args, "query")?,
+            u_arg_or(args, "token_budget", 3000),
+        );
+        req.planes = parse_planes(args)?;
+        req.scope.as_of = read_timestamp(args, "as_of")?;
+        req.scope.known_at = read_timestamp(args, "known_at")?;
+        req.scope.min_confidence = read_confidence(args)?;
+        req.session_id = args
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        req.require_exact_tokens = read_bool(args, "require_exact_tokens")?;
+        req.explain = read_bool(args, "explain")?;
+        let result = self
+            .brain
+            .recall_with_request(req)
+            .await
+            .map_err(ToolErr::run)?;
+        serde_json::to_string_pretty(&result).map_err(|e| ToolErr::Run(format!("serialize: {e}")))
     }
 
     async fn tool_brief(&self, args: &Value) -> Result<String, ToolErr> {
@@ -2087,11 +2056,14 @@ fn parse_mode(s: &str) -> QueryMode {
 /// array is a valid degenerate request ("neither plane") and returns no hits.
 fn parse_planes(args: &Value) -> Result<std::collections::BTreeSet<SearchPlane>, ToolErr> {
     use oxibrain_core::retrieval::SearchPlane;
-    let Some(list) = args.get("planes").and_then(|v| v.as_array()) else {
+    let Some(value) = args.get("planes") else {
         return Ok([SearchPlane::Memory, SearchPlane::Documents]
             .into_iter()
             .collect());
     };
+    let list = value
+        .as_array()
+        .ok_or_else(|| ToolErr::Params("planes must be an array".into()))?;
     let mut planes = std::collections::BTreeSet::new();
     for item in list {
         let name = item.as_str().ok_or_else(|| {
@@ -2810,6 +2782,39 @@ async fn shutdown_signal() {
     }
 }
 
+fn read_confidence(args: &Value) -> Result<f32, ToolErr> {
+    let value = args
+        .get("min_confidence")
+        .map(|v| {
+            v.as_f64()
+                .ok_or_else(|| ToolErr::Params("min_confidence must be a number".into()))
+        })
+        .transpose()?
+        .unwrap_or(0.0);
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(ToolErr::Params("min_confidence must be in [0,1]".into()));
+    }
+    Ok(value as f32)
+}
+fn read_timestamp(args: &Value, key: &str) -> Result<Option<oxibrain_ports::Timestamp>, ToolErr> {
+    args.get(key)
+        .map(|v| {
+            v.as_i64()
+                .map(oxibrain_ports::Timestamp)
+                .ok_or_else(|| ToolErr::Params(format!("{key} must be an integer timestamp")))
+        })
+        .transpose()
+}
+fn read_bool(args: &Value, key: &str) -> Result<bool, ToolErr> {
+    args.get(key)
+        .map(|v| {
+            v.as_bool()
+                .ok_or_else(|| ToolErr::Params(format!("{key} must be boolean")))
+        })
+        .transpose()
+        .map(|v| v.unwrap_or(false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2828,6 +2833,48 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
         (dir, BrainServer::from_brain(brain))
+    }
+
+    #[tokio::test]
+    async fn recall_materializes_canonical_document_with_uuid_and_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let uuid = "018f47c6-4a77-7c52-9db8-0e5f9bcb1705";
+        let source = format!(
+            "---\nformat: pdc-document/2\nbody: pdc-markdown/1\nid: {uuid}\ncreated: 2026-09-14T12:34:56.789Z\nupdated: 2026-09-14T12:34:56.789Z\ntitle: Release\n---\nAuroraRecovery uses release-checkpoint-73.\n"
+        );
+        let path = vault.path().join("release.md");
+        std::fs::write(&path, &source).unwrap();
+        std::fs::write(
+            dir.path().join("documents.toml"),
+            format!(
+                "[[root]]\nalias=\"vault\"\npath={}\nspace=\"personal\"\n",
+                serde_json::to_string(&vault.path().to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        let brain = Brain::open(BrainConfig::at(dir.path())).await.unwrap();
+        let _ = brain.ensure_space("personal").await.unwrap();
+        let server = BrainServer::from_brain(brain);
+        let response=server.handle(msg(1,"tools/call",Some(json!({"name":"recall","arguments":{"space":"personal","query":"AuroraRecovery","planes":["documents"],"token_budget":2000}})))).await.unwrap();
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("release-checkpoint-73") && text.contains(uuid),
+            "{response}"
+        );
+        let data: Value = serde_json::from_str(text).unwrap();
+        assert!(
+            data["data"]["evidence"][0]["source"]["revision"]
+                .as_str()
+                .unwrap()
+                .starts_with("blake3:")
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+        let bad=server.handle(msg(2,"tools/call",Some(json!({"name":"recall","arguments":{"space":"personal","query":"AuroraRecovery","known_at":0,"planes":["documents"]}})))).await.unwrap();
+        assert!(
+            bad.to_string().contains("unsupported_temporal_scope"),
+            "{bad}"
+        );
     }
 
     #[tokio::test]

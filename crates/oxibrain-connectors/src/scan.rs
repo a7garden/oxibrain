@@ -63,7 +63,25 @@ impl ScanResult {
 /// found during the walk itself are never followed — the walker stops on
 /// them and skips the entry (a pointer to outside the root never leaks into
 /// the index).
+pub struct ScanBudget {
+    pub entries: usize,
+    pub bytes: u64,
+}
+
 pub fn scan_root(root: &RootEntry) -> Result<ScanResult, BrainError> {
+    scan_root_bounded(
+        root,
+        &mut ScanBudget {
+            entries: usize::MAX,
+            bytes: u64::MAX,
+        },
+    )
+}
+
+pub fn scan_root_bounded(
+    root: &RootEntry,
+    budget: &mut ScanBudget,
+) -> Result<ScanResult, BrainError> {
     let canonical = canonicalize_root(&root.path)?;
     let include = compile_globs(&root.include, "include")?;
     let exclude = compile_globs(&root.exclude, "exclude")?;
@@ -75,6 +93,12 @@ pub fn scan_root(root: &RootEntry) -> Result<ScanResult, BrainError> {
         .into_iter()
         .filter_entry(|e| !is_excluded_dir(e));
     for entry in walker {
+        if budget.entries == 0 {
+            return Err(BrainError::Budget(
+                "reconcile_budget_exhausted: entries".into(),
+            ));
+        }
+        budget.entries -= 1;
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -140,6 +164,12 @@ pub fn scan_root(root: &RootEntry) -> Result<ScanResult, BrainError> {
             result.rejected(locator, "unreadable at scan time");
             continue;
         }
+        if bytes > budget.bytes {
+            return Err(BrainError::Budget(
+                "reconcile_budget_exhausted: bytes".into(),
+            ));
+        }
+        budget.bytes -= bytes;
         result.accepted(locator, bytes, modified_ns);
     }
 

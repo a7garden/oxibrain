@@ -1,6 +1,6 @@
 # oxibrain Roadmap — M7 onward
 
-> **Version:** v1.1 · **Date:** 2026-08-13
+> **Version:** v1.3 · **Date:** 2026-10-23
 > **Status:** Canonical for sequencing. Per-app sequencing lives in `doc/ECOSYSTEM.md`.
 > **Scope:** what happens after M6. M0–M6 shipped (`doc/ARCHITECTURE.md` §20).
 > **Convention:** `§n` refers to `doc/ARCHITECTURE.md`. `F n` are findings in its §21.
@@ -27,6 +27,12 @@ temporal (both arms read the same fold — by design)**. Outcome recorded in
 §4 (2026-10-17): D19 demotion does not fire; the graph stays as query
 structure. **M10 (§6) and M11 (§7)** shipped; `eval --suite
 experience|experiential` measures them.
+
+**M12 implementation is present; its live quality gate remains open** (2026-10-23): reliable recall and
+public-scope correctness, specified in `doc/spec/reliable-recall-v1.md` and
+sequenced in §11 below. The current research evidence is recorded in
+`doc/research/2026-10-23-recall-quality-and-evidence.md`; it is separate from
+implementation acceptance results in `doc/research/2026-10-23-reliable-recall-implementation.md`.
 
 ---
 
@@ -366,3 +372,54 @@ recall for a 2k-token budget (graph 7/9, ku 18/20, temporal 11/13 at
 The M7 first-week plan — spike `llama-cpp-2` + GBNF, land `ngram`, split `snapshot_indexes` into
 truth/ranking halves, write the parity corpus skeleton, and `doc/spec/M7-model-and-language.md` —
 all shipped as part of M7.
+
+---
+
+<a id="m12-reliable-recall"></a>
+
+## 11. M12 — Reliable recall · **implemented; live quality gate open**
+
+> **Goal:** relevant stored evidence reaches the public consumer within a stated
+> context budget and visibility scope.
+> **Design:** [spec](spec/reliable-recall-v1.md), [ADR-019](adr/ADR-019-read-scope-and-evidence-recall.md),
+> architecture §27. The owner requested all implementation. A–C and the D runner/corpora
+> are present in the working tree; live reader/dense quality validation remains unrun.
+
+### 11.1 Work sequence
+
+| Batch | Work | Acceptance before proceeding |
+|---|---|---|
+| A | Shared read scope, public document recall, historical assertion reconstruction through snippets/profile/identity, correct loss/freshness metadata; keep sixteen tools. | Canonical document found by search reaches public CLI/MCP recall; `known_at` excludes later evidence; old non-temporal payloads remain compatible; unsupported document time scopes fail explicitly. |
+| B | Complete UTF-8 source windows; schema-14→15 ranking-index migration; query-relevant session retrieval, atomic new-source indexing and resumable backfill. | Older-session and late-summary evidence reachable; no splitter tail loss; migration/crash/resume/redaction tests; ledger and truth snapshot unchanged. |
+| C | Pure evidence packing, complete source bundles, independent tokenizer binding and canonical serialization accounting. | Oversized first candidate does not block a later fitting unit; actual tokenizer budget, conservation, determinism, support pairing and read-race checks pass. |
+| D | Span-annotated held-out in-house corpus and executable live-evaluation path; matched reader/embedding/source-access controls. | Full Support@B and supported-answer results, costs, intervals and failures published; existing regression/parity tolerances hold. |
+
+Implementation acceptance status ([evidence](research/2026-10-23-reliable-recall-implementation.md)):
+
+- [x] The five public-operation failures in the research report have behavioral
+      tests through CLI and MCP and are fixed across A–C.
+- [x] Both time axes reach snippets, profile, identities, graph edges and source
+      visibility; functional replacement, denial and retraction cases reconstruct
+      the earlier belief rather than filtering only today's winner.
+- [x] Current-only document time scope is an explicit capability error; PDC UUIDs,
+      revision references, legacy readability, source bytes and corpus pins remain intact.
+- [x] Source-unit completeness, UTF-8 validity, considered-unit conservation,
+      exact context accounting and deterministic output have property tests.
+- [x] New ranking state reprojects and redacts correctly; schema-14 up-test and
+      crash/resume tests pass; the truth determinism test remains enabled.
+- [ ] A real-tokenizer synthetic verification run is recorded. The live extraction/reader run must still report its
+      actual coverage, quality and cost; canned reachability is labeled separately.
+
+### 11.2 Follow-up boundaries
+
+Configured existing dense adapters may supply candidates outside database
+transactions. A new model-reranking policy or expanded semantic source index
+must first show paired evidence/answer benefit at its recorded latency/memory
+cost. Learned memory writing, new environment/outcome schemas and automatic
+reinforcement need separate implementation specs; ordinary read counts never
+become truth. Existing public-benchmark deferrals remain unchanged.
+
+The first milestone rollback is a ranking-policy rebuild where possible. An
+older binary cannot open schema 15: binary rollback requires a verified backup
+restored to a new directory, following the existing detached-restore contract.
+No downgrade, source conversion or bulk re-extraction is part of M12.

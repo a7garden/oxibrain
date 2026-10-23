@@ -74,6 +74,7 @@ pub struct Brain {
     clock: Arc<dyn ClockPort>,
     llm: Option<Arc<dyn LlmPort>>,
     tokenizer: Arc<dyn TokenizerPort>,
+    read_policy: oxibrain_core::read_scope::ReadPolicy,
     /// Optional dense embedder for QueryMode::Dense / hybrid dense channel.
     embedder: Option<Arc<dyn EmbeddingPort>>,
     /// Extractor identity (§9.5) used by inline capture and backlog drains.
@@ -124,6 +125,7 @@ impl Brain {
             clock,
             llm: None,
             tokenizer: Arc::new(CharTokenizer),
+            read_policy: Default::default(),
             embedder: None,
             extractor_config: crate::extraction::default_extractor_config(),
         }
@@ -516,21 +518,10 @@ impl Brain {
         token_budget: usize,
         hints: Option<&oxibrain_store::context::RecallHints>,
     ) -> Result<oxibrain_core::context::ContextResult, BrainError> {
-        let tokenizer = self.tokenizer.clone();
-        let space = space.to_string();
-        let query = query.to_string();
-        let hints = hints.cloned();
-        self.read(move |conn| {
-            oxibrain_store::context::assemble_context(
-                conn,
-                &space,
-                &query,
-                token_budget,
-                hints.as_ref(),
-                tokenizer.as_ref(),
-            )
-        })
-        .await
+        let mut req = RecallRequest::new(space, query, token_budget);
+        req.hints = hints.cloned().unwrap_or_default();
+        req.session_id = req.hints.session_id.clone();
+        Ok(self.recall_with_request(req).await?.data.context)
     }
 
     // ── Ingest / extraction delegation ────────────────────────────────────
@@ -812,3 +803,12 @@ impl Brain {
             })
     }
 }
+
+mod read_counter;
+pub mod recall;
+/// Ledger schema shipped by this engine, exposed without adapter dependencies.
+pub const STORE_FORMAT_VERSION: u32 = oxibrain_store::schema::LEDGER_SCHEMA_VERSION as u32;
+
+pub use recall::{
+    ReadMeta, ReadPolicy, ReadResponse, ReadScope, RecallRequest, RecallResponse, SearchRequest,
+};
