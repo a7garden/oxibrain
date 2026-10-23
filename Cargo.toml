@@ -20,27 +20,27 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.20.0"
+version = "0.20.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/a7garden/oxibrain"
 rust-version = "1.96"
 
 [workspace.dependencies]
-oxibrain = { path = "crates/oxibrain", version = "0.20.0" }
-oxibrain-core = { path = "crates/oxibrain-core", version = "0.20.0" }
-oxibrain-index = { path = "crates/oxibrain-index", version = "0.20.0" }
-oxibrain-tokenizer-local = { path = "crates/oxibrain-tokenizer-local", version = "0.20.0" }
-oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.20.0" }
-oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.20.0" }
-oxibrain-llm-local = { path = "crates/oxibrain-llm-local", version = "0.20.0" }
-oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.20.0" }
-oxibrain-client = { path = "crates/oxibrain-client", version = "0.20.0" }
-oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.20.0" }
-oxibrain-store = { path = "crates/oxibrain-store", version = "0.20.0" }
-oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.20.0" }
-oxibrain-views = { path = "crates/oxibrain-views", version = "0.20.0" }
-oxibrain-ops = { path = "crates/oxibrain-ops", version = "0.20.0" }
-oxibrain-llm-mlx = { path = "crates/oxibrain-llm-mlx", version = "0.20.0" }
+oxibrain = { path = "crates/oxibrain", version = "0.20.1" }
+oxibrain-core = { path = "crates/oxibrain-core", version = "0.20.1" }
+oxibrain-index = { path = "crates/oxibrain-index", version = "0.20.1" }
+oxibrain-tokenizer-local = { path = "crates/oxibrain-tokenizer-local", version = "0.20.1" }
+oxibrain-ports = { path = "crates/oxibrain-ports", version = "0.20.1" }
+oxibrain-llm-http = { path = "crates/oxibrain-llm-http", version = "0.20.1" }
+oxibrain-llm-local = { path = "crates/oxibrain-llm-local", version = "0.20.1" }
+oxibrain-mcp = { path = "crates/oxibrain-mcp", version = "0.20.1" }
+oxibrain-client = { path = "crates/oxibrain-client", version = "0.20.1" }
+oxibrain-connectors = { path = "crates/oxibrain-connectors", version = "0.20.1" }
+oxibrain-store = { path = "crates/oxibrain-store", version = "0.20.1" }
+oxibrain-embed-local = { path = "crates/oxibrain-embed-local", version = "0.20.1" }
+oxibrain-views = { path = "crates/oxibrain-views", version = "0.20.1" }
+oxibrain-ops = { path = "crates/oxibrain-ops", version = "0.20.1" }
+oxibrain-llm-mlx = { path = "crates/oxibrain-llm-mlx", version = "0.20.1" }
 blake3 = "1.5"
 hex = "0.4"
 unicode-normalization = "0.1"
@@ -60,7 +60,10 @@ tracing-subscriber = "0.3"
 thiserror = "1"
 anyhow = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
-llama-cpp-2 = { version = "0.1", features = ["sampler"] }
+# The wrapper and its FFI must resolve together in lockfile-free consumers.
+# Newer 0.1 releases moved the vocabulary API; adapters target this tested pair.
+llama-cpp-2 = { version = "=0.1.156", features = ["sampler"] }
+llama-cpp-sys-2 = "=0.1.156"
 encoding_rs = "0.8"
 include_dir = "0.7"
 notify = "7"
