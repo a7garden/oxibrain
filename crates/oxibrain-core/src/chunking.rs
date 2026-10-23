@@ -4,15 +4,9 @@
 //! contextual retrieval. The chunk *text* is not stored — it is recovered
 //! from `episodes.content` via the byte offsets in `chunks.span_start/end`.
 //!
-//! The recursive split ladder (§9.3):
-//!   - Long input splits on `\n\n` (paragraph boundary).
-//!   - If a paragraph is still too long, split on `\n`.
-//!   - If a line is still too long, split on `. ` or `。` (sentence).
-//!   - If a sentence is still too long, split on ` ` (word).
-//!   - Last resort: hard cut on character count.
-//!
-//! The "empty separator" terminator is language-independent by construction —
-//! any script-aware splitter would betray P11.
+//! Paragraph boundaries are retained when they fit. Oversized blocks use
+//! scalar-aligned byte windows with complete coverage and guaranteed progress.
+//! No script classification, stopword list, or language-specific splitter is used.
 //!
 //! The deterministic context prefix is generated from projection fields, not
 //! from a model call. Every field is already known at projection time:
@@ -53,110 +47,58 @@ pub struct Chunk {
 
 /// Pure: split `content` into chunks under `policy`. No I/O, no time, no
 /// model. The output is a list of non-overlapping byte spans, ordered by
-/// position, that cover the input up to the policy's hard-cut tail.
+/// position, that cover every byte of the input.
 pub fn split_into_chunks(content: &str, policy: &ChunkPolicy) -> Vec<Chunk> {
-    if content.is_empty() {
-        return Vec::new();
+    let mut chunks = Vec::new();
+    let mut offset = 0;
+    // Preserve complete paragraph/tool-step blocks when they fit. Oversized
+    // blocks use scalar-aligned windows; separators remain inside coverage.
+    for block in content.split_inclusive("\n\n") {
+        for mut c in source_windows(block, policy.max_chunk_bytes, 0) {
+            c.span_start += offset;
+            c.span_end += offset;
+            c.ordinal = chunks.len() as u32;
+            chunks.push(c);
+        }
+        offset += block.len();
     }
-    let mut out: Vec<Chunk> = Vec::new();
-    let mut ordinal = 0u32;
-    split_recursive(
-        content.as_bytes(),
-        0,
-        content.len(),
-        &mut ordinal,
-        policy,
-        &mut out,
-    );
+    chunks
+}
+
+/// Full UTF-8 coverage, with overlap confined to the same source occurrence.
+/// A limit below the size of one scalar still consumes that scalar to progress.
+pub fn source_windows(content: &str, maximum: usize, overlap: usize) -> Vec<Chunk> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let maximum = maximum.max(1);
+    while start < content.len() {
+        let mut end = start.saturating_add(maximum).min(content.len());
+        while end > start && !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            end = start
+                + content[start..]
+                    .chars()
+                    .next()
+                    .expect("nonempty tail")
+                    .len_utf8();
+        }
+        out.push(Chunk {
+            ordinal: out.len() as u32,
+            span_start: start,
+            span_end: end,
+        });
+        if end == content.len() {
+            break;
+        }
+        let mut next = end.saturating_sub(overlap.min(maximum / 2));
+        while next < end && !content.is_char_boundary(next) {
+            next += 1;
+        }
+        start = if next > start { next } else { end };
+    }
     out
-}
-
-fn split_recursive(
-    bytes: &[u8],
-    offset: usize,
-    end: usize,
-    ordinal: &mut u32,
-    policy: &ChunkPolicy,
-    out: &mut Vec<Chunk>,
-) {
-    let len = end - offset;
-    if len <= policy.max_chunk_bytes {
-        push_chunk(out, ordinal, offset, end);
-        return;
-    }
-    let candidate = pick_separator(bytes, offset, end, policy.max_chunk_bytes);
-    if let Some((sep_byte, sep_len)) = candidate {
-        let mut start = offset;
-        let mut i = offset;
-        while i + sep_len <= end {
-            if &bytes[i..i + sep_len] == sep_byte {
-                if i - start >= policy.min_chunk_bytes {
-                    push_chunk(out, ordinal, start, i);
-                }
-                start = i + sep_len;
-                i += sep_len;
-            } else {
-                i += 1;
-            }
-        }
-        if end - start >= policy.min_chunk_bytes {
-            push_chunk(out, ordinal, start, end);
-        } else if let Some(last) = out.last_mut() {
-            last.span_end = end;
-        }
-    } else {
-        push_chunk(out, ordinal, offset, offset + policy.max_chunk_bytes);
-    }
-}
-
-fn push_chunk(out: &mut Vec<Chunk>, ordinal: &mut u32, start: usize, end: usize) {
-    out.push(Chunk {
-        ordinal: *ordinal,
-        span_start: start,
-        span_end: end,
-    });
-    *ordinal += 1;
-}
-
-/// Pick the largest separator whose first match produces a sub-chunk of
-/// acceptable size. Returns the separator bytes + length, or None when the
-/// range must be hard-cut.
-fn pick_separator(
-    bytes: &[u8],
-    offset: usize,
-    end: usize,
-    _max: usize,
-) -> Option<(&'static [u8], usize)> {
-    const SEPARATORS: &[(&[u8], &str)] = &[
-        (b"\n\n", "paragraph"),
-        (b"\n", "line"),
-        (b". ", "sentence-ascii"),
-        ("\u{3002}".as_bytes(), "sentence-cjk"),
-        (b" ", "word"),
-    ];
-    for (sep, _label) in SEPARATORS {
-        if find_in_range(bytes, sep, offset, end).is_some() {
-            return Some((sep, sep.len()));
-        }
-    }
-    None
-}
-
-fn find_in_range(bytes: &[u8], needle: &[u8], offset: usize, end: usize) -> Option<usize> {
-    if needle.is_empty() {
-        return None;
-    }
-    if end > bytes.len() {
-        return None;
-    }
-    let mut i = offset;
-    while i + needle.len() <= end {
-        if &bytes[i..i + needle.len()] == needle {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
 }
 
 /// Build a deterministic context prefix for a chunk. All fields come from

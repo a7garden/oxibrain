@@ -1,5 +1,14 @@
 # oxibrain — Architecture
-> **Version:** v2.23 · **Date:** 2026-10-17 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.25 · **Date:** 2026-10-23 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.25 — Reliable recall implementation (M12, quality gate open).**
+> Shared scoped search/recall, historical folding, source windows, pure evidence
+> packing and independent tokenizer binding are implemented in workspace 0.20.0.
+> Schema 15 adds separate `memory_source_chunks` and contentless lexical indexes;
+> legacy contextual chunks retain their original role. Source lifecycle guards
+> prevent stale synthesis publication. The sixteen-tool cap and PDC reader
+> boundary remain unchanged. [Implementation and verification](research/2026-10-23-reliable-recall-implementation.md)
+> separates actual correctness/span tests from the unrun live reader/dense controls.
+> M12 is not closed as a general answer-quality milestone.
 > **v2.23 — Honest memory closed (M10) + recall composition knobs.** `RecallHints`
 > gains additive `skip_beliefs` / `skip_episodes` / `skip_summaries` (default
 > false): composition knobs for compact recall and the §13.2 exit comparison.
@@ -2763,9 +2772,11 @@ M0–M6 have shipped. `doc/ROADMAP.md` carries M7 onward with exit criteria and 
 | **M2** | Retrieval and lifecycle: indexes, hybrid query, traversal, decay, compaction, communities, context assembly, benchmarks | ✅ |
 | **M3** | Extraction and evaluation: LLM port + HTTP adapter, generated schema, validator, quarantine, re-extraction, eval harness; v2.11 swaps the durable job queue for the derived `uncached_memory_episodes` backlog (§9.1) | ✅ |
 | **M4** | Surfaces and security: spaces, scopes, tokens, audit, trust tiers, redaction, MCP server, foreground `serve --http` + caller-owned `serve --stdio`, CLI, export/import | ✅ |
-| **M10** | **Honest memory** — P10, MMR, reranking, feedback | → ROADMAP |
+| **M10** | **Honest memory** — P10, MMR, reranking, feedback | ✅ (ROADMAP §6; 2026-10-17) |
+| **M11** | Experience memory — trajectories, conditional predicates, terminal runbooks | ✅ (ROADMAP §7; 2026-10-16) |
+| **M12** | Reliable recall — shared scope, source units, relevant sessions, budget/provenance evaluation | Implementation present; live quality gate open (ROADMAP §11) |
 
-M7–M10 each get an implementation spec in `doc/spec/` before code, following the pattern M1–M3
+M7 onward get implementation specs in `doc/spec/` before code, following the pattern M1–M3
 established.
 
 ---
@@ -3071,3 +3082,44 @@ internal cache/provenance key behind `doc://alias/<locator>?rev=`. Raw source
 provenance is byte-identical (gix blob oids or blake3), so reprojection from
 source is deterministic and user properties survive in source even though the
 disposable projection records only standard fields.
+
+## 27. Reliable recall — M12 implementation
+
+The owner requested implementation of the researched design on 2026-10-23.
+[reliable-recall-v1](spec/reliable-recall-v1.md) and
+[ADR-019](adr/ADR-019-read-scope-and-evidence-recall.md) define the contract.
+The implementation replaces public search/recall assembly; the lower-level legacy
+`query`/context executor remains available for compatibility and evaluation.
+See the [verification report](research/2026-10-23-reliable-recall-implementation.md)
+for actual evidence and remaining experimental gates.
+
+- **One read scope.** Canonical facade requests carry valid and transaction time.
+  Core reconstructs visible assertion groups, then profile, snippets, identity
+  display and graph edges all consume that visibility result. Legacy Rust
+  methods delegate. Current-only document caches reject explicit temporal
+  scopes; file/Git timestamps never substitute for knowledge acquisition time.
+- **Source evidence units.** The ranking/response object binds source occurrence,
+  revision/view, UTF-8 byte coordinates, role, retrieval evidence and support.
+  Quoted Primary/session observations, folded beliefs and Derived summaries
+  remain distinguishable. PDC UUIDs and raw source preservation remain authoritative;
+  decoded HTML/Djot ranges are explicitly decoded-view ranges.
+- **Pure selection.** A bounded core packer selects complete render variants and
+  conserves the considered unit set. An oversized unit does not starve later
+  candidates. Summary support and uncertainty travel together. Cross-plane raw
+  scores are never compared. Every stage reports its own losses and index gaps.
+- **Tokenizer and rendering contract.** Exact budget accounting counts the
+  complete canonical layer serialization, including source labels, references
+  and separators. Tokenizer binding is independent of extraction. A caller can
+  require exact counting; fallback estimates remain explicitly labeled.
+- **Rebuildable indexing.** Brain schema 15 adds source-chunk lexical
+  indexes and resumable backfill metadata. Session retrieval no longer depends
+  on extraction, a newest-five limit or a prefix preview. The document cache can
+  remain schema 3. Migration, redaction, backup omission and reprojection cover
+  the new ranking tables; the truth half is unchanged.
+
+M12 is organized into four reviewable batches: public scope/routing,
+source indexing, evidence packing/tokenization, and held-out evaluation.
+The acceptance set includes the five reproduced public failures, temporal replacement/retraction cases,
+source race checks, UTF-8/conservation/budget properties and unchanged truth
+determinism are required. Model reranking, learned memory policies and durable
+outcome feedback remain follow-up experiments under measured quality/cost gates.

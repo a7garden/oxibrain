@@ -5,6 +5,26 @@ squash-merged.
 
 
 
+## [0.20.0] — 2026-10-23
+
+### Added
+
+- Shared `ReadScope`, scoped search/recall, historical assertion folding and typed unsupported-document-time/tokenizer errors. Memory profile, snippets and graph expansion use the same visible claims.
+- Complete UTF-8 raw-source windows, relevant older-session retrieval and resumable `admin index --memory`. Schema 15 adds separate rebuildable source-window/FTS tables; migration performs no extraction or document rewrite.
+- Pure, source-bound evidence packing with quotation variants, exact canonical context accounting, loss receipts and the independent offline `oxibrain-tokenizer-local` artifact adapter. Configure `OXIBRAIN_TOKENIZER_JSON` and optionally `OXIBRAIN_READ_POLICY_JSON`.
+- Source/exposure revalidation for reads and synthesis publication; bounded document reconciliation/materialization and snapshot-bound UUID/generation receipts.
+- Synthetic span evaluation, real-tokenizer receipts and an explicit live reader/extraction capture/replay runner. Live supported-answer/dense quality gates remain open; see the implementation report.
+
+### Compatibility
+
+- MCP remains at sixteen tools. Current payloads keep their defaults. Explicit time filters with Documents now return `unsupported_temporal_scope`.
+- New public Rust error variants and document DTO fields require exhaustive-match/struct-literal updates. Schema-14 binaries cannot open schema 15; restore a verified pre-upgrade backup into an isolated directory for rollback.
+- Patched transitive certificate dependencies `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10 satisfy the current advisory check.
+
+### Fixed
+
+- Release packaging preserves the default GGUF binary before compiling MLX, so the default and MLX tarballs contain their respective builds.
+
 ## [0.17.0] — 2026-09-19
 
 ### Added

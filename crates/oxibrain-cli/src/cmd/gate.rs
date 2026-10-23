@@ -30,6 +30,8 @@ use tempfile::TempDir;
 
 #[derive(Debug, Deserialize)]
 struct Manifest {
+    #[serde(default)]
+    read_at: Option<String>,
     #[allow(dead_code)]
     version: String,
     #[allow(dead_code)]
@@ -163,10 +165,15 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
     let manifest: Manifest = toml::from_str(&manifest_text).context("parse manifest.toml")?;
 
     // 1. Set up a fresh brain and ingest every episode as declarations.
-    //    Use a fake clock pinned to 2024-12-01 (after all episodes) so
-    //    as_of queries for the temporal corpus resolve correctly.
+    //    Pin the request clock in the corpus manifest. Historical questions
+    //    separately pass their valid-time cutoff to every relevant read arm.
     let dir = TempDir::new().context("create temp dir")?;
-    let clock_ts = Timestamp::from_millis(1_700_000_000_000); // 2023-11-14
+    let clock_ts = manifest
+        .read_at
+        .as_deref()
+        .map(parse_iso_to_timestamp)
+        .transpose()?
+        .unwrap_or(Timestamp::from_millis(1_733_011_200_000));
     let clock = Arc::new(FakeClock::new(clock_ts));
     let brain = Brain::with_clock(oxibrain::BrainConfig::at(dir.path()), clock)
         .await
@@ -245,18 +252,18 @@ pub async fn run(suite: &str, corpus_dir: &Path) -> Result<()> {
         // Arm R (experience): full-stack context gathering — `recall`
         // within a 2,000-token budget, answer matched against the
         // assembled layers (statements + episodes + summaries).
+        let mut recall_request = oxibrain::RecallRequest::new(&space_id, &keyword, 2000);
+        recall_request.planes = [oxibrain_core::retrieval::SearchPlane::Memory]
+            .into_iter()
+            .collect();
+        recall_request.scope.as_of = as_of;
+        recall_request.hints.is_session_start = true;
         let recall2k = brain
-            .assemble_context_with_hints(
-                &space_id,
-                &keyword,
-                2000,
-                &oxibrain::RecallHints {
-                    is_session_start: true,
-                    ..Default::default()
-                },
-            )
+            .recall_with_request(recall_request)
             .await
-            .context("assemble_context (arm R)")?;
+            .context("recall (arm R)")?
+            .data
+            .context;
         let rendered_r: String = recall2k
             .layers
             .iter()
@@ -688,7 +695,14 @@ pub async fn run_experiential(corpus_dir: &Path) -> Result<()> {
     let manifest: Manifest = toml::from_str(&manifest_text).context("parse manifest.toml")?;
 
     let dir = TempDir::new().context("create temp dir")?;
-    let clock = Arc::new(FakeClock::new(Timestamp::from_millis(1_700_000_000_000)));
+    let clock = Arc::new(FakeClock::new(
+        manifest
+            .read_at
+            .as_deref()
+            .map(parse_iso_to_timestamp)
+            .transpose()?
+            .unwrap_or(Timestamp::from_millis(1_733_011_200_000)),
+    ));
     let llm = Arc::new(FakeLlmPort::new());
     // Insertion order is load-bearing (first match wins): the runbook key
     // matches only runbook prompts; extraction keys match episode text,

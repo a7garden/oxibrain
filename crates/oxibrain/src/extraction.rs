@@ -368,6 +368,9 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<Vec<String>, BrainError> {
         let llm = self.require_llm()?.clone();
+        let expected_epoch = self
+            .read(|c| oxibrain_store::meta::get(c, "exposure_epoch"))
+            .await?;
         let now = self.clock.now();
         let space_owned = space.to_string();
         let extractor_id = config.id();
@@ -467,8 +470,10 @@ impl Brain {
         //    land or none do — so a profile failure cannot leave the cache
         //    half pointing at a derived episode that isn't in the ledger.
         self.write(move |conn| {
+            ensure_exposure_epoch(conn, &expected_epoch)?;
             let mut ids = Vec::new();
             for (episode_ids, text) in &summaries {
+                ensure_live_support(conn, &space_owned, episode_ids)?;
                 let member_hash = oxibrain_store::consolidation::hash_member_set(episode_ids);
                 let shared_entities = oxibrain_store::consolidation::entities_for_episodes(
                     conn,
@@ -519,6 +524,9 @@ impl Brain {
         min_members: usize,
     ) -> Result<Vec<String>, BrainError> {
         let llm = self.require_llm()?.clone();
+        let expected_epoch = self
+            .read(|c| oxibrain_store::meta::get(c, "exposure_epoch"))
+            .await?;
         let now = self.clock.now();
         let space_owned = space.to_string();
         let extractor_id = config.id();
@@ -607,8 +615,10 @@ impl Brain {
         //    is about that entity (P10: computed from the fold, never by
         //    the model).
         self.write(move |conn| {
+            ensure_exposure_epoch(conn, &expected_epoch)?;
             let mut ids = Vec::new();
             for (cluster, text) in &runbooks {
+                ensure_live_support(conn, &space_owned, &cluster.episode_ids)?;
                 let runbook_hash = oxibrain_store::consolidation::hash_runbook_member_set(
                     &cluster.anchor_entity,
                     &cluster.episode_ids,
@@ -670,6 +680,9 @@ impl Brain {
         config: &oxibrain_core::extraction::ExtractorConfig,
     ) -> Result<usize, BrainError> {
         let llm = self.require_llm()?.clone();
+        let expected_epoch = self
+            .read(|c| oxibrain_store::meta::get(c, "exposure_epoch"))
+            .await?;
         let now = self.clock.now();
         let space_owned = space.to_string();
         let extractor_id = config.id();
@@ -725,10 +738,21 @@ impl Brain {
         //    hits short-circuit the LLM (and the final write op), only
         //    completing the checkpoint that the previous run already
         //    began.
-        let mut ltm_results: Vec<(Vec<String>, String)> = Vec::new();
+        let mut ltm_results: Vec<(Vec<String>, Vec<String>, String)> = Vec::new();
         for group in pending_groups.iter() {
             let entity_ids = group.entity_ids.clone();
             let member_hash = oxibrain_store::consolidation::hash_community_member_set(&entity_ids);
+            let source_entities = entity_ids.clone();
+            let source_space = space_owned.clone();
+            let sources = self
+                .read(move |c| {
+                    oxibrain_store::consolidation::episodes_for_entities(
+                        c,
+                        &source_space,
+                        &source_entities,
+                    )
+                })
+                .await?;
             let cached = {
                 let extractor_id = extractor_id.clone();
                 self.read(move |conn| {
@@ -743,7 +767,7 @@ impl Brain {
             };
 
             if let Some(text) = cached {
-                ltm_results.push((entity_ids, text));
+                ltm_results.push((entity_ids, sources, text));
                 continue;
             }
 
@@ -770,7 +794,7 @@ impl Brain {
                     max_tokens: config.max_tokens,
                 })
                 .await?;
-            ltm_results.push((entity_ids, response.text));
+            ltm_results.push((entity_ids, sources, response.text));
         }
 
         // 5. Final write op: gather sources + Uncertainty per group, then
@@ -780,14 +804,11 @@ impl Brain {
         let count = ltm_results.len();
         if count > 0 {
             self.write(move |conn| {
-                for ((entity_ids, text), member_hash) in
+                ensure_exposure_epoch(conn, &expected_epoch)?;
+                for ((entity_ids, sources, text), member_hash) in
                     ltm_results.iter().zip(checkpointed_hashes.iter())
                 {
-                    let sources = oxibrain_store::consolidation::episodes_for_entities(
-                        conn,
-                        &space_owned,
-                        entity_ids,
-                    )?;
+                    ensure_live_support(conn, &space_owned, sources)?;
                     let uncertainty = oxibrain_store::consolidation::uncertainty_for_cluster(
                         conn,
                         &space_owned,
@@ -806,7 +827,7 @@ impl Brain {
                         conn,
                         &space_owned,
                         text,
-                        &sources,
+                        sources,
                         Some(&uncertainty),
                         now,
                     )?;
@@ -818,4 +839,41 @@ impl Brain {
         }
         Ok(count)
     }
+}
+
+fn ensure_live_support(
+    conn: &rusqlite::Connection,
+    space: &str,
+    ids: &[String],
+) -> Result<(), BrainError> {
+    let mut states = Vec::new();
+    for id in ids {
+        let e = oxibrain_store::ledger::get_episode(conn, id)?;
+        states.push(match e {
+            Some(e) => (
+                e.redacted_at.is_none(),
+                e.space == space,
+                e.kind != oxibrain_core::EpisodeKind::Derived,
+            ),
+            None => (false, false, false),
+        });
+    }
+    if !oxibrain_core::evidence::support_is_live(&states) {
+        return Err(BrainError::Conflict(
+            "synthesis source changed or was redacted".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_exposure_epoch(
+    conn: &rusqlite::Connection,
+    expected: &Option<String>,
+) -> Result<(), BrainError> {
+    if oxibrain_store::meta::get(conn, "exposure_epoch")? != *expected {
+        return Err(BrainError::Conflict(
+            "synthesis inputs changed during model work; retry from fresh sources".into(),
+        ));
+    }
+    Ok(())
 }

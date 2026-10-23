@@ -114,7 +114,11 @@ async fn main() -> anyhow::Result<()> {
                 debug_assert!(pending, "clap enforces --pending (required = true)");
                 cmd::extract::run(&dir, limit).await
             }
-            AdminCmd::Index { documents, embed } => cmd::index::run(&dir, documents, embed).await,
+            AdminCmd::Index {
+                documents,
+                memory,
+                embed,
+            } => cmd::index::run(&dir, documents, memory, embed).await,
             AdminCmd::Reextract { space } => cmd::reextract::run(&dir, &space).await,
             AdminCmd::Consolidate {
                 space,

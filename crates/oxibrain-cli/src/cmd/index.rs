@@ -13,14 +13,20 @@ use oxibrain::document_plane::format_diagnostic_lines;
 use oxibrain::{Brain, BrainConfig, IndexOptions};
 use std::path::Path;
 
-pub async fn run(dir: &Path, documents: bool, embed: bool) -> anyhow::Result<()> {
-    let _ = documents; // accepted for the spec's canonical spelling; default on
+pub async fn run(dir: &Path, documents: bool, memory: bool, embed: bool) -> anyhow::Result<()> {
     let brain = Brain::open(BrainConfig::at(dir)).await?;
     let brain = if embed {
         super::embed::require_local_embedder(brain)?
     } else {
         brain
     };
+    if memory {
+        let count = brain.index_memory().await?;
+        println!("memory episodes indexed: {count}");
+        if !documents && !embed {
+            return Ok(());
+        }
+    }
     let freshness = brain
         .index_documents(IndexOptions {
             embed,

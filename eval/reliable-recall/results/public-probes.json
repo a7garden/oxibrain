@@ -1,0 +1,38 @@
+[
+  {
+    "surface": "cli",
+    "case": "old-session",
+    "passed": true,
+    "tokens": 1021
+  },
+  {
+    "surface": "cli",
+    "case": "trace-48735",
+    "passed": true,
+    "tokens": 936
+  },
+  {
+    "surface": "cli",
+    "case": "known_at",
+    "passed": true,
+    "tokens": 398
+  },
+  {
+    "surface": "mcp",
+    "case": "old-session",
+    "passed": true,
+    "tokens": 1021
+  },
+  {
+    "surface": "mcp",
+    "case": "trace-48735",
+    "passed": true,
+    "tokens": 936
+  },
+  {
+    "surface": "mcp",
+    "case": "known_at",
+    "passed": true,
+    "tokens": 398
+  }
+]

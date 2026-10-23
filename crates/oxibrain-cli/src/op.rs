@@ -151,6 +151,10 @@ fn brain_error_parts(e: &BrainError) -> (i32, &'static str, bool) {
         BrainError::NotFound(_) | BrainError::SpaceNotFound { .. } => {
             (EXIT_NOT_FOUND, "not_found", false)
         }
+        BrainError::UnsupportedTemporalScope { .. } => {
+            (EXIT_INVALID_INPUT, "unsupported_temporal_scope", false)
+        }
+        BrainError::TokenizerUnavailable(_) => (EXIT_INVALID_INPUT, "tokenizer_unavailable", false),
         BrainError::Invalid(_) | BrainError::SpaceNameInvalid { .. } => {
             (EXIT_INVALID_INPUT, "invalid_input", false)
         }
@@ -198,6 +202,14 @@ pub async fn run(dir: &Path, args: &[String]) -> i32 {
     };
     let brain = super::cmd::embed::try_attach_local_embedder(brain);
     let brain = super::cmd::llm::bind_extract_identity(brain);
+    let brain = match super::cmd::llm::bind_read_tokenizer(brain) {
+        Ok(b) => b,
+        Err(e) => {
+            let (code, name, retry) = brain_error_parts(&e);
+            print_envelope(&err_envelope(&op_name, name, &e.to_string(), retry));
+            return code;
+        }
+    };
 
     // v2.13 (ADR-013): no default-space fallback — the server enforces the
     // required `space` argument and enumerates available spaces in the
@@ -260,29 +272,32 @@ pub async fn run(dir: &Path, args: &[String]) -> i32 {
         // successful JSON-RPC response). The BrainError Display prefixes in
         // `oxibrain-ports/src/error.rs` are a stable contract — classify on
         // them until ToolErr carries the typed error (P6).
-        let (code, exit, retry) =
-            if text.starts_with("invalid input:") || text.starts_with("invalid space name") {
-                ("invalid_input", EXIT_INVALID_INPUT, false)
-            } else if text.starts_with("not found:") || text.starts_with("space '") {
-                ("not_found", EXIT_NOT_FOUND, false)
-            } else if text.starts_with("unauthorized:") || text.starts_with("insufficient scope") {
-                ("unauthorized", EXIT_UNAUTHORIZED, false)
-            } else if text.starts_with("store locked") || text.starts_with("busy:") {
-                ("locked", EXIT_LOCKED, true)
-            } else if text.starts_with("budget exceeded:") {
-                ("budget", 7, false)
-            } else if text.starts_with("model error:") || text.starts_with("provider error") {
-                ("model", 8, false)
-            } else if text.starts_with("conflict:") {
-                ("conflict", 6, false)
-            } else if text.starts_with("plan_stale:") {
-                // Rail outcome: the dry-run's ledger state moved. Exit code
-                // shares the conflict slot (spec keeps exits contiguous
-                // 1–9, F12); the recovery is a fresh dry-run, so retryable.
-                ("plan_stale", 6, true)
-            } else {
-                ("internal", EXIT_INTERNAL, false)
-            };
+        let (code, exit, retry) = if text.starts_with("unsupported_temporal_scope:") {
+            ("unsupported_temporal_scope", EXIT_INVALID_INPUT, false)
+        } else if text.starts_with("tokenizer_unavailable:") {
+            ("tokenizer_unavailable", EXIT_INVALID_INPUT, false)
+        } else if text.starts_with("invalid input:") || text.starts_with("invalid space name") {
+            ("invalid_input", EXIT_INVALID_INPUT, false)
+        } else if text.starts_with("not found:") || text.starts_with("space '") {
+            ("not_found", EXIT_NOT_FOUND, false)
+        } else if text.starts_with("unauthorized:") || text.starts_with("insufficient scope") {
+            ("unauthorized", EXIT_UNAUTHORIZED, false)
+        } else if text.starts_with("store locked") || text.starts_with("busy:") {
+            ("locked", EXIT_LOCKED, true)
+        } else if text.starts_with("budget exceeded:") {
+            ("budget", 7, false)
+        } else if text.starts_with("model error:") || text.starts_with("provider error") {
+            ("model", 8, false)
+        } else if text.starts_with("conflict:") {
+            ("conflict", 6, false)
+        } else if text.starts_with("plan_stale:") {
+            // Rail outcome: the dry-run's ledger state moved. Exit code
+            // shares the conflict slot (spec keeps exits contiguous
+            // 1–9, F12); the recovery is a fresh dry-run, so retryable.
+            ("plan_stale", 6, true)
+        } else {
+            ("internal", EXIT_INTERNAL, false)
+        };
         print_envelope(&err_envelope(&op_name, code, &text, retry));
         return exit;
     }

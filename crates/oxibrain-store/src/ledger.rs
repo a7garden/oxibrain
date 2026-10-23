@@ -189,6 +189,11 @@ pub fn insert_episode(conn: &Connection, ep: &mut Episode) -> Result<(), BrainEr
         ],
     )
     .map_err(sql_err)?;
+    if ep.kind == oxibrain_core::EpisodeKind::Primary
+        && !matches!(source_kind, "document" | "document_revision")
+    {
+        crate::read_evidence::index_source(conn, &ep.space, &id, &ep.content)?;
+    }
     ep.id = id;
     ep.seq = seq;
     ep.content_hash = ch;
@@ -281,6 +286,11 @@ pub fn insert_event(
                 ],
             )
             .map_err(sql_err)?;
+            if ep.kind == oxibrain_core::EpisodeKind::Primary
+                && !matches!(source_kind, "document" | "document_revision")
+            {
+                crate::read_evidence::index_source(conn, &ep.space, &id, &ep.content)?;
+            }
             ep.id = id;
             ep.seq = seq;
             ep.content_hash = ch;

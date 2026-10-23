@@ -39,6 +39,25 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
+/// Render the token-budgeted part of a recall response. Only layer text joined
+/// with two newlines is counted; JSON metadata and explanations are separate.
+/// Pass the response's `data` object, without duplicating it in the prompt.
+pub fn render_recall_context(data: &Value) -> Result<String> {
+    let layers = data
+        .get("layers")
+        .and_then(Value::as_array)
+        .context("recall data.layers must be an array")?;
+    let texts: Result<Vec<_>> = layers
+        .iter()
+        .map(|l| {
+            l.get("text")
+                .and_then(Value::as_str)
+                .context("recall layer.text must be a string")
+        })
+        .collect();
+    Ok(texts?.join("\n\n"))
+}
+
 /// A locally spawned `oxibrain serve --stdio` child the client talks to.
 ///
 /// The executable is typically the installed `oxibrain` binary (or a path

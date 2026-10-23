@@ -157,7 +157,16 @@ impl TokenizerPort for LocalLlm {
         self.model
             .str_to_token(text, llama_cpp_2::model::AddBos::Never)
             .map(|t| t.len())
-            .unwrap_or_else(|_| (text.chars().count() / 4).max(1))
+            .unwrap_or(usize::MAX)
+    }
+    fn count_exact(&self, text: &str) -> Result<Option<usize>, BrainError> {
+        self.model
+            .str_to_token(text, llama_cpp_2::model::AddBos::Never)
+            .map(|t| Some(t.len()))
+            .map_err(|e| BrainError::TokenizerUnavailable(e.to_string()))
+    }
+    fn quality(&self) -> oxibrain_ports::tokenizer::TokenizerQuality {
+        oxibrain_ports::tokenizer::TokenizerQuality::Exact
     }
 
     fn truncate_to(&self, text: &str, max_tokens: usize) -> String {

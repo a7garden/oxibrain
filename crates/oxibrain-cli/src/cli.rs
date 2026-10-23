@@ -124,6 +124,9 @@ pub enum AdminCmd {
     },
     /// Reconcile the documents cache from the configured roots (spec §7.3).
     Index {
+        /// Backfill the raw memory/source index without extraction.
+        #[arg(long)]
+        memory: bool,
         /// The spec's canonical spelling; documents indexing is the default
         /// behavior of this command with or without the flag.
         #[arg(long)]

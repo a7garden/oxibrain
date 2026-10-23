@@ -769,3 +769,84 @@ async fn summarize_communities_attaches_sources_and_uncertainty() {
         );
     }
 }
+
+/// A real pause between prompt capture and publication exercises the exposure
+/// guard; successful model completion cannot resurrect a redacted input.
+#[tokio::test]
+async fn redaction_during_synthesis_prevents_cache_and_derived_publication() {
+    struct PausingLlm {
+        inner: FakeLlmPort,
+        entered: tokio::sync::Notify,
+        resume: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl LlmPort for PausingLlm {
+        async fn complete(&self, req: LlmRequest) -> Result<LlmResponse, BrainError> {
+            if req
+                .prompt
+                .contains("Summarize the following related episodes")
+            {
+                self.entered.notify_one();
+                self.resume.notified().await;
+                return Ok(LlmResponse {
+                    text: canned_summary().into(),
+                    raw: serde_json::Value::Null,
+                });
+            }
+            self.inner.complete(req).await
+        }
+    }
+    let dir = TempDir::new().unwrap();
+    let llm = Arc::new(PausingLlm {
+        inner: FakeLlmPort::new(),
+        entered: tokio::sync::Notify::new(),
+        resume: tokio::sync::Notify::new(),
+    });
+    llm.inner.respond_to(
+        "Alice works on",
+        LlmResponse {
+            text: canned_extraction().into(),
+            raw: serde_json::Value::Null,
+        },
+    );
+    let brain = Brain::with_llm(
+        oxibrain::BrainConfig::at(dir.path()),
+        Arc::new(FakeClock::new(Timestamp(10000))),
+        llm.clone(),
+    )
+    .await
+    .unwrap();
+    let space = brain.ensure_space("synthesis-race").await.unwrap();
+    let cfg = base_extractor();
+    let (first, _) = ingest_pair_with_shared_entities(&brain, &space, &cfg).await;
+    let generate = brain.consolidate(&space, &cfg);
+    let redact = async {
+        llm.entered.notified().await;
+        brain
+            .redact(
+                &oxibrain::RedactTarget::Episode { id: first },
+                "race test",
+                "test",
+            )
+            .await
+            .unwrap();
+        llm.resume.notify_one();
+    };
+    let (result, ()) = tokio::join!(generate, redact);
+    assert!(matches!(result, Err(BrainError::Conflict(_))), "{result:?}");
+    let conn = Connection::open(dir.path().join("brain.db")).unwrap();
+    assert_eq!(
+        conn.query_row::<i64, _, _>(
+            "SELECT count(*) FROM episodes WHERE kind='derived'",
+            [],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM summaries", [], |r| r.get(0))
+            .unwrap(),
+        0
+    );
+}

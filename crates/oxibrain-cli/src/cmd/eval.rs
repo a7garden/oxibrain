@@ -75,27 +75,54 @@ pub async fn run(suite: &str) -> anyhow::Result<()> {
     match suite {
         "fast" => run_fast().await,
         "full" => {
-            anyhow::bail!("full suite requires a live provider — run via CI nightly, not locally")
+            super::recall_eval::run(true).await?;
+            run_extraction(true).await
         }
+        "recall" => super::recall_eval::run(false).await,
         "gate" => super::gate::run_with_dir(suite, None).await,
         "experiential" => super::gate::run_with_dir(suite, None).await,
         "experience" => super::gate::run_with_dir(suite, None).await,
         other => {
             anyhow::bail!(
-                "unknown suite '{other}': use 'fast', 'full', 'gate', 'experience', or 'experiential'"
+                "unknown suite '{other}': use 'fast', 'full', 'recall', 'gate', 'experience', or 'experiential'"
             )
         }
     }
 }
 
 async fn run_fast() -> anyhow::Result<()> {
+    run_extraction(false).await
+}
+
+async fn run_extraction(live: bool) -> anyhow::Result<()> {
     let fixtures = fixtures();
-    let extractor = test_extractor();
+    let provider = if live {
+        Some(super::llm::from_env().await?)
+    } else {
+        None
+    };
+    let extractor = provider
+        .as_ref()
+        .map(|p| {
+            super::llm::config(
+                p.model_id.clone(),
+                p.mechanism,
+                p.model_digest.clone(),
+                p.profile_id(),
+            )
+        })
+        .unwrap_or_else(test_extractor);
+    let replay = std::env::var_os("OXIBRAIN_EVAL_REPLAY")
+        .map(std::fs::read)
+        .transpose()?
+        .map(|b| serde_json::from_slice::<serde_json::Value>(&b))
+        .transpose()?;
+    let mut captures = Vec::new();
     let mut all_extracted = Vec::new();
     let mut all_expected = Vec::new();
     let mut all_entity_surfaces: Vec<String> = Vec::new();
 
-    for fixture in &fixtures {
+    for (ordinal, fixture) in fixtures.iter().enumerate() {
         let dir = tempfile::TempDir::new()?;
         let config = oxibrain::BrainConfig::at(dir.path());
 
@@ -104,12 +131,23 @@ async fn run_fast() -> anyhow::Result<()> {
         llm.respond_to(
             &fixture.content[..20.min(fixture.content.len())],
             LlmResponse {
-                text: fixture.canned_response.into(),
+                text: if let Some(replay) = &replay {
+                    replay["fixtures"][ordinal]["raw_response"]
+                        .as_str()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("replay is missing fixture {ordinal} raw_response")
+                        })?
+                        .to_string()
+                } else {
+                    fixture.canned_response.into()
+                },
                 raw: serde_json::Value::Null,
             },
         );
 
-        let brain = Brain::with_llm(config, clock, llm).await?;
+        let port: std::sync::Arc<dyn oxibrain_ports::LlmPort> =
+            provider.as_ref().map(|p| p.port.clone()).unwrap_or(llm);
+        let brain = Brain::with_llm(config.clone(), clock, port).await?;
         let space = brain.ensure_space("eval").await?;
 
         let ep_id = brain
@@ -126,7 +164,7 @@ async fn run_fast() -> anyhow::Result<()> {
 
         let summary = brain.extract_one(&space, &ep_id, &extractor).await?;
 
-        if summary.extracted == 0 {
+        if !live && replay.is_none() && summary.extracted == 0 {
             anyhow::bail!("fixture extracted 0 claims: {}", fixture.content);
         }
 
@@ -135,6 +173,11 @@ async fn run_fast() -> anyhow::Result<()> {
         for t in &extracted {
             all_entity_surfaces.push(t.subject_surface.clone());
             all_entity_surfaces.push(t.object_surface.clone());
+        }
+        if live {
+            let conn = oxibrain_store::Store::open_read_only(&config.dir)?;
+            let raw:String=conn.query_row("SELECT raw_response FROM extractions WHERE episode_id=?1 UNION ALL SELECT raw_response FROM extraction_failures WHERE episode_id=?1 LIMIT 1",[&ep_id],|r|r.get(0))?;
+            captures.push(serde_json::json!({"source":fixture.content,"raw_response":raw,"expected":fixture.expected_triples,"extracted":extracted}));
         }
         all_extracted.extend(extracted);
         all_expected.extend(fixture.expected_triples.clone());
@@ -152,6 +195,24 @@ async fn run_fast() -> anyhow::Result<()> {
     let global_rate = measure_fabrication_rate(&all_entity_surfaces, &combined_source);
 
     let metrics = compute_metrics_with_fabrication(&all_extracted, &all_expected, global_rate);
+    if live {
+        let config: serde_json::Value = serde_json::from_slice(&std::fs::read(
+            std::env::var_os("OXIBRAIN_EVAL_CONFIG")
+                .ok_or_else(|| anyhow::anyhow!("missing evaluation config"))?,
+        )?)?;
+        let path = std::path::PathBuf::from(
+            config["output"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("evaluation output must be a path"))?,
+        )
+        .with_extension("extraction.json");
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(
+                &serde_json::json!({"schema":"extraction-eval/1","extractor":extractor,"metrics":metrics,"fixtures":captures}),
+            )?,
+        )?;
+    }
     println!();
     println!(
         "Fabricated entity rate: {:.3}  (gate: 0.000)",
@@ -178,7 +239,7 @@ async fn run_fast() -> anyhow::Result<()> {
         Err(e) => {
             println!();
             println!("❌ Quality gates failed: {e}");
-            std::process::exit(1);
+            anyhow::bail!("quality gates failed: {e}");
         }
     }
 }

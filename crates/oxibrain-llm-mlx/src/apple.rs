@@ -240,8 +240,17 @@ impl TokenizerPort for LocalMxlLlm {
     fn count(&self, text: &str) -> usize {
         self.tokenizer
             .encode(text, false)
-            .map(|e| e.get_ids().len().max(1))
-            .unwrap_or(1)
+            .map(|e| e.len())
+            .unwrap_or(usize::MAX)
+    }
+    fn count_exact(&self, text: &str) -> Result<Option<usize>, BrainError> {
+        self.tokenizer
+            .encode(text, false)
+            .map(|e| Some(e.len()))
+            .map_err(|e| BrainError::TokenizerUnavailable(e.to_string()))
+    }
+    fn quality(&self) -> oxibrain_ports::tokenizer::TokenizerQuality {
+        oxibrain_ports::tokenizer::TokenizerQuality::Exact
     }
 
     fn truncate_to(&self, text: &str, max_tokens: usize) -> String {

@@ -60,6 +60,12 @@ fn recall_schema() -> Value {
             "query": { "type": "string", "description": "What information to assemble." },
             "space": { "type": "string", "description": "Space name (required; enumerate with oxibrain describe)." },
             "token_budget": { "type": "integer", "minimum": 1, "description": "Maximum tokens for the assembled context (default: 3000)." },
+            "planes": { "type": "array", "items": { "type": "string", "enum": ["memory", "documents"] }, "description": "Requested planes; defaults to both." },
+            "as_of": { "type": "integer", "description": "Valid-time cutoff; memory plane only." },
+            "known_at": { "type": "integer", "description": "Transaction-time cutoff; memory plane only." },
+            "min_confidence": {"type":"number","minimum":0,"maximum":1,"description":"Minimum folded belief confidence; memory plane only."},
+            "require_exact_tokens": { "type": "boolean", "description": "Fail unless an exact tokenizer is configured." },
+            "explain": { "type": "boolean", "description": "Include a bounded per-unit decision trace." },
             "session_id": { "type": "string", "description": "The caller's current session id. Prior-session summaries are included in the SessionSummaries layer; this session's own summary is excluded." }
         },
         "required": ["query", "space"]
