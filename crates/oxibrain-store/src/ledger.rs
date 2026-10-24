@@ -311,6 +311,26 @@ pub fn count_orphan_sources(conn: &Connection) -> Result<i64, BrainError> {
     .map_err(sql_err)
 }
 
+/// Scope-filter the immutable row before fetching or decoding source bytes.
+/// Unknown and foreign IDs have the same absent result.
+pub fn get_episode_in_space(
+    conn: &Connection,
+    space: &str,
+    id: &str,
+) -> Result<Option<Episode>, BrainError> {
+    let permitted: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM episodes WHERE id=?1 AND space_id=?2)",
+            params![id, space],
+            |row| row.get(0),
+        )
+        .map_err(sql_err)?;
+    if !permitted {
+        return Ok(None);
+    }
+    get_episode(conn, id)
+}
+
 pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, BrainError> {
     let row = conn.query_row(
         "SELECT id, space_id, seq, content_hash, content, source_kind, source_ref,

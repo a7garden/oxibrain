@@ -152,6 +152,18 @@ impl Brain {
         self.clock.now()
     }
 
+    /// Fetch only within the caller's already authorized canonical space.
+    pub async fn get_episode_in_space(
+        &self,
+        space: &str,
+        id: &str,
+    ) -> Result<Option<Episode>, BrainError> {
+        let space = space.to_owned();
+        let id = id.to_owned();
+        self.read(move |conn| ledger::get_episode_in_space(conn, &space, &id))
+            .await
+    }
+
     pub async fn get_episode(&self, id: &str) -> Result<Option<Episode>, BrainError> {
         let id = id.to_string();
         self.read(move |conn| ledger::get_episode(conn, &id)).await

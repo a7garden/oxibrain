@@ -1855,7 +1855,7 @@ impl BrainServer {
                 let episode_id = path.trim_start_matches('/');
                 let episode = self
                     .brain
-                    .get_episode(episode_id)
+                    .get_episode_in_space(&space_id, episode_id)
                     .await
                     .map_err(|e| (INTERNAL_ERROR, format!("get_episode: {e}")))?;
                 match episode {
