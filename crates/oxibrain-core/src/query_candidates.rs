@@ -44,7 +44,7 @@ impl RawSourceTermPlan {
             let complete_prefix_end = bounded_query
                 .char_indices()
                 .filter_map(|(start, ch)| ch.is_whitespace().then_some(start + ch.len_utf8()))
-                .last()
+                .next_back()
                 .unwrap_or(0);
             bounded_query.truncate(complete_prefix_end);
         }
