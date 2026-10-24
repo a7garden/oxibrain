@@ -1859,9 +1859,11 @@ impl BrainServer {
                     .await
                     .map_err(|e| (INTERNAL_ERROR, format!("get_episode: {e}")))?;
                 match episode {
-                    Some(ep) => serde_json::to_string_pretty(&ep).unwrap_or_default(),
-                    None => {
-                        return Err((INVALID_PARAMS, format!("episode not found: {episode_id}")));
+                    Some(ep) if ep.space == space_id => {
+                        serde_json::to_string_pretty(&ep).unwrap_or_default()
+                    }
+                    _ => {
+                        return Err((INVALID_PARAMS, "episode unavailable".into()));
                     }
                 }
             }
@@ -5863,6 +5865,75 @@ mod tests {
             .unwrap();
         assert!(resp["error"].is_object(), "expected denial, got: {resp}");
         drop(dir);
+    }
+
+    #[tokio::test]
+    async fn gated_episode_resource_binds_known_id_to_the_authorized_space() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Arc::new(Brain::open(BrainConfig::at(dir.path())).await.unwrap());
+        let private = brain.ensure_space("private-origin").await.unwrap();
+        let shared = brain.ensure_space("shared-destination").await.unwrap();
+        let primary = brain
+            .ingest_note(
+                &private,
+                "private-origin-locator.md",
+                "PRIVATE_ORIGIN_SOURCE_BYTES".into(),
+                Timestamp(1),
+            )
+            .await
+            .unwrap();
+        let trusted = BrainServer::from_arc(brain.clone());
+        let (declaration, _) = declare_alice(&trusted, "private-origin").await;
+        let (authorized, _) = declare_alice(&trusted, "shared-destination").await;
+        let scope = Scope {
+            spaces: vec![shared],
+            caps: [Capability::Read].into_iter().collect(),
+            ..Default::default()
+        };
+        let (_, secret) = brain
+            .issue_token(&scope, "fixture-owner", None)
+            .await
+            .unwrap();
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let (server_read, server_write) = tokio::io::split(server);
+        let task =
+            tokio::spawn(async move { run_session_gated(brain, server_read, server_write).await });
+        let (read, mut write) = tokio::io::split(client);
+        let mut read = tokio::io::BufReader::new(read);
+        let auth = exchange_authenticated_session(
+            &mut write,
+            &mut read,
+            json!({"jsonrpc":"2.0","id":1,"method":"auth","params":{"token":secret}}),
+        )
+        .await;
+        assert_eq!(auth["result"]["authenticated"], true);
+        for (n, id) in [primary, declaration, "missing-episode".into()]
+            .into_iter()
+            .enumerate()
+        {
+            let response = exchange_authenticated_session(&mut write, &mut read, json!({"jsonrpc":"2.0","id":n+2,"method":"resources/read","params":{"uri":format!("episode://{id}?space=shared-destination")}})).await;
+            assert_eq!(response["error"]["code"], INVALID_PARAMS);
+            assert_eq!(response["error"]["message"], "episode unavailable");
+            let output = serde_json::to_string(&response).unwrap();
+            for hidden in [
+                "PRIVATE_ORIGIN_SOURCE_BYTES",
+                "private-origin-locator",
+                "private-origin",
+                "Alice",
+            ] {
+                assert!(!output.contains(hidden), "{output}");
+            }
+        }
+        let allowed = exchange_authenticated_session(&mut write, &mut read, json!({"jsonrpc":"2.0","id":10,"method":"resources/read","params":{"uri":format!("episode://{authorized}?space=shared-destination")}})).await;
+        assert!(
+            allowed["result"]["contents"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains(&authorized)
+        );
+        drop(write);
+        drop(read);
+        task.await.unwrap().unwrap();
     }
 
     #[tokio::test]
