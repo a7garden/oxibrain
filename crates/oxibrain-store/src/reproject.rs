@@ -26,6 +26,8 @@ pub fn reproject(conn: &Connection) -> Result<ReprojectReport, BrainError> {
     // then assertions (FK to statements), then statements,
     // then entity_merges, entity_keys, entities.
     for table in [
+        "publication_views",
+        "publication_source_observations",
         "beliefs",
         "mentions",
         "assertions",

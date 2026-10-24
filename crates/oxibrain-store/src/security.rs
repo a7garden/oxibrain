@@ -251,6 +251,26 @@ pub fn redaction_recorded(conn: &Connection, target_json: &str) -> Result<bool, 
     Ok(n > 0)
 }
 
+/// Current non-secret identity for an authenticated operation. The credential
+/// remains at the facade boundary and is never copied into ledger content.
+pub fn verify_token_identity(
+    conn: &Connection,
+    secret: &str,
+    now: Timestamp,
+) -> Result<Option<(String, Scope)>, BrainError> {
+    let Some(scope) = verify_token(conn, secret, now)? else {
+        return Ok(None);
+    };
+    let id: String = conn
+        .query_row(
+            "SELECT id FROM tokens WHERE token_hash=?1",
+            [hash_secret(secret)],
+            |row| row.get(0),
+        )
+        .map_err(sql_err)?;
+    Ok(Some((id, scope)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -22,6 +22,7 @@ pub mod reproject;
 pub mod serve;
 pub mod skill;
 pub mod source_policy;
+pub mod source_view;
 pub mod space_add;
 pub mod space_remove;
 pub mod spaces;

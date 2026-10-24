@@ -92,6 +92,30 @@ async fn main() -> anyhow::Result<()> {
                 }
             },
             AdminCmd::Source { command } => match command {
+                cli::SourceCmd::View { command } => {
+                    let (operation, origin, destination) = match &command {
+                        cli::SourceViewCmd::Publish {
+                            origin_token_env,
+                            destination_token_env,
+                        } => (
+                            "publish",
+                            Some(origin_token_env.as_str()),
+                            Some(destination_token_env.as_str()),
+                        ),
+                        cli::SourceViewCmd::Read {
+                            destination_token_env,
+                        } => ("read", None, Some(destination_token_env.as_str())),
+                        cli::SourceViewCmd::Withdraw {
+                            destination_token_env,
+                        } => ("withdraw", None, Some(destination_token_env.as_str())),
+                        cli::SourceViewCmd::Retract { origin_token_env } => {
+                            ("retract", Some(origin_token_env.as_str()), None)
+                        }
+                    };
+                    std::process::exit(
+                        cmd::source_view::run(&dir, operation, origin, destination).await,
+                    );
+                }
                 cli::SourceCmd::Policy {
                     name,
                     trust,

@@ -28,7 +28,7 @@ pub fn resolve_closure(
     conn: &Connection,
     target: &RedactTarget,
 ) -> Result<RedactionClosure, BrainError> {
-    match target {
+    let mut closure = match target {
         RedactTarget::Episode { id } => resolve_episode_closure(conn, id),
         RedactTarget::Entity { space, entity_id } => {
             resolve_entity_closure(conn, space, entity_id, None)
@@ -39,7 +39,29 @@ pub fn resolve_closure(
             predicate,
         } => resolve_entity_closure(conn, space, entity_id, Some(predicate)),
         RedactTarget::Space { id } => resolve_space_closure(conn, id),
+    }?;
+    let mut dependencies = closure.episodes.clone();
+    for assertion in &closure.assertions {
+        dependencies.extend(query_strings(
+            conn,
+            "SELECT episode_id FROM assertions WHERE id=?1",
+            &[assertion],
+        )?);
     }
+    let spaces = match target {
+        RedactTarget::Space { id } => vec![id.clone()],
+        _ => vec![],
+    };
+    closure
+        .episodes
+        .extend(crate::publication::redaction_declarations(
+            conn,
+            &dependencies,
+            &spaces,
+        )?);
+    closure.episodes.sort();
+    closure.episodes.dedup();
+    Ok(closure)
 }
 
 fn resolve_episode_closure(
@@ -315,6 +337,13 @@ fn execute_space_redaction(
     )
     .map_err(sql_err)?;
 
+    // Published copies can live in another space's origin Declaration.
+    // Erase those copies before removing this space's own ledger rows.
+    for episode in &closure.episodes {
+        conn.execute("UPDATE episodes SET content='[redacted]',content_compacted=NULL,redacted_at=?1 WHERE id=?2 AND space_id!=?3 AND redacted_at IS NULL", params![now.millis(),episode,space_id]).map_err(sql_err)?;
+    }
+    crate::publication::remove_redacted_copies(conn, &closure.episodes)?;
+
     // 3. Teardown in FK-safe order. Cache/derived tables first (no FKs into
     //    truth tables), then truth half (children before parents).
     //    `fts_word` / `fts_ngram` are contentless (v13): deletes go
@@ -406,11 +435,12 @@ pub fn execute_redaction(
     // 4. Tombstone episode content and extractions (episode-scoped only).
     for ep_id in &closure.episodes {
         conn.execute(
-            "UPDATE episodes SET content = '[redacted]', redacted_at = ?1 WHERE id = ?2 AND redacted_at IS NULL",
+            "UPDATE episodes SET content = '[redacted]', content_compacted = NULL, redacted_at = ?1 WHERE id = ?2 AND redacted_at IS NULL",
             params![now.millis(), ep_id],
         )
         .map_err(sql_err)?;
     }
+    crate::publication::remove_redacted_copies(conn, &closure.episodes)?;
     for ep_id in &closure.extractions {
         conn.execute(
             "UPDATE extractions SET raw_response = '[redacted]' WHERE episode_id = ?1",
