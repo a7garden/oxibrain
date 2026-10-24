@@ -160,17 +160,18 @@ fn render(
     }
 }
 
+/// Full-framing compatibility helper. Normal reads use the versioned policy
+/// through `pack_evidence_with_policy`, whose default is compact rendering.
 pub fn pack_evidence(
     units: &[EvidenceUnit],
     budget: usize,
     tok: &dyn TokenizerPort,
 ) -> EvidenceResult {
-    pack_evidence_with_policy(
-        units,
-        budget,
-        tok,
-        &crate::read_scope::ReadPolicy::default(),
-    )
+    let legacy_policy = crate::read_scope::ReadPolicy {
+        compact_evidence: false,
+        ..crate::read_scope::ReadPolicy::default()
+    };
+    pack_evidence_with_policy(units, budget, tok, &legacy_policy)
 }
 
 pub fn pack_evidence_with_policy(

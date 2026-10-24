@@ -541,7 +541,7 @@ pub async fn run(live: bool) -> anyhow::Result<()> {
                         };
                         let valid = result.reply.is_some();
                         let metric = json!({"arm":arm,"protocol":super::reference_reader::VERSION,"expected_action":expected,"action_correct":valid&&action==Some(expected),"required_phrase_diagnostic":phrasing,"contract_valid":valid,"citation_containment":!cited.is_empty()&&cited.iter().all(|c|support_fraction(std::slice::from_ref(c),available)==1.0),"retrieval_full_support":(!gold.is_empty()).then_some(support_fraction(&gold,available)==1.0),"no_evidence_abstention":arm=="no_evidence"&&valid&&abstain,"appropriate_abstention":(case.abstain||available.is_empty())&&valid&&abstain,"malformed":result.response.as_ref().is_some_and(|r|serde_json::from_str::<Value>(&r.text).is_err()),"delivery_error":result.error,"latency_ms":result.latency_ms});
-                        captures.push(json!({"case":case.id,"budget":budget,"arm":arm,"packet":packet,"request":result.request,"response":result.response,"validated_reply":result.reply,"metrics":metric}));
+                        captures.push(json!({"case":case.id,"budget":budget,"arm":arm,"packet":packet,"request":result.request,"response":result.response,"validated_reply":result.reply,"attempts":result.attempts,"metrics":metric}));
                         reader.push(metric);
                         continue;
                     }

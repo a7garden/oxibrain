@@ -1,5 +1,10 @@
 # oxibrain — Architecture
-> **Version:** v2.28 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.29 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.29 — Compact read default.** `read-policy/4` uses `context_render/2`
+> response-scoped labels by default, with complete provenance, uncertainty,
+> source/text coordinates and omissions in the same response. Explicit
+> `compact_evidence:false` and the legacy `pack_evidence()` helper preserve full
+> context framing. This changes only evidence rendering/packing, never the fold.
 > **v2.28 — Source granularity and family fusion.** Raw sources prefer complete
 > paragraph/line boundaries with UTF-8 windows for oversized lines. Schema 17
 > discards only derived raw chunks, indexes, vectors and cursors so explicit

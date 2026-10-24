@@ -1,6 +1,6 @@
 # Post-M12 source recall
 
-Date: 2026-10-24. Architecture v2.26 / ADR-020.
+Date: 2026-10-24. Architecture v2.29 / ADR-020 and ADR-021.
 
 ## Read and index behavior
 
@@ -19,7 +19,11 @@ weights does not reuse vectors just because dimensions match.
 
 Memory schema 16 adds `memory_source_vectors`: chunk identity, revision, window
 policy, model binding, dimension and little-endian float32 bytes. This projection
-is disposable. Source windows refer to immutable ledger text, including readable
+is disposable. Schema 17 invalidates old raw source chunks, their lexical/vector
+indexes and raw-index cursors for an explicit ledger-based rebuild under
+`source-paragraph-window/2`. Complete paragraphs/lines are preferred, with
+UTF-8-safe overlapping windows for oversized lines. These boundaries preserve
+bytes rather than proving semantic completeness. Source windows refer to immutable ledger text, including readable
 compacted bytes. Delete/redact/rebuild cascades invalidate vectors. Upserts check
 source revision/liveness after inference. Reprojection with an embedder rebuilds
 vectors; without one it leaves an observable pending index.
@@ -32,6 +36,10 @@ never claims the exact number of unseen relevant matches.
 
 Document recall uses the hybrid channel when source semantics are enabled.
 Lexical source channels remain independent and receive their own candidates.
+Raw word/n-gram query expansions first fuse into one lexical ranking. That
+ranking and dense full-question candidates receive equal family RRF weights;
+the candidate cap applies only after this final fusion. Distinct terms are
+deduplicated before the query-term limit, with plan counts in receipts.
 `ReadPolicy.semantic_sources=false` supplies the lexical control. This policy is
 an adapter-composition choice, never a truth-confidence setting.
 
@@ -49,7 +57,8 @@ an adapter-composition choice, never a truth-confidence setting.
 Unknown counts are null, not zero. `dense_configured` remains a compatibility
 capability flag; consumers use channel receipts for actual execution. An
 incomplete configured semantic index or failed adapter makes execution partial.
-The response never infers answerability from retrieval success.
+Reaching a return limit conservatively marks coverage partial as well. The
+response never infers answerability from retrieval success.
 
 ## Complete truth groups
 
@@ -70,12 +79,19 @@ measured explicitly; no unmeasured cache or sublinear latency claim is made.
 
 ## Exact packing
 
+`read-policy/4` defaults to compact response labels with a complete out-of-band
+source/uncertainty/omission map. Explicit `compact_evidence:false` and the legacy
+`pack_evidence()` convenience function preserve full text framing.
+
 Keep the accepted rendered context/count between attempts. Reuse token counts
 for unchanged layers. A single-layer canonical context is the identical string,
 so its count can be reused; multiple layers require counting the final joined
 string. Per-unit token counts are never summed. The frozen reference packer is
 test-only and checks byte-equivalent context, citations and decisions while
-measuring actual tokenizer calls/bytes.
+measuring actual tokenizer calls/bytes on the original non-overlap fixtures.
+The corrected packer intentionally differs for partial overlaps: only a fully
+contained range with the same complete source identity is suppressed; unique
+tails and supersets remain eligible and pay their actual token cost.
 
 ## Evaluation
 

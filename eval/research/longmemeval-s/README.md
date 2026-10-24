@@ -1,17 +1,18 @@
 # LongMemEval-S release recall run
 
-This is an ignored, opt-in integration benchmark for two pinned 20-case subsets
+This is an ignored, opt-in integration benchmark for three pinned 20-case subsets
 of LongMemEval-S. The checked-in files are the upstream MIT license, subset
 freezers, and manifests. The 10 MB `input.jsonl` and evaluator-only `gold.jsonl`
 stay outside the repository.
 
 Each frozen manifest pins upstream revision
 `98d7416c24c778c2fee6e6f3006e7a073259d48f`, the 500-row source-file hash, the
-selected cases, the freezer, both JSONL hashes, and the verbatim license. Both
-profiles contain 20 cases, with 12 answerable cases and 8 abstention annotations.
-The v1 profile has 943 full-history sessions; v2 has 980. The 40% abstention
-rate describes each selected profile, not the 500 source rows. The runner defaults
-to v1; select v2 explicitly with `OXIBRAIN_LONGMEMEVAL_SUBSET=v2`.
+selected cases, the freezer, both JSONL hashes, and the verbatim license. Each
+profile contains 20 cases, with 12 answerable cases and 8 abstention annotations.
+The v1 profile has 943 full-history sessions, v2 has 980, and v3 has 931. The
+40% abstention rate describes each selected profile, not the 500 source rows.
+The runner defaults to v1; select another profile explicitly with
+`OXIBRAIN_LONGMEMEVAL_SUBSET=v2` or `v3`.
 
 Each case gets a fresh temporary SQLite store. Every complete history session is
 recorded as one untrusted session episode with its original session ID/date and
@@ -76,6 +77,24 @@ Use the v2 directory for `OXIBRAIN_LONGMEMEVAL_DIR` and explicitly set
 full-history sessions; the runner verifies its distinct manifest, input, gold,
 and freezer hashes and exact manifest paths before indexing.
 
+## Reproduce v3
+
+The v3 freezer writes the raw input and gold to
+`/tmp/oxibrain-longmemeval-s-public-v3` and keeps the manifest beside the
+script. Copy the metadata to the same external data directory after generation:
+
+```sh
+mkdir -p /tmp/oxibrain-longmemeval-v3-freezer /tmp/oxibrain-longmemeval-s-public-v3
+cp eval/research/longmemeval-s/v3/freeze_subset.py /tmp/oxibrain-longmemeval-v3-freezer/
+python3 /tmp/oxibrain-longmemeval-v3-freezer/freeze_subset.py
+cp /tmp/oxibrain-longmemeval-v3-freezer/{manifest.json,LICENSE.txt,freeze_subset.py} \
+  /tmp/oxibrain-longmemeval-s-public-v3/
+```
+
+The v3 profile pins 20 cases and 931 full-history sessions, with distinct
+manifest, input, gold, and freezer hashes. Set `OXIBRAIN_LONGMEMEVAL_SUBSET=v3`
+and point `OXIBRAIN_LONGMEMEVAL_DIR` at the v3 directory to select it.
+
 ## Run default retrieval (v1)
 
 Provide explicit paths to the existing local BGE GGUF and exact tokenizer JSON.
@@ -96,16 +115,20 @@ export OXIBRAIN_LONGMEMEVAL_OUTPUT=/tmp/oxibrain-longmemeval-default.json
 cargo test -p oxibrain-cli --test external_recall -- --ignored --exact longmemeval_release_runner
 ```
 
-To run v2, set `OXIBRAIN_LONGMEMEVAL_SUBSET=v2`, point the dataset directory to
-`/tmp/oxibrain-longmemeval-s-public-v2`, and choose a fresh output file, for
-example `/tmp/oxibrain-longmemeval-v2-default.json`. The runner rejects unknown
-profile names and will not infer a profile from the directory contents.
+To run v2, set `OXIBRAIN_LONGMEMEVAL_SUBSET=v2` and point the dataset directory
+to `/tmp/oxibrain-longmemeval-s-public-v2`. To run v3, set
+`OXIBRAIN_LONGMEMEVAL_SUBSET=v3` and point it to
+`/tmp/oxibrain-longmemeval-s-public-v3`. Use a fresh output file for each run.
+The runner rejects unknown profile names and will not infer a profile from the
+directory contents.
 
 To evaluate compact rendering separately, set
 `OXIBRAIN_LONGMEMEVAL_RENDER_MODE=compact` and choose a different output path.
-This only opts into compact response rendering; the report includes the complete
-evidence coordinate map for every selected citation. Unset the variable or set
-it to `default` for the production default policy. Run it as a separate report:
+This explicitly opts into compact response rendering; the report includes the
+complete evidence coordinate map for every selected citation. Unset the variable
+or set it to `default` to use the production `ReadPolicy::default()` from the
+tested binary. Set it to `full` to explicitly disable compact rendering. Keep
+each mode in a separate report:
 
 ```sh
 export OXIBRAIN_LONGMEMEVAL_RENDER_MODE=compact

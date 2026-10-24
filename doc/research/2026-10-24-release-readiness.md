@@ -158,3 +158,75 @@ unchanged. Schema 17 clears only derived raw chunks, FTS/vector rows and index
 cursors so explicit indexing rebuilds them from the ledger. The migration has
 a v16 up-test for truth preservation and cache invalidation. This does not
 recognize benchmark turn markers or add language-specific parsing.
+
+## Validation after the second candidate
+
+The final all-feature workspace run passed 1,141 tests with 11 explicit ignored
+model/scale/external tests. Targeted native testing separately loaded the pinned
+Qwen GGUF and confirmed an over-context prompt returns a typed error before
+context creation/decode. Six pure generation-capacity boundary tests passed.
+The new paragraph-window property test found a tiny UTF-8 boundary regression
+(`A0aਵ`, byte limit 2, overlap 1); the generic window helper now skips ranges
+that add no coverage, and the deterministic regression/property tests pass.
+
+Rust 1.96 all-target/all-feature checking passed on Apple ARM64 after selecting
+`/bin/bash` for native CMake helper commands; the earlier Homebrew Bash helper
+processes had stalled and were stopped. The independent Linux MSRV job and all
+CI jobs passed at `631e931`. The standalone HTTP-only build and a genuinely
+fresh consumer dependency lockfile also passed.
+
+A verified schema-15 backup was restored into an isolated temporary store,
+migrated to schema 17, and explicitly reindexed. All nine ledger/truth tables
+were compared as complete sorted row values and remained identical; SQLite
+integrity passed. Private store contents, row counts and digests are not part of
+this public report. The production store has not yet been opened by the new
+binary at this checkpoint.
+
+The revised `evidence-reader/3` with the pinned 4B GGUF validates 14/20 retrieved
+replies and 15/20 gold replies; all 20 no-evidence controls abstain validly.
+There were 160 actual calls, but all 80 paired 2k/3k requests were byte-identical;
+the budgets are not independent evidence or extra distinct cases. An independent
+AI reviewer, without expected answer/action labels, judged 10/20 retrieved and
+11/20 gold replies adequate and valid. Six/five replies failed delivery, and
+four valid replies per arm were inadequate. Material errors include unsupported
+entity joins, cross-project claims and omission of a mandatory prerequisite or
+health-check condition. This does not qualify the 4B reader as a reliable
+automatic-answer tier. The engine still reports answerability as not evaluated;
+the reference reader is an evaluation client, not a truth-producing engine path.
+
+An additional exploratory run uses the already-running local Dyno loopback
+service reporting `mlx-community/Qwen3.6-35B-A3B-4bit`. The API does not expose
+its serving-weight digest, so this run cannot claim a cryptographically pinned
+reader artifact or transfer quality to the default GGUF. No new weights or paid
+provider were requested. The external v2 retrieval run retains its frozen
+candidate commit/binary and evaluator-only gold; both experiments are pending.
+
+## External v2 result
+
+The frozen second candidate completed the disjoint v2 input-only retrieval run.
+At 3,000 exact tokens it retrieved all answer sessions in 12/12 answerable cases
+and covered 9,224/9,932 annotated answer-turn bytes (92.87%). Complete answer
+turns were 21/24 (87.5%), so the 90% whole-turn target was not met. The initial
+byte-only acceptance claim was corrected before release. At 2,000 tokens, 11/12 answerable
+cases had all answer sessions and coverage was 8,043/9,932 bytes (80.98%). Complete turns were 17/24 (70.83%) at 2,000 tokens; the smaller budget
+also does not meet the target. Neither number is answer correctness
+or abstention behavior; no reader was used in this external retrieval run.
+The different v1/v2 cases prohibit a causal 52.14% → 92.87% improvement claim.
+
+The source candidate is commit `631e931a83bd24051b892fdaa8c2a40a0dfe78da`;
+the frozen integration executable SHA-256 is
+`3b9d757bd8f4bdd255c68088adc9446d09ad7ae560a8e4561191fa33bd3fe76c`.
+Its binary, model, tokenizer, policy and dataset pins are in
+`eval/research/longmemeval-s/results/v2-candidate2-freeze.json`; complete
+coordinate/receipt measurements are in `v2-candidate2-default.json`. The root
+read only aggregate scores after all requests and evaluator gold loading
+completed. The subsequent candidate changes the compact-render default; it is evaluated
+on a newly frozen, disjoint v3 subset rather than relabelling this v2 result.
+
+Preparation deviations remain explicit: an unavailable system-Python helper
+prevented initial freeze-file writing, then the first runner launch failed on a
+missing external manifest before input parsing/model load. Already pinned
+metadata was copied beside the unchanged input/gold, and the freeze file was
+written before the actual retrieval run. Neither failure exposed scores or
+changed candidate policy. Other CPU checks and a separate local-reader run
+overlapped, so elapsed times are descriptive rather than isolated benchmarks.

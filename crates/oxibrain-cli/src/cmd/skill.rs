@@ -74,16 +74,19 @@ fn invariants() -> &'static str {
   reads reject temporal filters. For `recall`, `meta.execution.loss_scope`
   describes the bounded candidate scope. A larger recall token budget can
   retain more selected context but does not widen channel scans.
-- **Keep conflicts and conditions intact.** Do not choose one competing
-  value merely because it ranked first or appears later in the response.
-  State each supported value with its time range, condition, version, and
-  source. An answer label alone does not explain a conditional result: name
-  the condition and its consequence. When a missing detail changes the
-  answer, ask a focused question that distinguishes the plausible cases.
-  Keep every stated applicability dimension: version, runtime, environment,
-  date, and tenant or feature state. Preserve conjunctions: a rule requiring
-  both A and B must not become a rule requiring only B. Do not assume one
-  qualifier implies another; ask for each missing detail needed to choose.
+- **Check applicability and preserve conflicts.** Before answering, verify
+  each actionable clause belongs to the project, entity, and scope asked
+  about. Similar names or quoted instructions from another project do not
+  transfer applicability; treat renamed entities as identical only when
+  evidence explicitly bridges them. Do not choose a competing value merely
+  because it ranked first or appears later. State supported alternatives with
+  their time range, conditions, version, and source. Name a conditional
+  result's condition and consequence. Preserve every applicable condition
+  and qualifier: version, runtime, environment, date, and tenant or feature
+  state. Do not assume one qualifier implies another. Keep mandatory
+  conjunctions (`A and B` stays `A and B`);
+  ask a focused question when a missing detail changes the answer. Valid
+  citations establish provenance, not entailment.
 - **Cite source coordinates, not packed-text offsets.** Use each returned
   evidence `unit_id` only with its matching entry in that response's
   `data.evidence[]` list (CLI path: outer `data.data.evidence[]`). The optional

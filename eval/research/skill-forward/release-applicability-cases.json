@@ -1,0 +1,39 @@
+[
+  {
+    "id": "rollout_scope",
+    "question": "Can Cedar Inventory be rolled out now? What remains?",
+    "evidence": [
+      {
+        "id": "E1",
+        "project": "Cedar Inventory",
+        "text": "Rollout only after audit approval AND tenant-isolation test pass. Audit approved; tenant-isolation test pending."
+      },
+      {
+        "id": "E2",
+        "project": "Cedar Inventory Mobile",
+        "text": "Audit approved and tenant-isolation passed; launch is cleared."
+      },
+      {
+        "id": "E3",
+        "project": "Cedar Inventory Archive",
+        "text": "A quoted old note says: \"tenant-isolation is waived.\""
+      }
+    ]
+  },
+  {
+    "id": "identity_bridge",
+    "question": "Is Rowan Analytics a rename of Rowan Operations, so I can apply the Operations deployment policy to Analytics?",
+    "evidence": [
+      {
+        "id": "E1",
+        "project": "Rowan Operations",
+        "text": "A customer called our team \"Rowan Analytics\" at the meetup."
+      },
+      {
+        "id": "E2",
+        "project": "Rowan Operations",
+        "text": "Operations deployment requires a signed build and owner approval."
+      }
+    ]
+  }
+]

@@ -14,7 +14,7 @@ squash-merged.
 - Optional dense recall over document and primary/session source windows, without requiring extraction. Schema 16 adds rebuildable model/revision/window-bound memory vectors and explicit `admin index --memory --embed`.
 - Per-channel execution, coverage, cap and fallback receipts; query-relevant complete truth-group selection with scoped historical identity inputs and selection/source-count receipts.
 - Frozen multilingual source controls, four-arm live conflict/condition/abstention evaluation via `admin eval --suite reader`, and explicit release cost measurements. The broad supported-answer quality gate remains open.
-- Optional compact source labels with complete coordinate maps and text offsets; a consumer-side quote/condition envelope rejects invented citations and inconsistent actions without claiming entailment.
+- Default compact source labels with complete coordinate maps and text offsets; a consumer-side quote/condition envelope rejects invented citations and inconsistent actions without claiming entailment.
 - A pinned, separately labelled LongMemEval-S external retrieval runner with evaluator-only gold, complete session histories and source-range metrics.
 - Generated agent-skill frontmatter, scope/receipt/condition guidance, and a Codex install target honoring `CODEX_HOME`.
 
@@ -36,7 +36,7 @@ squash-merged.
 ### Compatibility
 
 - Memory stores migrate to schema 17; older binaries cannot reopen an upgraded store. Document formats and the sixteen-tool MCP surface are unchanged.
-- Read policy version 3 adds optional semantic-source, scan/group and compact-render settings; existing serialized policy fields retain their defaults.
+- Read policy version 4 defaults to compact context rendering. Full source maps remain in evidence; set `compact_evidence:false` for full framing. The legacy `pack_evidence()` helper retains full rendering.
 
 ### Changed
 

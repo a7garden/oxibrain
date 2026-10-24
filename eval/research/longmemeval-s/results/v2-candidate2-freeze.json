@@ -1,0 +1,39 @@
+{
+  "schema": "external-recall-candidate-freeze/1",
+  "candidate_commit": "631e931a83bd24051b892fdaa8c2a40a0dfe78da",
+  "binary_sha256": "3b9d757bd8f4bdd255c68088adc9446d09ad7ae560a8e4561191fa33bd3fe76c",
+  "binary_features": [
+    "default"
+  ],
+  "dataset_profile": "v2",
+  "input_sha256": "2ed7811b885afaaf04752248c8e3a9a7a4823f6eefb971ab67ab37cc085345a3",
+  "gold_sha256": "d4fac57d5b98ab672e05e5ebfbf789e110e4cc480ce031135463fb7160c124d3",
+  "embedder_blake3": "b7f56ba6ceb9fce993f0b1ea2810257ecceb23b5fa2e9787ed679c8174f96ec4",
+  "tokenizer_blake3": "b0cb923fc505fdf0a53f0287654fa26577d3f333d4134350da0a97664b228739",
+  "budgets": [
+    2000,
+    3000
+  ],
+  "read_policy": {
+    "candidate_cap": 256,
+    "channel_depth": 64,
+    "compact_evidence": false,
+    "dense_scan_vectors": 16384,
+    "explanation_bytes": 16384,
+    "materialization_bytes": 8388608,
+    "metadata_bytes": 65536,
+    "profile_tokens": 300,
+    "query_terms": 32,
+    "recency_tokens": 200,
+    "reconcile_entries": 4096,
+    "semantic_sources": true,
+    "truth_bytes": 8388608,
+    "truth_group_cap": 256
+  },
+  "source_window_policy": "source-paragraph-window/2",
+  "fusion": "fuse_query_source_families; lexical and dense final equal-family RRF",
+  "reader": "not run",
+  "timing_note": "Other CPU builds/tests may overlap; timings are descriptive, not a production latency acceptance test.",
+  "gold_access": "Gold parsed only after all retrieval requests complete; root has not inspected v2 questions/answers/case labels.",
+  "metadata_preparation_note": "Initial metadata creation used an unavailable Python helper; the first runner attempt then failed reading a missing manifest before input parsing or model load. Copied the already pinned helper/license/manifest into the external input directory and wrote this freeze before the actual retrieval run. No candidate changes or scores were available."
+}

@@ -124,12 +124,13 @@ oxibrain recall --json '{"space":"personal","query":"recovery conditions","token
 ```
 
 Set `OXIBRAIN_TOKENIZER_JSON` to a local model tokenizer JSON for exact budgets.
-Optional `OXIBRAIN_READ_POLICY_JSON` points to a policy JSON; for example,
-`{"compact_evidence":true}` enables response-scoped E1/E2 citation labels.
+Default reads use compact response-scoped E1/E2 citation labels.
+`OXIBRAIN_READ_POLICY_JSON` points to an optional policy JSON; for example,
+`{"compact_evidence":false}` restores full source framing in context text.
 The complete source map remains in `data.data.evidence`: preserve its reference,
 revision, view and byte range. Rendered-context offsets are separate from source
 offsets. Both rendering modes retain explicit omissions and count their actual
-context with the configured tokenizer. Existing full rendering stays the default.
+context with the configured tokenizer. Full rendering remains available as an explicit opt-out.
 
 Memory stores upgrade to schema 17 in version 0.21.0. Keep a verified schema-15
 backup before opening an existing store; older binaries cannot reopen it after

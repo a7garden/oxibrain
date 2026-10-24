@@ -90,14 +90,14 @@ impl Default for ReadPolicy {
             profile_tokens: 300,
             recency_tokens: 200,
             semantic_sources: true,
-            compact_evidence: false,
+            compact_evidence: true,
             dense_scan_vectors: 16384,
             truth_group_cap: 256,
         }
     }
 }
 impl ReadPolicy {
-    pub const VERSION: &'static str = "read-policy/3";
+    pub const VERSION: &'static str = "read-policy/4";
     pub fn validate(&self) -> Result<(), BrainError> {
         if [
             self.channel_depth,

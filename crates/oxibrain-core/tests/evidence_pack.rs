@@ -391,6 +391,86 @@ fn compact_context_keeps_a_complete_response_scoped_source_and_uncertainty_map()
     }
 }
 
+#[test]
+fn default_compact_mode_preserves_source_binding_and_fits_the_exact_budget() {
+    let text = "Use the recovery path only if the health check fails. uncertainty: source conflict";
+    let mut u = unit(72, text.into(), LayerKind::Documents);
+    u.role = "untrusted_observation".into();
+    u.support = vec!["episode://support-a".into(), "episode://support-b".into()];
+    u.source.reference = "document://vault/operations".into();
+    u.source.revision = "revision-9".into();
+    u.source.view = "pdc-markdown/1".into();
+    u.source.view_digest = Some("view-digest".into());
+    u.source.decoder = Some("pdc-markdown/1".into());
+    u.source.start = 42;
+    u.source.end = 42 + text.len();
+    u.source.document_uuid = Some("pdc-document-uuid".into());
+
+    let policy = oxibrain_core::read_scope::ReadPolicy::default();
+    assert!(policy.compact_evidence);
+    assert_eq!(
+        oxibrain_core::read_scope::ReadPolicy::VERSION,
+        "read-policy/4"
+    );
+
+    let probe = oxibrain_core::evidence_pack::pack_evidence_with_policy(
+        &[u.clone()],
+        10_000,
+        &Framed,
+        &policy,
+    );
+    assert_eq!(probe.evidence.len(), 1);
+    let exact_budget = probe.context.total_tokens;
+    let compact = oxibrain_core::evidence_pack::pack_evidence_with_policy(
+        &[u.clone()],
+        exact_budget,
+        &Framed,
+        &policy,
+    );
+
+    assert_eq!(compact.context.total_tokens, exact_budget);
+    assert_eq!(compact.context.budget.max_tokens, exact_budget);
+    assert_eq!(compact.evidence.len(), 1);
+    let rendered = render_context(&compact.context);
+    assert!(rendered.starts_with("[E1; role=untrusted_observation; excerpt=false] "));
+    assert!(rendered.contains("uncertainty: source conflict"));
+    assert_eq!(compact.context.total_tokens, Framed.count(&rendered));
+
+    let citation = &compact.evidence[0];
+    assert_eq!(citation.citation_id, "E1");
+    assert_eq!(citation.source, u.source);
+    assert_eq!(citation.role, "untrusted_observation");
+    assert_eq!(citation.support, u.support);
+    let delivered = oxibrain_core::evidence_reader::from_result(&compact).unwrap();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].id, "E1");
+    assert_eq!(delivered[0].text, text);
+    assert_eq!(delivered[0].role, "untrusted_observation");
+    assert_eq!(delivered[0].source.as_ref(), Some(&u.source));
+
+    let full_policy = oxibrain_core::read_scope::ReadPolicy {
+        compact_evidence: false,
+        ..Default::default()
+    };
+    let full_at_compact_budget = oxibrain_core::evidence_pack::pack_evidence_with_policy(
+        &[u.clone()],
+        exact_budget,
+        &Framed,
+        &full_policy,
+    );
+    assert!(full_at_compact_budget.evidence.is_empty());
+    let full = oxibrain_core::evidence_pack::pack_evidence_with_policy(
+        &[u],
+        10_000,
+        &Framed,
+        &full_policy,
+    );
+    assert!(full.context.total_tokens > exact_budget);
+    assert!(
+        render_context(&full.context).contains("sources: episode://support-a, episode://support-b")
+    );
+}
+
 proptest! {
     #[test]
     fn compact_binding_and_whole_context_budget_remain_exact(texts in prop::collection::vec(".{1,100}",0..16),budget in 0usize..2000) {

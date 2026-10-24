@@ -63,6 +63,18 @@ const V2_PROFILE: DatasetProfile = DatasetProfile {
     manifest_gold_path: "/tmp/oxibrain-longmemeval-s-public-v2/gold.jsonl",
 };
 
+const V3_PROFILE: DatasetProfile = DatasetProfile {
+    name: "v3",
+    input_sha256: "66b0f492c3315a31dba5e6c78fe06311e09ed76f9e981406fdbfb10b6cfde06d",
+    gold_sha256: "65bc6612cd104cc7a05dbf5d02c2a773c16e53f0d71940ad6efbdc73f910b4fd",
+    manifest_sha256: "56c009f6e0ace91b2297bc9b642d75602347fcee70314330662472d79fef7322",
+    freezer_sha256: "37b06022846cce812680e9529994929d80b717fdfd32fd3afa841f29d5462f4f",
+    cases: 20,
+    full_history_sessions: 931,
+    manifest_input_path: "/tmp/oxibrain-longmemeval-s-public-v3/input.jsonl",
+    manifest_gold_path: "/tmp/oxibrain-longmemeval-s-public-v3/gold.jsonl",
+};
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputCase {
@@ -345,15 +357,7 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
 
     let render_mode =
         std::env::var("OXIBRAIN_LONGMEMEVAL_RENDER_MODE").unwrap_or_else(|_| "default".to_string());
-    ensure!(
-        render_mode == "default" || render_mode == "compact",
-        "OXIBRAIN_LONGMEMEVAL_RENDER_MODE must be default or compact"
-    );
-    let policy = ReadPolicy {
-        compact_evidence: render_mode == "compact",
-        ..ReadPolicy::default()
-    };
-    policy.validate()?;
+    let policy = read_policy_for_render_mode(&render_mode)?;
 
     let tokenizer = Arc::new(oxibrain_tokenizer_local::FileTokenizer::open(
         &tokenizer_path,
@@ -1109,10 +1113,27 @@ fn dataset_profile(choice: Option<&str>) -> anyhow::Result<&'static DatasetProfi
     match choice.unwrap_or("v1") {
         "v1" => Ok(&V1_PROFILE),
         "v2" => Ok(&V2_PROFILE),
+        "v3" => Ok(&V3_PROFILE),
         other => {
-            anyhow::bail!("unsupported OXIBRAIN_LONGMEMEVAL_SUBSET {other:?}; choose v1 or v2")
+            anyhow::bail!("unsupported OXIBRAIN_LONGMEMEVAL_SUBSET {other:?}; choose v1, v2, or v3")
         }
     }
+}
+
+fn read_policy_for_render_mode(mode: &str) -> anyhow::Result<ReadPolicy> {
+    let mut policy = ReadPolicy::default();
+    match mode {
+        // Leave the constructor's production policy intact. This deliberately
+        // follows a future default change without silently pinning old behavior.
+        "default" => {}
+        "compact" => policy.compact_evidence = true,
+        "full" => policy.compact_evidence = false,
+        other => anyhow::bail!(
+            "unsupported OXIBRAIN_LONGMEMEVAL_RENDER_MODE {other:?}; choose default, compact, or full"
+        ),
+    }
+    policy.validate()?;
+    Ok(policy)
 }
 
 fn validate_manifest(manifest: &Value, profile: &DatasetProfile) -> anyhow::Result<()> {
@@ -1243,6 +1264,7 @@ fn dataset_profiles_default_to_v1_and_keep_distinct_pins() {
     let default = dataset_profile(None).expect("default profile");
     let explicit_v1 = dataset_profile(Some("v1")).expect("v1 profile");
     let v2 = dataset_profile(Some("v2")).expect("v2 profile");
+    let v3 = dataset_profile(Some("v3")).expect("v3 profile");
 
     assert_eq!(default.name, "v1");
     assert_eq!(explicit_v1.name, "v1");
@@ -1251,20 +1273,52 @@ fn dataset_profiles_default_to_v1_and_keep_distinct_pins() {
     assert_eq!(default.full_history_sessions, 943);
     assert_eq!(v2.cases, 20);
     assert_eq!(v2.full_history_sessions, 980);
+    assert_eq!(v3.cases, 20);
+    assert_eq!(v3.full_history_sessions, 931);
     assert_ne!(default.input_sha256, v2.input_sha256);
+    assert_ne!(v2.input_sha256, v3.input_sha256);
     assert_ne!(default.gold_sha256, v2.gold_sha256);
+    assert_ne!(v2.gold_sha256, v3.gold_sha256);
     assert_ne!(default.manifest_sha256, v2.manifest_sha256);
-    assert!(dataset_profile(Some("v3")).is_err());
+    assert_ne!(v2.manifest_sha256, v3.manifest_sha256);
+    assert!(dataset_profile(Some("v4")).is_err());
+}
+
+#[test]
+fn render_mode_default_preserves_constructor_policy_and_overrides_are_explicit() {
+    assert_eq!(
+        read_policy_for_render_mode("default")
+            .expect("default policy")
+            .compact_evidence,
+        ReadPolicy::default().compact_evidence
+    );
+    assert!(
+        read_policy_for_render_mode("compact")
+            .expect("compact policy")
+            .compact_evidence
+    );
+    assert!(
+        !read_policy_for_render_mode("full")
+            .expect("full policy")
+            .compact_evidence
+    );
+    assert!(read_policy_for_render_mode("other").is_err());
 }
 
 #[test]
 fn each_profile_accepts_only_its_manifest_paths_and_pins() {
     let v1 = manifest_fixture(&V1_PROFILE);
     let v2 = manifest_fixture(&V2_PROFILE);
+    let v3 = manifest_fixture(&V3_PROFILE);
     validate_manifest(&v1, &V1_PROFILE).expect("v1 manifest fixture validates");
     validate_manifest(&v2, &V2_PROFILE).expect("v2 manifest fixture validates");
+    validate_manifest(&v3, &V3_PROFILE).expect("v3 manifest fixture validates");
     assert!(validate_manifest(&v1, &V2_PROFILE).is_err());
     assert!(validate_manifest(&v2, &V1_PROFILE).is_err());
+    assert!(validate_manifest(&v1, &V3_PROFILE).is_err());
+    assert!(validate_manifest(&v2, &V3_PROFILE).is_err());
+    assert!(validate_manifest(&v3, &V1_PROFILE).is_err());
+    assert!(validate_manifest(&v3, &V2_PROFILE).is_err());
 }
 
 #[test]

@@ -38,11 +38,12 @@ and could omit conditions while returning a valid action label.
   condition or veto is redundant. Match strength orders evidence; budget losses
   stay explicit. Citation ranges remain section-bound even when another peer
   appears as separate evidence.
-- Add optional compact evidence (`ReadPolicy.compact_evidence`, default false).
+- Use compact evidence by default (`ReadPolicy.compact_evidence`, policy v4).
   `context_render/2` uses E1, E2, ... only within a response. `evidence` retains
   full source coordinates, revisions, views, support, omissions, and text ranges.
   IDs are never durable document or ledger identities. Full legacy rendering
-  remains available and is the default. Both renderings count complete canonical
+  remains available through explicit `compact_evidence:false`; the legacy
+  `pack_evidence()` convenience function also retains full framing. Both renderings count complete canonical
   context strings with the configured tokenizer.
 - Define a pure consumer-side reader envelope with quoted evidence, verbatim
   conditions, an answer action, answer, and clarification. Validate citation IDs,
