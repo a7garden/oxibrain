@@ -1,5 +1,14 @@
 # oxibrain — Architecture
-> **Version:** v2.30 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.31 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.31 — Authenticated session revocation.** Token-authenticated sessions
+> revalidate their credential against current token state before every request,
+> including native methods, resources and discovery. Revocation or expiry ends
+> further authority without requiring a reconnect. Trusted local sessions and
+> explicit in-process Scope constructors retain their existing trust boundary.
+> An already admitted effect is not rolled back; callers reconcile its original
+> occurrence/receipt and withhold in-flight source results after authority loss.
+> Authentication returns the complete non-secret Scope for exact consumer
+> verification, including capabilities absent from the sixteen-tool catalogue.
 > **v2.30 — Bounded source context.** Raw-source paragraph/line windows use
 > 1,024 bytes with 128-byte overlap for oversized lines (`source-paragraph-window/3`).
 > Schema 18 clears only disposable source chunks, indexes, vectors and cursors.
@@ -2216,6 +2225,24 @@ pub struct Scope {
 Tokens: `oxibrain token issue --space work --caps read,query --expires 30d`. MCP clients present
 one. The `serve --http` console and stdio children are loopback-only by default; non-loopback
 binds require TLS and refuse to start without it (§15.6).
+
+A token-authenticated stdio session revalidates its session credential through
+`Brain::verify_token` before every JSON-RPC request. Invalid, expired or revoked
+credentials are refused before dispatch, including `tools/list`, `spaces/list`,
+native operations and resource access. Verification failure does not fall back
+to a trusted local channel. The credential remains private session memory and
+is never included in an error or response. Scope-only in-process constructors
+remain explicitly caller-trusted; they do not claim token lifecycle enforcement.
+This admission boundary does not undo an effect already admitted before
+revocation or claim cancellation of ongoing inference. Consumers must preserve
+the original occurrence/receipt when reconciling effects and revalidate before
+delivering in-flight memory results or reusing derived model context.
+The successful `auth` response includes its complete `scope` (spaces, all
+capabilities, filters and expiry), never its secret. Clients retain that metadata
+separately from credentials. `tools/list` alone cannot establish an exact token
+grant because Admin, Sample and TrustedIngest need not add a catalogue tool;
+consumers requiring an exact grant set must reject missing scope metadata or
+additional capabilities rather than infer their absence.
 
 `Sample` is a distinct capability (§8.3). `TrustedIngest` is the narrowly scoped authority to
 override server trust evaluation and explicitly mark an ingest as trusted (§15.3).

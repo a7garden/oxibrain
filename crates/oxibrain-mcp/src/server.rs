@@ -77,6 +77,9 @@ pub struct BrainServer {
     /// When set (authenticated transport), tool calls are gated by capability +
     /// space membership (DESIGN §11.2). `None` = trusted local channel.
     scope: Option<Scope>,
+    /// Only negotiated token sessions retain a private credential for current
+    /// revocation/expiry checks. Never serialized or included in diagnostics.
+    session_token: Option<Arc<str>>,
 }
 
 impl BrainServer {
@@ -86,6 +89,7 @@ impl BrainServer {
         Ok(Self {
             brain: Arc::new(brain),
             scope: None,
+            session_token: None,
         })
     }
 
@@ -94,6 +98,7 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: None,
+            session_token: None,
         }
     }
 
@@ -104,6 +109,7 @@ impl BrainServer {
         Self {
             brain: Arc::new(brain),
             scope: Some(scope),
+            session_token: None,
         }
     }
 
@@ -112,7 +118,11 @@ impl BrainServer {
     /// Used by authenticated transports that share one brain across many
     /// connections, each resolved to its own scope.
     pub fn from_arc(brain: Arc<Brain>) -> Self {
-        Self { brain, scope: None }
+        Self {
+            brain,
+            scope: None,
+            session_token: None,
+        }
     }
 
     /// Wrap a shared `Arc<Brain>` with an authorization scope.
@@ -120,6 +130,24 @@ impl BrainServer {
         Self {
             brain,
             scope: Some(scope),
+            session_token: None,
+        }
+    }
+
+    async fn verify_session_token(&self) -> Result<(), (i64, String)> {
+        let Some(secret) = &self.session_token else {
+            return Ok(());
+        };
+        match self.brain.verify_token(secret).await {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err((
+                UNAUTHORIZED,
+                "session token is invalid, expired or revoked".into(),
+            )),
+            Err(_) => Err((
+                INTERNAL_ERROR,
+                "session token authority is unavailable".into(),
+            )),
         }
     }
 
@@ -340,6 +368,9 @@ impl BrainServer {
         msg: Message,
         session: Option<&std::sync::Arc<crate::sampling::SessionHandle>>,
     ) -> Option<Value> {
+        if let Err((code, message)) = self.verify_session_token().await {
+            return msg.id.map(|id| error(id, code, message));
+        }
         match msg.method.as_str() {
             HANDSHAKE_METHOD => match msg.id {
                 Some(id) => match self.handle_handshake(msg.params.as_ref()) {
@@ -2424,10 +2455,15 @@ where
             Ok(Some(scope)) => {
                 write_line(
                     &mut out,
-                    &success(id_for_response, json!({"authenticated": true})),
+                    &success(
+                        id_for_response,
+                        json!({"authenticated": true,"scope":scope}),
+                    ),
                 )
                 .await?;
-                Arc::new(BrainServer::from_arc_scoped(brain, scope))
+                let mut server = BrainServer::from_arc_scoped(brain, scope);
+                server.session_token = Some(token.into());
+                Arc::new(server)
             }
             Ok(None) => {
                 write_line(
@@ -4175,6 +4211,200 @@ mod tests {
             .unwrap();
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert_eq!(resp["error"]["code"], UNAUTHORIZED);
+    }
+
+    async fn exchange_authenticated_session(
+        writer: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
+        reader: &mut tokio::io::BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+        request: Value,
+    ) -> Value {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        writer
+            .write_all(serde_json::to_string(&request).unwrap().as_bytes())
+            .await
+            .unwrap();
+        writer.write_all(b"\n").await.unwrap();
+        writer.flush().await.unwrap();
+        let mut line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reader.read_line(&mut line),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+
+    #[tokio::test]
+    async fn authenticated_live_session_revoke_denies_next_requests_without_undoing_ingest() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Arc::new(Brain::open(BrainConfig::at(dir.path())).await.unwrap());
+        let sid = brain.ensure_space("t").await.unwrap();
+        let scope = Scope {
+            spaces: vec![sid],
+            caps: [Capability::Read, Capability::Ingest].into_iter().collect(),
+            ..Default::default()
+        };
+        let (token, secret) = brain.issue_token(&scope, "test", None).await.unwrap();
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let (server_read, server_write) = tokio::io::split(server);
+        let server_brain = brain.clone();
+        let task = tokio::spawn(async move {
+            run_session_gated(server_brain, server_read, server_write).await
+        });
+        let (read, mut write) = tokio::io::split(client);
+        let mut read = tokio::io::BufReader::new(read);
+        let auth = exchange_authenticated_session(
+            &mut write,
+            &mut read,
+            json!({"jsonrpc":"2.0","id":1,"method":"auth","params":{"token":secret}}),
+        )
+        .await;
+        assert_eq!(auth["result"]["authenticated"], true);
+        let ingest = exchange_authenticated_session(&mut write,&mut read,json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"ingest","arguments":{"space":"t","content":"admitted observation","source_path":"test:before-revoke","extract":false}}})).await;
+        assert!(ingest.get("result").is_some(), "{ingest}");
+        assert_eq!(brain.stats(&scope.spaces[0]).await.unwrap().episodes, 1);
+        brain.revoke_token(&token.id).await.unwrap();
+        for (id, method, params) in [
+            (3, "tools/list", json!({})),
+            (4, "spaces/list", json!({})),
+            (5, "resources/read", json!({"uri":"space://t"})),
+            (
+                6,
+                "tools/call",
+                json!({"name":"ingest","arguments":{"space":"t","content":"must not exist","source_path":"test:after-revoke","extract":false}}),
+            ),
+        ] {
+            let response = exchange_authenticated_session(
+                &mut write,
+                &mut read,
+                json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+            )
+            .await;
+            assert_eq!(response["error"]["code"], UNAUTHORIZED, "{response}");
+        }
+        assert_eq!(
+            brain.stats(&scope.spaces[0]).await.unwrap().episodes,
+            1,
+            "revocation does not undo an earlier effect or admit a later one"
+        );
+        drop(write);
+        drop(read);
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn authenticated_live_session_expiry_is_checked_again_without_reconnect() {
+        use oxibrain_ports::{ClockPort, FakeClock};
+        let dir = tempfile::TempDir::new().unwrap();
+        let now = SystemClock.now();
+        let clock = Arc::new(FakeClock::new(now));
+        let brain = Arc::new(
+            Brain::with_clock(BrainConfig::at(dir.path()), clock.clone())
+                .await
+                .unwrap(),
+        );
+        let sid = brain.ensure_space("t").await.unwrap();
+        let scope = Scope {
+            spaces: vec![sid],
+            caps: [Capability::Read].into_iter().collect(),
+            expires_at: Some(Timestamp::from_millis(now.millis() + 60_000)),
+            ..Default::default()
+        };
+        let (_, secret) = brain.issue_token(&scope, "test", None).await.unwrap();
+        let (client, server) = tokio::io::duplex(8192);
+        let (server_read, server_write) = tokio::io::split(server);
+        let task =
+            tokio::spawn(async move { run_session_gated(brain, server_read, server_write).await });
+        let (read, mut write) = tokio::io::split(client);
+        let mut read = tokio::io::BufReader::new(read);
+        let auth = exchange_authenticated_session(
+            &mut write,
+            &mut read,
+            json!({"jsonrpc":"2.0","id":1,"method":"auth","params":{"token":secret}}),
+        )
+        .await;
+        assert_eq!(auth["result"]["authenticated"], true);
+        let before = exchange_authenticated_session(
+            &mut write,
+            &mut read,
+            json!({"jsonrpc":"2.0","id":2,"method":"spaces/list"}),
+        )
+        .await;
+        assert!(before.get("result").is_some());
+        clock.advance(60_001);
+        let after = exchange_authenticated_session(
+            &mut write,
+            &mut read,
+            json!({"jsonrpc":"2.0","id":3,"method":"spaces/list"}),
+        )
+        .await;
+        assert_eq!(after["error"]["code"], UNAUTHORIZED);
+        drop(write);
+        drop(read);
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn authenticated_scope_reports_capabilities_absent_from_tool_catalogue() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let brain = Arc::new(Brain::open(BrainConfig::at(dir.path())).await.unwrap());
+        let sid = brain.ensure_space("t").await.unwrap();
+        let scope = Scope {
+            spaces: vec![sid],
+            caps: [
+                Capability::Read,
+                Capability::Admin,
+                Capability::Sample,
+                Capability::TrustedIngest,
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let (_, secret) = brain.issue_token(&scope, "test", None).await.unwrap();
+        let expected = serde_json::to_value(&scope).unwrap();
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let (server_read, server_write) = tokio::io::split(server);
+        let task =
+            tokio::spawn(async move { run_session_gated(brain, server_read, server_write).await });
+        let (read, write) = tokio::io::split(client);
+        let mut client = oxibrain_client::BrainClient::from_io(read, write);
+        client.auth(&secret).await.unwrap();
+        assert_eq!(client.authenticated_scope(), Some(&expected));
+        let tools = client.call_rpc_json("tools/list", json!({})).await.unwrap();
+        let names: Vec<_> = tools["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(!names.contains(&"ingest") && !names.contains(&"declare"));
+        for hidden in ["admin", "sample", "trusted_ingest"] {
+            assert!(
+                client.authenticated_scope().unwrap()["caps"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|cap| cap == hidden)
+            );
+        }
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
