@@ -5,11 +5,19 @@
 mod compat;
 pub mod config;
 pub mod document_plane;
+mod document_source_proof;
+pub use document_source_proof::DocumentSourceProof;
 mod extraction;
 mod ingest;
 pub mod migrate;
 pub mod models;
 pub mod paths;
+mod publication;
+mod publication_command;
+pub use oxibrain_core::publication::{
+    PublicationReceipt, PublishViewV1, PublishedView, ViewOrigin, ViewRange, ViewState,
+};
+pub use publication::PublicationCredentials;
 pub mod pull_plan;
 mod reads;
 mod render;
@@ -378,6 +386,9 @@ impl Brain {
     /// pair only — the amortization the persistent cache provided lives on
     /// inside a single call's key set).
     pub async fn declare(&self, space: &str, decl: Declaration) -> Result<String, BrainError> {
+        if matches!(decl, Declaration::PublicationV1 { .. }) {
+            return Err(oxibrain_core::publication::unavailable());
+        }
         let space = space.to_string();
         let now = self.clock.now();
         self.write(move |conn| {

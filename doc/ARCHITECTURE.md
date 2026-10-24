@@ -1,5 +1,36 @@
 # oxibrain — Architecture
-> **Version:** v2.31 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.34 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.34 — Source-view CLI/native adapters.** `admin source view`
+> publish/read/withdraw/retract and authenticated `source_view.*` native RPCs
+> share the versioned facade dispatcher. CLI input is bounded unique-key JSON
+> on stdin; credentials are independent ENV-name handles outside payloads.
+> Native sessions bind origin/recipient credentials and a separate destination
+> publication credential without unioning scopes. Receipts and audience views
+> preserve the source-view lifecycle and expose no private source identity.
+> These adapters add no seventeenth MCP tool and make no installed-state claim.
+> **v2.33 — Scoped document source proof.** The native read-only
+> `document_source.inspect` method binds one canonical UUID and expected raw
+> SHA-256 to its currently authorized space, canonical source root, relative
+> locator, verified source revision and cache generation. It reuses bounded
+> document reconciliation and the Full Reader's bounded bytes/revision checks;
+> stale, skipped or ambiguous roots and duplicate UUID claims fail closed.
+> It returns private path metadata, no source content or global root listing,
+> and adds no MCP tool. Consumers must compare the exact destination and frozen
+> source hash; a basename or matching UUID alone is not index confirmation.
+> **v2.32 — Source-view publication baseline (implementation gates open).**
+> `source-view-publication/1` uses reserved origin-scoped typed Declaration
+> episodes and a rebuildable schema-19 projection. It creates no Primary,
+> extracted assertion or document. Re-citation stores only its accessible parent
+> citation; root families remain internal and never add independent support.
+> The library facade checks origin Read and destination Write tokens separately,
+> with fresh checks at commit and delivery. Destination DTOs expose only the
+> selected view/citation and conservative uncertainty. Document sources reuse
+> the Full Reader's current exact revision/decoder checks. Generic `declare`
+> rejects the reserved variants. Native source_view operations and the operator
+> CLI share versioned facade dispatch; credentials remain outside operation
+> payloads. No model MCP tool or production B6/A18 acceptance is implied;
+> the sixteen-tool cap is unchanged.
+> [ADR-022](adr/ADR-022-source-view-publication.md) specifies the remaining gates.
 > **v2.31 — Authenticated session revocation.** Token-authenticated sessions
 > revalidate their credential against current token state before every request,
 > including native methods, resources and discovery. Revocation or expiry ends
@@ -2379,6 +2410,35 @@ the same methods, transported as JSON-RPC. Unification is post-v1, triggered by 
 consumer needing topology switching; LLM-injecting methods cannot cross a process
 boundary by construction.
 
+### 16.1.1 Scoped document source inspection
+
+`document_source.inspect` is a native JSON-RPC read with exactly `space`,
+`document_uuid`, and `expected_source_sha256`. Read capability, current session
+validity, and exact space membership are required before any source lookup.
+Its optional `proof` binds `space`, `document_uuid`, `root_alias`,
+`canonical_root`, `locator`, `source_revision`, `source_sha256`,
+`root_generation`, and `fresh`. This metadata is private to the scoped reader.
+No caller can use it to list unrelated roots, read content, register a root or
+change the memory plane. Missing, changed, stale, excluded or ambiguous sources
+return no usable proof. A source can change after the observed read; this is a
+current evidence receipt, not permanent filesystem or permission authority.
+The current reader exposes an aggregate skipped-file count. Inspection therefore
+conservatively withholds proof when any configured root reports a skipped file,
+including an unrelated root. This can reduce availability; it never substitutes
+a different source or exposes unrelated paths. Per-root skipped-file receipts
+would permit a future scope-local availability improvement.
+
+### 16.1.2 Source-view lifecycle transports
+
+`admin source view publish|read|withdraw|retract` consumes bounded stdin JSON
+and environment-variable **names** for credentials. Native authenticated RPCs
+`source_view.publish`, `.read`, `.withdraw`, and `.retract` call the same
+`Brain::source_view_operation` dispatcher with `source-view-publication/1` DTOs.
+Neither transport accepts credentials inside operation payloads. Source Read,
+destination Write/Read, and explicit origin retraction Write remain independent
+authorities. [The CLI contract](source-view-cli.md) specifies its input and safe
+error/receipt format. The sixteen-tool action space remains unchanged.
+
 ### 16.2 MCP surface
 
 | Tool | Caps | Notes |
@@ -3185,3 +3245,45 @@ The acceptance set includes the five reproduced public failures, temporal replac
 source race checks, UTF-8/conservation/budget properties and unchanged truth
 determinism are required. Model reranking, learned memory policies and durable
 outcome feedback remain follow-up experiments under measured quality/cost gates.
+
+
+### Source-view publication ledger boundary (v2.32)
+
+Publication keeps P1's episode-only durable write path: `PublicationV1` is a
+reserved Declaration variant, not a parallel ledger. Publish declarations live
+in the origin space; re-citation declarations name only an accessible parent
+publication and never embed a private root reference. Destination withdrawal
+names only the accessible publication. All `publication_views` and verified
+`publication_source_observations` rows are projections rebuilt by `reproject()`.
+Source content, root families, authorization principals and internal relations
+never appear in destination DTOs, errors or generic destination enumeration.
+
+Version 1 is non-extractable evidence. It neither writes source documents nor
+promotes them to episodes, and it cannot create statements, assertions or
+independent support. The immutable publication receipt contains only version,
+opaque publication citation and view revision. A separate current-view read is
+freshly authorized and returns no bytes for a closed view. Correction observed
+from the actual Full Reader closes current view descendants through a bounded
+acyclic lineage; caller claims of correction are not an authority path.
+Withdrawal and access revocation remain different operations. Physical redaction
+expands across publication copies, including copies in another origin space's
+Declaration, and removes projected bytes before replay. Rebuild must never
+recover redacted copies. Auth credentials are non-serialized facade arguments;
+origin-read and destination-write scopes are checked independently and are never
+unioned. A wire adapter must keep secrets at its authenticated boundary and reuse
+an existing operation rather than exceed sixteen tools.
+
+
+Source-view public operations are `source_view.publish`, `source_view.read`,
+`source_view.withdraw`, and `source_view.retract` over native JSON-RPC. Requests
+must include `version: "source-view-publication/1"`; unknown fields fail closed.
+Publish carries `request: PublishViewV1`; read and withdrawal carry only the
+explicit destination and publication ID (withdrawal also binds an occurrence).
+Retraction carries an exact source origin and occurrence, never a caller-claimed
+replacement revision. The initial `auth` frame may carry an optional
+`publication_destination_token` beside its normal `token`. Both remain private
+session credentials; they are never merged into the session Scope or accepted
+in operation/model payloads. Native publication revalidates both before commit
+and delivery, including exact receipt retries. A recipient read uses its current
+session's destination Read token and needs no origin credential. Ordinary
+trusted-local sessions cannot bypass these explicit credential checks.

@@ -19,6 +19,7 @@ pub mod lock;
 pub mod meta;
 pub mod migration;
 pub mod project;
+pub mod publication;
 pub mod quarantine;
 pub mod query;
 pub mod reader;

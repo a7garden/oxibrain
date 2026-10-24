@@ -616,7 +616,7 @@ pub fn load_tfidf_model(
     dim: usize,
 ) -> Result<TfIdfModel, BrainError> {
     let mut stmt = conn
-        .prepare("SELECT content FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL")
+        .prepare("SELECT content FROM episodes WHERE space_id = ?1 AND redacted_at IS NULL AND kind != 'declaration'")
         .map_err(sql_err)?;
     let texts: Vec<String> = stmt
         .query_map(params![space], |r| r.get::<_, String>(0))

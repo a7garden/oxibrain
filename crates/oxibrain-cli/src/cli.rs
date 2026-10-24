@@ -257,6 +257,11 @@ pub enum PredicateCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum SourceCmd {
+    /// Publish and manage explicitly scoped source views. Request JSON is read from stdin.
+    View {
+        #[command(subcommand)]
+        command: SourceViewCmd,
+    },
     /// Set trust policy for a source.
     Policy {
         /// Source name (as registered).
@@ -272,6 +277,32 @@ pub enum SourceCmd {
         effective_to: Option<i64>,
         #[arg(long)]
         space: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SourceViewCmd {
+    /// Publish an exact source range using independent origin Read and destination Write credentials.
+    Publish {
+        #[arg(long, value_name = "ENV_NAME")]
+        origin_token_env: String,
+        #[arg(long, value_name = "ENV_NAME")]
+        destination_token_env: String,
+    },
+    /// Read the currently accessible published view using destination Read authority.
+    Read {
+        #[arg(long, value_name = "ENV_NAME")]
+        destination_token_env: String,
+    },
+    /// Withdraw the original publication using destination Write authority.
+    Withdraw {
+        #[arg(long, value_name = "ENV_NAME")]
+        destination_token_env: String,
+    },
+    /// Retract source views using origin Write authority.
+    Retract {
+        #[arg(long, value_name = "ENV_NAME")]
+        origin_token_env: String,
     },
 }
 

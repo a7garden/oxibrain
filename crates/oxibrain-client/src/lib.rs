@@ -187,6 +187,20 @@ pub struct PendingStatsDto {
     pub oldest_seq: Option<u64>,
 }
 
+/// Private metadata for one freshly reconciled canonical document source.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentSourceProofDto {
+    pub space: String,
+    pub document_uuid: String,
+    pub root_alias: String,
+    pub canonical_root: String,
+    pub locator: String,
+    pub source_revision: String,
+    pub source_sha256: String,
+    pub root_generation: i64,
+    pub fresh: bool,
+}
+
 /// Request payload for [`BrainClient::register_document_root`] — `None`
 /// rules fall back to the brain's connector defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -699,6 +713,24 @@ impl BrainClient {
     pub async fn pending_stats(&mut self) -> Result<PendingStatsDto> {
         let v = self.call_rpc_json("pending_stats", json!({})).await?;
         serde_json::from_value(v).context("parse pending_stats result")
+    }
+
+    /// Native read: prove one source under an exact authorized space. Path
+    /// metadata is private; this never lists roots or returns source content.
+    pub async fn document_source_proof(
+        &mut self,
+        space: &str,
+        document_uuid: &str,
+        expected_source_sha256: &str,
+    ) -> Result<Option<DocumentSourceProofDto>> {
+        let value=self.call_rpc_json("document_source.inspect",json!({"space":space,"document_uuid":document_uuid,"expected_source_sha256":expected_source_sha256})).await?;
+        serde_json::from_value(
+            value
+                .get("proof")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing document source proof"))?,
+        )
+        .context("parse document source proof")
     }
 
     /// Native method: idempotently register a document root on the brain

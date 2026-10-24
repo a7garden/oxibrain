@@ -160,13 +160,32 @@ impl Brain {
     ) -> Result<Option<Episode>, BrainError> {
         let space = space.to_owned();
         let id = id.to_owned();
-        self.read(move |conn| ledger::get_episode_in_space(conn, &space, &id))
-            .await
+        self.read(move |conn| {
+            let episode = ledger::get_episode_in_space(conn, &space, &id)?;
+            Ok(episode.filter(|ep| {
+                !matches!(
+                    oxibrain_store::project::parse_declaration(&ep.content),
+                    Ok(oxibrain_store::project::Declaration::PublicationV1 { .. })
+                )
+            }))
+        })
+        .await
     }
 
     pub async fn get_episode(&self, id: &str) -> Result<Option<Episode>, BrainError> {
         let id = id.to_string();
-        self.read(move |conn| ledger::get_episode(conn, &id)).await
+        self.read(move |conn| {
+            let episode = ledger::get_episode(conn, &id)?;
+            // Publication control records are an internal ledger format, not
+            // raw evidence. Ordinary authorized declarations remain readable.
+            Ok(episode.filter(|ep| {
+                !matches!(
+                    oxibrain_store::project::parse_declaration(&ep.content),
+                    Ok(oxibrain_store::project::Declaration::PublicationV1 { .. })
+                )
+            }))
+        })
+        .await
     }
 
     pub async fn episode_count(&self) -> Result<i64, BrainError> {
