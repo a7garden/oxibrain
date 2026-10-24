@@ -19,8 +19,7 @@
 pub fn quantize(vec: &[f32]) -> Vec<u8> {
     let n_bytes = vec.len().div_ceil(8);
     let mut out = Vec::with_capacity(n_bytes);
-    let chunks = vec.chunks_exact(8);
-    let remainder = chunks.remainder();
+    let (chunks, remainder) = vec.as_chunks::<8>();
     for chunk in chunks {
         let mut byte: u8 = 0;
         // MSB = first dimension in the chunk.

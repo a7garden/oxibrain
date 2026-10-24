@@ -79,12 +79,13 @@ pub async fn run(suite: &str) -> anyhow::Result<()> {
             run_extraction(true).await
         }
         "recall" => super::recall_eval::run(false).await,
+        "reader" => super::recall_eval::run(true).await,
         "gate" => super::gate::run_with_dir(suite, None).await,
         "experiential" => super::gate::run_with_dir(suite, None).await,
         "experience" => super::gate::run_with_dir(suite, None).await,
         other => {
             anyhow::bail!(
-                "unknown suite '{other}': use 'fast', 'full', 'recall', 'gate', 'experience', or 'experiential'"
+                "unknown suite '{other}': use 'fast', 'full', 'recall', 'reader', 'gate', 'experience', or 'experiential'"
             )
         }
     }

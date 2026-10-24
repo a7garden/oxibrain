@@ -1,0 +1,21 @@
+{
+  "schema": "oxibrain-skill-forward/1",
+  "method": "Independent fresh subagent reads generated skill plus synthetic CLI responses; no repository implementation, expected answers, real stores or writes.",
+  "generated_skill_sha256": "e5db6fae8823a13c555ec0cb5be0361fc0d04a163c8d9d653f8012c7829bcecb",
+  "generated_context_sha256": "269e35781c08f447843a920cd74ca427926d12c01a20eef39e7d28c95600024a",
+  "fixture_sha256": "8ae48af7d663db8cfaba622b8bce30ba4b10eeee8de8a4ee68da6e3e7f01010e",
+  "observations": {
+    "scope": "Both fresh exercises preserved 4/1 branches and asked about the flag, but the second omitted the stable-runtime qualifier in its user-facing branch. Neither question explicitly requested both runtime and flag.",
+    "independent-sources": "Kept both distinct document references even though text and digests matched.",
+    "limited": "Both rejected absence inference from capped empty results and proposed documents search."
+  },
+  "limits": [
+    "Three synthetic behavioral exercises, not arbitrary consumer compliance.",
+    "Clarification identified the flag; asking explicitly for both runtime version and flag would be more precise.",
+    "Initial fixture nested context incorrectly; reran after flattening layers to match the serialized EvidenceResult. Source-map paths were correct in both.",
+    "The unspecified follow-up asked explicitly about build and strict mode; it could more directly confirm the production precondition as well. No general model-compliance guarantee is claimed."
+  ],
+  "followup": "Strengthened applicability guidance was exercised on two fresh fixtures with a fresh agent. It preserved build, production and strict-mode conjunctions, withheld an unconditional value when unspecified, and selected6 only when all3conditions were supplied.",
+  "applicability_fixture_sha256": "9f0e227c06bc70e5a4b9c9351f778ce113894317586e49ce1d95adb46d16c7d0",
+  "updated_skill_sha256": "af7779e82ccaed0bac12780ac1ad6d360ff80a84e93105828336176d0d6212fa"
+}

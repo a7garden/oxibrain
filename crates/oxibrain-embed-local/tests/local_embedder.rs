@@ -1,6 +1,7 @@
 //! Integration test for oxibrain-embed-local against a real embedding model.
 //! Ignored by default — requires a model at `~/.oxi/brain/models/`. Run with:
-//!   cargo test -p oxibrain-embed-local --test local_embedder -- --ignored
+//!   OXIBRAIN_EMBED_MODEL=/Users/garden/.oxi/brain/bge-m3-Q4_K_M.gguf \
+//!     cargo test -p oxibrain-embed-local --test local_embedder -- --ignored
 //! Validated against BGE-M3-Q4_K_M (multilingual, 1024 dims).
 
 use oxibrain_embed_local::{LocalEmbedder, LocalEmbedderOptions};
@@ -8,6 +9,9 @@ use oxibrain_ports::EmbeddingPort;
 use std::path::PathBuf;
 
 fn model_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("OXIBRAIN_EMBED_MODEL") {
+        return PathBuf::from(path);
+    }
     let mut p = home_dir();
     p.push(".oxi/brain/models/bge-m3-Q4_K_M.gguf");
     p
@@ -56,6 +60,23 @@ fn embedder_loads_and_embeds() {
         sim_unrelated < sim_en_ko,
         "unrelated {sim_unrelated:.3} should be less similar than same-meaning EN-KO {sim_en_ko:.3}"
     );
+}
+
+#[test]
+#[ignore = "requires BGE-M3 GGUF model; exercises encoder input beyond llama.cpp's default 512-token ubatch"]
+fn embedder_handles_complete_sequence_longer_than_default_ubatch() {
+    let path = model_path();
+    assert!(path.exists(), "model not found at {path:?}");
+    let embedder = LocalEmbedder::open(&path, LocalEmbedderOptions::default()).expect("open");
+
+    // BGE's wordpiece vocabulary tokenizes this repeated common word as more
+    // than 512 tokens while staying well below the configured 8192-token cap.
+    let text = ["hello"; 768].join(" ");
+    let embeddings = embedder
+        .embed(&[&text])
+        .expect("encode the whole sequence without truncation or splitting");
+    assert_eq!(embeddings.len(), 1);
+    assert_eq!(embeddings[0].len(), embedder.dim());
 }
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {

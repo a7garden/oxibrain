@@ -4,6 +4,7 @@ use crate::evidence::{
     EvidenceCitation, EvidenceResult, EvidenceUnit, SourceCoordinate, UnitDecision,
 };
 use oxibrain_ports::TokenizerPort;
+use std::fmt::Write;
 
 fn order(k: LayerKind) -> usize {
     match k {
@@ -22,6 +23,8 @@ fn render(
     selected: &[(&EvidenceUnit, &str, &SourceCoordinate)],
     budget: usize,
     tok: &dyn TokenizerPort,
+    previous: Option<&EvidenceResult>,
+    compact: bool,
 ) -> EvidenceResult {
     let mut sorted = selected.to_vec();
     sorted.sort_by_key(|(u, _, _)| order(u.layer));
@@ -42,30 +45,69 @@ fn render(
             l.text.push('\n');
         }
         let start = l.text.len();
-        l.text.push_str(&format!(
-            "[{}; role={}; view={}; bytes={}..{}; window={}..{}; uuid={}; excerpt={}] {}",
-            source.reference,
-            u.role,
-            source.view,
-            source.start,
-            source.end,
-            u.source.start,
-            u.source.end,
-            source.document_uuid.as_deref().unwrap_or(""),
-            source.start != u.source.start || source.end != u.source.end,
-            text
-        ));
-        if !u.support.is_empty() {
-            l.text
-                .push_str(&format!("\n  sources: {}", u.support.join(", ")));
+        let citation_id = if compact {
+            format!("E{}", evidence.len() + 1)
+        } else {
+            String::new()
+        };
+        if compact {
+            write!(
+                l.text,
+                "[{}; role={}; excerpt={}] {}",
+                citation_id,
+                u.role,
+                source.start != u.source.start || source.end != u.source.end,
+                text
+            )
+            .expect("writing to a String cannot fail");
+        } else {
+            write!(
+                l.text,
+                "[{}; role={}; view={}; bytes={}..{}; window={}..{}; uuid={}; excerpt={}] {}",
+                source.reference,
+                u.role,
+                source.view,
+                source.start,
+                source.end,
+                u.source.start,
+                u.source.end,
+                source.document_uuid.as_deref().unwrap_or(""),
+                source.start != u.source.start || source.end != u.source.end,
+                text
+            )
+            .expect("writing to a String cannot fail");
+            if !u.support.is_empty() {
+                l.text.push_str("\n  sources: ");
+                for (index, support) in u.support.iter().enumerate() {
+                    if index > 0 {
+                        l.text.push_str(", ");
+                    }
+                    l.text.push_str(support);
+                }
+            }
         }
         let end = l.text.len();
+        let rendered_text_end = if compact {
+            end
+        } else {
+            end - if u.support.is_empty() {
+                0
+            } else {
+                "\n  sources: ".len()
+                    + u.support.iter().map(String::len).sum::<usize>()
+                    + 2 * u.support.len().saturating_sub(1)
+            }
+        };
+        let rendered_text_start = rendered_text_end - text.len();
         l.provenance.push(source.reference.clone());
         evidence.push(EvidenceCitation {
+            citation_id,
             unit_id: u.id.clone(),
             layer_index,
             rendered_start: start,
             rendered_end: end,
+            rendered_text_start,
+            rendered_text_end,
             source: source.clone(),
             role: u.role.clone(),
             support: u.support.clone(),
@@ -77,7 +119,14 @@ fn render(
         });
     }
     for l in &mut layers {
-        l.estimated_tokens = tok.count(&l.text);
+        l.estimated_tokens = previous
+            .and_then(|p| {
+                p.context
+                    .layers
+                    .iter()
+                    .find(|old| old.kind == l.kind && old.text == l.text)
+            })
+            .map_or_else(|| tok.count(&l.text), |old| old.estimated_tokens);
     }
     let mut context = ContextResult {
         layers,
@@ -87,6 +136,9 @@ fn render(
     };
     context.total_tokens = if context.layers.is_empty() {
         0
+    } else if context.layers.len() == 1 {
+        // The canonical context is byte-identical to its only layer.
+        context.layers[0].estimated_tokens
     } else {
         tok.count(&render_context(&context))
     };
@@ -117,6 +169,7 @@ pub fn pack_evidence_with_policy(
     policy: &crate::read_scope::ReadPolicy,
 ) -> EvidenceResult {
     let mut selected = Vec::new();
+    let mut accepted = render(&[], budget, tok, None, policy.compact_evidence);
     let mut decisions = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     // Profile has a bounded priority floor. Query units alternate planes without
@@ -191,9 +244,15 @@ pub fn pack_evidence_with_policy(
                     reason = "duplicate_source_range";
                     continue;
                 }
-                let before = render(&selected, budget, tok).context.total_tokens;
+                let before = accepted.context.total_tokens;
                 selected.push((u, text.as_str(), source));
-                let candidate = render(&selected, budget, tok);
+                let candidate = render(
+                    &selected,
+                    budget,
+                    tok,
+                    Some(&accepted),
+                    policy.compact_evidence,
+                );
                 let bytes = serde_json::to_vec(&candidate.evidence)
                     .expect("evidence serializes")
                     .len();
@@ -217,6 +276,7 @@ pub fn pack_evidence_with_policy(
                     if u.role == "recency_observation" {
                         recency_spent += cost;
                     }
+                    accepted = candidate;
                     break;
                 }
                 if bytes > policy.metadata_bytes {
@@ -230,7 +290,7 @@ pub fn pack_evidence_with_policy(
             reason: reason.into(),
         });
     }
-    let mut out = render(&selected, budget, tok);
+    let mut out = accepted;
     out.context.truncated = decisions.iter().any(|d| {
         matches!(
             d.reason.as_str(),

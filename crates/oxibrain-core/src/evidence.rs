@@ -41,6 +41,175 @@ impl EvidenceUnit {
     }
 }
 
+/// Assemble a document candidate from one verified decoded view. Search hits
+/// remain small; recall expands them to a complete enclosing section and refuses
+/// unsafe cross-section fallback ranges.
+pub fn document_recall_unit(
+    text: &str,
+    headings: Option<&[crate::documents::DocumentHeading]>,
+    source: SourceCoordinate,
+    query: &str,
+    short_document_bytes: usize,
+) -> Option<EvidenceUnit> {
+    let mut units = document_recall_units(text, headings, source, query, short_document_bytes)?;
+    (units.len() == 1).then(|| units.remove(0))
+}
+
+/// Assemble every complete, query-relevant section represented by one verified
+/// decoded-view hit. Multiple anchored peer sections are preserved together.
+pub fn document_recall_units(
+    text: &str,
+    headings: Option<&[crate::documents::DocumentHeading]>,
+    source: SourceCoordinate,
+    query: &str,
+    short_document_bytes: usize,
+) -> Option<Vec<EvidenceUnit>> {
+    let original = source.start..source.end;
+    let ranges = match headings {
+        Some(headings) => crate::documents::recall_document_ranges(
+            text,
+            headings,
+            original.clone(),
+            query,
+            short_document_bytes,
+        )?,
+        None if original.start == 0 && original.end == text.len() => vec![original.clone()],
+        None => return None,
+    };
+    let Some(headings) = headings else {
+        // The source decoder could not provide offsets aligned with this view.
+        // A whole-view read is safe; a body-only excerpt is not.
+        let range = ranges.into_iter().next()?;
+        let mut source = source;
+        source.start = range.start;
+        source.end = range.end;
+        return Some(vec![EvidenceUnit::new(
+            LayerKind::Documents,
+            text.get(range)?.to_string(),
+            source,
+            "untrusted_observation",
+        )]);
+    };
+
+    let mut units = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        let mut unit_source = source.clone();
+        unit_source.start = range.start;
+        unit_source.end = range.end;
+        let mut unit = EvidenceUnit::new(
+            LayerKind::Documents,
+            text.get(range.clone())?.to_string(),
+            unit_source,
+            "untrusted_observation",
+        );
+        let section = headings
+            .iter()
+            .any(|h| h.start == range.start && h.end <= range.end);
+        let original_is_heading = original.start >= range.start
+            && original.end <= range.end
+            && headings.iter().any(|h| {
+                text.get(h.start..h.end)
+                    .is_some_and(|title| title.trim() == text[original.clone()].trim())
+            });
+        if range == original && headings.is_empty() {
+            unit.variants = quotation_variants(&unit.text, &unit.source, query);
+        } else if range != original
+            && (!section || original_is_heading)
+            && range.start <= original.start
+            && range.end >= original.end
+        {
+            // A command without its later applicability condition is not a
+            // safe excerpt. Only a heading-only match may stand alone.
+            let mut variant_source = unit.source.clone();
+            variant_source.start = original.start;
+            variant_source.end = original.end;
+            unit.variants.push(EvidenceVariant {
+                text: text[original.clone()].to_string(),
+                source: variant_source,
+            });
+        }
+        units.push(unit);
+    }
+    Some(units)
+}
+
+/// One verified section candidate and its bounded retrieval score.
+#[derive(Debug, Clone)]
+pub struct DocumentRecallCandidate {
+    pub unit: EvidenceUnit,
+    pub retrieval_score: f64,
+}
+
+/// Keep all independently retrieved sections from one document view. Query
+/// match strength orders peers, while fused retrieval score remains the primary
+/// cross-document ordering signal. Repeated hits for the same source range are
+/// deduplicated by stable unit identity.
+pub fn select_document_recall_units(
+    query: &str,
+    candidates: Vec<DocumentRecallCandidate>,
+) -> Vec<EvidenceUnit> {
+    let plan = crate::query_candidates::LexicalQueryPlan::new(query);
+    let mut groups = std::collections::BTreeMap::<
+        (String, String, String, Option<String>),
+        Vec<(crate::query_candidates::LexicalRelevance, f64, EvidenceUnit)>,
+    >::new();
+    for candidate in candidates {
+        let unit = candidate.unit;
+        let key = (
+            unit.source.reference.clone(),
+            unit.source.revision.clone(),
+            unit.source.view.clone(),
+            unit.source.view_digest.clone(),
+        );
+        groups.entry(key).or_default().push((
+            plan.relevance(&unit.text),
+            candidate.retrieval_score,
+            unit,
+        ));
+    }
+
+    let mut selected = Vec::<(f64, crate::query_candidates::LexicalRelevance, EvidenceUnit)>::new();
+    for (_, mut group) in groups {
+        let mut by_id = std::collections::BTreeMap::<
+            String,
+            (crate::query_candidates::LexicalRelevance, f64, EvidenceUnit),
+        >::new();
+        for (relevance, score, unit) in group.drain(..) {
+            by_id
+                .entry(unit.id.clone())
+                .and_modify(|existing| {
+                    if score > existing.1 {
+                        *existing = (relevance, score, unit.clone());
+                    }
+                })
+                .or_insert((relevance, score, unit));
+        }
+        let mut group: Vec<_> = by_id.into_values().collect();
+        group.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| b.1.total_cmp(&a.1))
+                .then_with(|| a.2.source.start.cmp(&b.2.source.start))
+                .then_with(|| a.2.id.cmp(&b.2.id))
+        });
+        selected.extend(
+            group
+                .into_iter()
+                .map(|(relevance, score, unit)| (score, relevance, unit)),
+        );
+    }
+    selected.sort_by(|(a_score, a_relevance, a), (b_score, b_relevance, b)| {
+        b_score
+            .total_cmp(a_score)
+            .then_with(|| b_relevance.cmp(a_relevance))
+            .then_with(|| a.source.reference.cmp(&b.source.reference))
+            .then_with(|| a.source.revision.cmp(&b.source.revision))
+            .then_with(|| a.source.view.cmp(&b.source.view))
+            .then_with(|| a.source.start.cmp(&b.source.start))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    selected.into_iter().map(|(_, _, unit)| unit).collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvidenceVariant {
     pub text: String,
@@ -100,10 +269,18 @@ pub fn quotation_variants(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvidenceCitation {
+    /// Response-scoped ID in compact contexts. Empty in the full legacy render.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub citation_id: String,
     pub unit_id: String,
     pub layer_index: usize,
     pub rendered_start: usize,
     pub rendered_end: usize,
+    /// Exact delivered text inside this layer, excluding citation framing/support IDs.
+    #[serde(default)]
+    pub rendered_text_start: usize,
+    #[serde(default)]
+    pub rendered_text_end: usize,
     pub source: SourceCoordinate,
     pub role: String,
     pub support: Vec<String>,

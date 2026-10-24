@@ -1,0 +1,80 @@
+[
+  {
+    "byte_equivalent": true,
+    "candidates": 8,
+    "runs": [
+      {
+        "bytes": 28624,
+        "calls": 32,
+        "elapsed_ms": 4.813834,
+        "final_serialization_ms": 0.003792,
+        "optimized": false,
+        "selected": 8,
+        "serialized_bytes": 5313,
+        "tokens": 496
+      },
+      {
+        "bytes": 7156,
+        "calls": 8,
+        "elapsed_ms": 1.053083,
+        "final_serialization_ms": 0.004792,
+        "optimized": true,
+        "selected": 8,
+        "serialized_bytes": 5313,
+        "tokens": 496
+      }
+    ]
+  },
+  {
+    "byte_equivalent": true,
+    "candidates": 32,
+    "runs": [
+      {
+        "bytes": 421782,
+        "calls": 128,
+        "elapsed_ms": 61.262583,
+        "final_serialization_ms": 0.012625,
+        "optimized": false,
+        "selected": 31,
+        "serialized_bytes": 20256,
+        "tokens": 1964
+      },
+      {
+        "bytes": 105546,
+        "calls": 32,
+        "elapsed_ms": 15.209833000000001,
+        "final_serialization_ms": 0.014542000000000001,
+        "optimized": true,
+        "selected": 31,
+        "serialized_bytes": 20256,
+        "tokens": 1964
+      }
+    ]
+  },
+  {
+    "byte_equivalent": true,
+    "candidates": 64,
+    "runs": [
+      {
+        "bytes": 1229526,
+        "calls": 256,
+        "elapsed_ms": 181.59729199999998,
+        "final_serialization_ms": 0.012334000000000001,
+        "optimized": false,
+        "selected": 31,
+        "serialized_bytes": 20256,
+        "tokens": 1964
+      },
+      {
+        "bytes": 310698,
+        "calls": 64,
+        "elapsed_ms": 45.445458,
+        "final_serialization_ms": 0.014792,
+        "optimized": true,
+        "selected": 31,
+        "serialized_bytes": 20256,
+        "tokens": 1964
+      }
+    ]
+  }
+]

@@ -173,7 +173,7 @@ fn canonical_document_recall_preserves_source_and_enforces_scope_and_exactness()
     init_store(store.path());
     let uuid = "018f47c6-4a77-7c52-9db8-0e5f9bcb1705";
     let source = format!(
-        "---\nformat: pdc-document/2\nbody: pdc-markdown/1\nid: {uuid}\ncreated: 2026-09-14T12:34:56.789Z\nupdated: 2026-09-14T12:34:56.789Z\ntitle: Recovery\n---\nSiriusRecovery uses checkpoint-93.\n"
+        "---\nformat: pdc-document/2\nbody: pdc-markdown/1\nid: {uuid}\ncreated: 2026-09-14T12:34:56.789Z\nupdated: 2026-09-14T12:34:56.789Z\ntitle: Recovery\n---\n# SiriusRecovery\n\nUse checkpoint-93.\n\nDo not restore unless the health check fails.\n\n# OtherRecovery\n\nUNRELATED-SECTION\n"
     );
     let file = vault.path().join("release.md");
     std::fs::write(&file, &source).unwrap();
@@ -191,10 +191,28 @@ fn canonical_document_recall_preserves_source_and_enforces_scope_and_exactness()
         r#"{"space":"personal","query":"SiriusRecovery","planes":["documents"],"token_budget":2000}"#,
     );
     assert!(
-        ok && out.contains("checkpoint-93") && out.contains(uuid),
+        ok && out.contains("checkpoint-93")
+            && out.contains(uuid)
+            && out.contains("Do not restore unless the health check fails."),
         "{out}"
     );
     let env: serde_json::Value = serde_json::from_str(&out).unwrap();
+    // A weaker peer match may carry a veto or condition (P10). It remains
+    // independent evidence; the target citation must still be section-bound.
+    let target = &env["data"]["data"]["evidence"][0];
+    let layer = target["layer_index"].as_u64().unwrap() as usize;
+    let text = env["data"]["data"]["layers"][layer]["text"]
+        .as_str()
+        .unwrap();
+    let start = target["rendered_text_start"].as_u64().unwrap() as usize;
+    let end = target["rendered_text_end"].as_u64().unwrap() as usize;
+    assert!(text[start..end].contains("checkpoint-93"));
+    assert!(text[start..end].contains("Do not restore unless the health check fails."));
+    assert!(!text[start..end].contains("UNRELATED-SECTION"));
+    let body = source.split_once("\n---\n").unwrap().1;
+    let source_start = target["source"]["start"].as_u64().unwrap() as usize;
+    let source_end = target["source"]["end"].as_u64().unwrap() as usize;
+    assert_eq!(&text[start..end], &body[source_start..source_end]);
     assert!(
         env["data"]["data"]["evidence"][0]["source"]["revision"]
             .as_str()

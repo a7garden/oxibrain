@@ -290,7 +290,7 @@ fn migrates_v14_to_v15_without_rewriting_truth_or_extracting() {
     registry::seed_core_v1(&conn).unwrap();
     insert_test_data(&conn);
     let before = oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap();
-    assert_eq!(migration::run(&conn).unwrap(), 15);
+    assert_eq!(migration::run(&conn).unwrap(), LEDGER_SCHEMA_VERSION);
     assert_eq!(
         before,
         oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap()
@@ -308,4 +308,28 @@ fn migrates_v14_to_v15_without_rewriting_truth_or_extracting() {
             .unwrap(),
         "test content"
     );
+}
+
+#[test]
+fn migrates_v15_to_v16_adds_only_rebuildable_source_vectors() {
+    migration::ensure_vec_extension();
+    let conn = Connection::open_in_memory().unwrap();
+    migration::run(&conn).unwrap();
+    conn.execute_batch("DROP TRIGGER memory_source_vector_delete; DROP TABLE memory_source_vectors; PRAGMA user_version=15;").unwrap();
+    registry::seed_core_v1(&conn).unwrap();
+    insert_test_data(&conn);
+    let before = oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap();
+    assert_eq!(migration::run(&conn).unwrap(), 16);
+    assert_eq!(
+        before,
+        oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap()
+    );
+    assert!(has_table(&conn, "memory_source_vectors"));
+    assert_eq!(
+        conn.query_row::<usize, _, _>("SELECT count(*) FROM memory_source_vectors", [], |r| r
+            .get(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(migration::run(&conn).unwrap(), 16);
 }

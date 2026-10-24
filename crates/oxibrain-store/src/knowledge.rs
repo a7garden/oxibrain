@@ -345,6 +345,16 @@ pub fn get_statement_group(
     subject: &str,
     predicate: &str,
 ) -> Result<Vec<StatementEntry>, BrainError> {
+    get_statement_group_at(conn, space, subject, predicate, None)
+}
+
+pub fn get_statement_group_at(
+    conn: &Connection,
+    space: &str,
+    subject: &str,
+    predicate: &str,
+    known: Option<oxibrain_ports::Timestamp>,
+) -> Result<Vec<StatementEntry>, BrainError> {
     let mut stmt_q = conn
         .prepare(
             "SELECT id, subject_id, predicate, object_entity, object_literal
@@ -379,7 +389,7 @@ pub fn get_statement_group(
     let mut entries = Vec::new();
     for row_result in rows {
         let statement = row_result.map_err(sql_err)?;
-        let assertions = get_assertions_for_statement(conn, &statement.id)?;
+        let assertions = get_assertions_for_statement_at(conn, &statement.id, known)?;
         if !assertions.is_empty() {
             entries.push(StatementEntry {
                 statement,
@@ -417,15 +427,26 @@ pub fn get_assertions_for_statement(
     conn: &Connection,
     statement_id: &str,
 ) -> Result<Vec<Assertion>, BrainError> {
+    get_assertions_for_statement_at(conn, statement_id, None)
+}
+
+fn get_assertions_for_statement_at(
+    conn: &Connection,
+    statement_id: &str,
+    known: Option<oxibrain_ports::Timestamp>,
+) -> Result<Vec<Assertion>, BrainError> {
     let mut stmt = conn
         .prepare(
             "SELECT id, statement_id, episode_id, extractor_id, polarity,
                     claimed_from, claimed_to, confidence, recorded_at, retracted_at, trust
-             FROM assertions WHERE statement_id = ?1",
+             FROM assertions WHERE statement_id = ?1
+             AND (?2 IS NULL OR (recorded_at<=?2 AND EXISTS(
+                 SELECT 1 FROM episodes e WHERE e.id=assertions.episode_id
+                 AND e.ingested_at<=?2 AND e.redacted_at IS NULL)))",
         )
         .map_err(sql_err)?;
     let rows = stmt
-        .query_map(params![statement_id], |r| {
+        .query_map(params![statement_id, known.map(|t| t.0)], |r| {
             let polarity_val: i64 = r.get(4)?;
             let trust_s: String = r.get(10)?;
             Ok(Assertion {

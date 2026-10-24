@@ -73,6 +73,9 @@ pub struct ReadMeta {
     pub freshness: DocumentFreshness,
     pub index_coverage: serde_json::Value,
     pub execution: serde_json::Value,
+    #[serde(default)]
+    pub channels: Vec<oxibrain_core::read_channels::ChannelReceipt>,
+    pub truth_selection: Option<oxibrain_core::truth_selection::TruthSelectionReceipt>,
 }
 pub type RecallResponse = ReadResponse<EvidenceResult>;
 
@@ -118,21 +121,57 @@ impl Brain {
         &self,
         scope: &ReadScope,
         now: Timestamp,
+        query: &str,
     ) -> Result<
         (
             Vec<oxibrain_core::visible_memory::VisibleClaim>,
             BTreeMap<String, String>,
             BTreeMap<String, String>,
-            usize,
+            oxibrain_core::truth_selection::TruthSelectionReceipt,
         ),
         BrainError,
     > {
         let space = scope.space.clone();
         let known = scope.known_at.unwrap_or(now);
         let maximum = self.read_policy.truth_bytes;
-        let input = self
-            .read(move |c| oxibrain_store::read_evidence::truth_input(c, &space, known, maximum))
+        let query = query.to_string();
+        let cap = self.read_policy.truth_group_cap;
+        let (input, mut receipt) = self
+            .read(move |c| {
+                use oxibrain_core::truth_selection::{
+                    TruthSelectionReceipt, consider_groups, select_complete_groups,
+                };
+                let started = std::time::Instant::now();
+                let mut receipt = TruthSelectionReceipt::default();
+                let mut pool = Vec::new();
+                let mut after = None;
+                loop {
+                    let cursor = after
+                        .as_ref()
+                        .map(|(a, b): &(String, String)| (a.as_str(), b.as_str()));
+                    let page =
+                        oxibrain_store::truth_groups::catalog(c, &space, known, cursor, 128)?;
+                    if page.is_empty() {
+                        break;
+                    }
+                    let last = page.last().expect("nonempty page");
+                    after = Some((last.subject.clone(), last.predicate.clone()));
+                    receipt.examined += page.len();
+                    receipt.truncated_seeds += page.iter().filter(|g| g.seed_truncated).count();
+                    consider_groups(&mut pool, page, &query, cap);
+                }
+                let (selected, bytes) = select_complete_groups(pool, maximum);
+                receipt.materialized = selected.len();
+                receipt.bytes = bytes;
+                receipt.omitted = receipt.examined.saturating_sub(selected.len());
+                let input =
+                    oxibrain_store::read_evidence::truth_input(c, &space, known, &selected)?;
+                receipt.sources = input.live_sources.len();
+                receipt.selection_ms = started.elapsed().as_secs_f64() * 1000.0;
+                Ok((input, receipt))
+            })
             .await?;
+        let fold_started = std::time::Instant::now();
         let claims = oxibrain_core::visible_memory::visible_claims(
             &input.groups,
             &input.definitions,
@@ -147,7 +186,8 @@ impl Brain {
             &input.live_sources,
             known,
         );
-        Ok((claims, names, input.entity_types, input.omitted_groups))
+        receipt.fold_ms = fold_started.elapsed().as_secs_f64() * 1000.0;
+        Ok((claims, names, input.entity_types, receipt))
     }
 
     /// Resume a versioned raw-source build. Each batch and cursor share a write transaction.
@@ -219,16 +259,20 @@ impl Brain {
         };
         // Document sequencing retains revision validation and native PDC decoding.
         let mut data = if req.planes.contains(&SearchPlane::Documents) {
-            self.search_unscoped(Query {
-                text: req.text.clone(),
-                space: req.scope.space.clone(),
-                mode: req.mode,
-                as_of: None,
-                limit: req.limit,
-                min_confidence: 0.0,
-                planes: [SearchPlane::Documents].into_iter().collect(),
-            })
+            self.search_unscoped(
+                Query {
+                    text: req.text.clone(),
+                    space: req.scope.space.clone(),
+                    mode: req.mode,
+                    as_of: None,
+                    limit: req.limit,
+                    min_confidence: 0.0,
+                    planes: [SearchPlane::Documents].into_iter().collect(),
+                },
+                false,
+            )
             .await?
+            .0
         } else {
             SearchResponse {
                 memory: Vec::new(),
@@ -237,9 +281,18 @@ impl Brain {
             }
         };
         if req.planes.contains(&SearchPlane::Memory) {
-            let (claims, names, types, omitted) = self.visible_memory(&req.scope, now).await?;
+            let (claims, names, types, omitted) =
+                self.visible_memory(&req.scope, now, &req.text).await?;
+            meta.truth_selection = Some(omitted.clone());
             let (hits, degradation, capped) = self
-                .scoped_claim_hits(&claims, &names, &req.text, req.mode, req.limit.max(64))
+                .scoped_claim_hits(
+                    &claims,
+                    &names,
+                    &req.text,
+                    req.mode,
+                    req.limit.max(64),
+                    &mut meta.channels,
+                )
                 .await?;
             let mut by_entity = BTreeMap::new();
             for h in hits {
@@ -277,8 +330,9 @@ impl Brain {
                 meta.execution["dense_fallback"] = error.into();
             }
             meta.dropped
-                .insert("truth_group_incomplete".into(), omitted);
+                .insert("truth_group_incomplete".into(), omitted.omitted);
         }
+        meta.channels.extend(data.freshness.channels.clone());
         meta.freshness = data.freshness.clone();
         meta.scope["document_generations"] = serde_json::to_value(
             data.documents
@@ -287,8 +341,12 @@ impl Brain {
                 .collect::<BTreeMap<_, _>>(),
         )
         .expect("generation serializes");
-        let degradation = meta.execution.get("dense_fallback").cloned();
-        meta.execution = serde_json::json!({"partial":degradation.is_some()||meta.dropped.values().any(|n|*n>0)||!data.freshness.skipped_roots.is_empty()||data.freshness.unavailable_hits>0,"answerability":"not_evaluated","dense_fallback":degradation,"dense_capability":self.embedder.is_some()});
+        let degradation = meta.execution.get("dense_fallback").cloned().or_else(|| {
+            meta.channels
+                .iter()
+                .find_map(|c| c.fallback.clone().map(serde_json::Value::String))
+        });
+        meta.execution = serde_json::json!({"partial":meta.channels.iter().any(|c|c.partial())||meta.truth_selection.as_ref().is_some_and(|r|r.truncated_seeds>0)||degradation.is_some()||meta.dropped.values().any(|n|*n>0)||!data.freshness.skipped_roots.is_empty()||data.freshness.unavailable_hits>0,"answerability":"not_evaluated","dense_fallback":degradation,"dense_capability":self.embedder.is_some()});
         Ok(ReadResponse { data, meta })
     }
 
@@ -320,9 +378,11 @@ impl Brain {
                     .read(move |c| oxibrain_store::read_evidence::frontier(c, &space))
                     .await?;
                 meta.scope["memory_frontier"] = frontier.into();
-                let (claims, names, _types, omitted) = self.visible_memory(&req.scope, now).await?;
+                let (claims, names, _types, omitted) =
+                    self.visible_memory(&req.scope, now, &req.text).await?;
+                meta.truth_selection = Some(omitted.clone());
                 meta.dropped
-                    .insert("truth_group_incomplete".into(), omitted);
+                    .insert("truth_group_incomplete".into(), omitted.omitted);
                 for c in claims.iter().filter(|c| c.profile_relevant).take(30) {
                     let mut u = EvidenceUnit::new(
                         LayerKind::Profile,
@@ -340,7 +400,18 @@ impl Brain {
                 }
                 if !req.hints.skip_beliefs {
                     let (hits, degradation, capped) = self
-                        .scoped_claim_hits(&claims, &names, &req.text, QueryMode::Hybrid, 96)
+                        .scoped_claim_hits(
+                            &claims,
+                            &names,
+                            &req.text,
+                            if self.read_policy.semantic_sources {
+                                QueryMode::Hybrid
+                            } else {
+                                QueryMode::Lexical
+                            },
+                            96,
+                            &mut meta.channels,
+                        )
                         .await?;
                     meta.dropped.insert("dense_candidate_cap".into(), capped);
                     if let Some(error) = degradation {
@@ -457,6 +528,29 @@ impl Brain {
                         );
                     }
                 }
+                for (offset, name) in [(0, "word"), (1, "ngram")] {
+                    let considered = channels.iter().skip(offset).step_by(2).map(Vec::len).sum();
+                    let mut receipt = oxibrain_core::read_channels::ChannelReceipt::lexical(
+                        "memory_sources",
+                        name,
+                        considered,
+                        channel_depth,
+                    );
+                    receipt.executed = !channels.is_empty();
+                    receipt.limit_reached = channels
+                        .iter()
+                        .skip(offset)
+                        .step_by(2)
+                        .any(|c| c.len() >= channel_depth);
+                    meta.channels.push(receipt);
+                }
+                let (semantic, receipt) = self
+                    .semantic_source_hits(&req.scope, &req.text, req.session_id.as_deref(), now)
+                    .await?;
+                meta.channels.push(receipt);
+                if !semantic.is_empty() {
+                    channels.push(semantic);
+                }
                 let channel_ids: Vec<Vec<String>> = channels
                     .iter()
                     .map(|ch| ch.iter().map(|h| h.id.clone()).collect())
@@ -539,43 +633,36 @@ impl Brain {
                 }
             }
             if req.planes.contains(&SearchPlane::Documents) {
-                let response = self
-                    .search_with_scope(SearchRequest {
-                        text: req.text.clone(),
-                        scope: ReadScope::current(req.scope.space.clone()),
-                        planes: [SearchPlane::Documents].into_iter().collect(),
-                        mode: QueryMode::Lexical,
-                        limit: 64,
-                    })
+                let (response, document_units) = self
+                    .search_unscoped(
+                        Query {
+                            text: req.text.clone(),
+                            space: req.scope.space.clone(),
+                            mode: if self.read_policy.semantic_sources {
+                                QueryMode::Hybrid
+                            } else {
+                                QueryMode::Lexical
+                            },
+                            as_of: None,
+                            limit: 64,
+                            min_confidence: 0.0,
+                            planes: [SearchPlane::Documents].into_iter().collect(),
+                        },
+                        true,
+                    )
                     .await?;
-                meta.freshness = response.data.freshness;
-                meta.scope["document_generations"] =
-                    response.meta.scope["document_generations"].clone();
-                document_receipts = response.data.documents.clone();
-                for h in response.data.documents {
-                    let mut source = coordinate(
-                        h.text.provenance.reference.clone(),
-                        h.revision,
-                        h.span_start,
-                        h.span_end,
-                    );
-                    source.view = "decoded-utf8/1".into();
-                    source.view_digest = Some(h.view_digest);
-                    source.decoder = Some(h.decoder);
-                    source.document_uuid = h.document_uuid;
-                    let mut unit = EvidenceUnit::new(
-                        LayerKind::Documents,
-                        h.text.text,
-                        source,
-                        "untrusted_observation",
-                    );
-                    unit.variants = oxibrain_core::evidence::quotation_variants(
-                        &unit.text,
-                        &unit.source,
-                        &req.text,
-                    );
-                    units.push(unit);
-                }
+                meta.channels.extend(response.freshness.channels.clone());
+                meta.freshness = response.freshness;
+                meta.scope["document_generations"] = serde_json::to_value(
+                    response
+                        .documents
+                        .iter()
+                        .map(|h| (h.root.clone(), h.root_generation))
+                        .collect::<BTreeMap<_, _>>(),
+                )
+                .expect("generation serializes");
+                document_receipts = response.documents;
+                units.extend(document_units);
             }
             let counter = crate::read_counter::ReadCounter::new(self.tokenizer.as_ref());
             let mut result = oxibrain_core::evidence_pack::pack_evidence_with_policy(
@@ -655,10 +742,20 @@ impl Brain {
                 || meta.freshness.unavailable_hits > 0;
             meta.layers_kept = result.context.layers.len();
             meta.tokens = Some(
-                serde_json::json!({"spent":result.context.total_tokens,"budget":req.budget.max_tokens,"counted_by":self.tokenizer.id(),"artifact_digest":self.tokenizer.artifact_digest(),"exact":exact,"render":"context_render/1"}),
+                serde_json::json!({"spent":result.context.total_tokens,"budget":req.budget.max_tokens,"counted_by":self.tokenizer.id(),"artifact_digest":self.tokenizer.artifact_digest(),"exact":exact,"render":if self.read_policy.compact_evidence {"context_render/2"} else {"context_render/1"}}),
             );
-            let degradation = meta.execution.get("dense_fallback").cloned();
-            meta.execution = serde_json::json!({"partial":degradation.is_some()||meta.index_coverage["complete"]==false||meta.dropped.get("truth_group_incomplete").copied().unwrap_or(0)>0||!meta.freshness.skipped_roots.is_empty()||meta.freshness.unavailable_hits>0,"answerability":"not_evaluated","dense_configured":self.embedder.is_some(),"dense_fallback":degradation,"source_channels":["word","ngram"],"loss_scope":"normalized considered candidates; unseen index tails are not enumerated"});
+            let degradation = meta.execution.get("dense_fallback").cloned().or_else(|| {
+                meta.channels
+                    .iter()
+                    .find_map(|c| c.fallback.clone().map(serde_json::Value::String))
+            });
+            let source_channels: BTreeSet<_> = meta
+                .channels
+                .iter()
+                .filter(|c| c.executed && (c.plane == "memory_sources" || c.plane == "documents"))
+                .map(|c| c.channel.as_str())
+                .collect();
+            meta.execution = serde_json::json!({"partial":meta.channels.iter().any(|c|c.partial())||meta.truth_selection.as_ref().is_some_and(|r|r.truncated_seeds>0)||degradation.is_some()||meta.index_coverage["complete"]==false||meta.dropped.get("truth_group_incomplete").copied().unwrap_or(0)>0||!meta.freshness.skipped_roots.is_empty()||meta.freshness.unavailable_hits>0,"answerability":"not_evaluated","dense_configured":self.embedder.is_some(),"dense_fallback":degradation,"source_channels":source_channels,"loss_scope":"normalized considered candidates; unseen index tails are not enumerated"});
             return Ok(ReadResponse { data: result, meta });
         }
         Err(BrainError::Busy("source changed during recall".into()))
@@ -671,6 +768,7 @@ impl Brain {
         text: &str,
         mode: QueryMode,
         maximum: usize,
+        receipts: &mut Vec<oxibrain_core::read_channels::ChannelReceipt>,
     ) -> Result<
         (
             Vec<oxibrain_core::visible_memory::ClaimHit>,
@@ -683,6 +781,23 @@ impl Brain {
             Vec::new()
         } else {
             oxibrain_core::visible_memory::search_claims(claims, names, text, maximum)
+        };
+        let mut lexical_receipt = oxibrain_core::read_channels::ChannelReceipt::lexical(
+            "memory_claims",
+            "ngram",
+            lexical.len(),
+            maximum,
+        );
+        lexical_receipt.eligible = mode != QueryMode::Dense;
+        lexical_receipt.executed = mode != QueryMode::Dense;
+        receipts.push(lexical_receipt);
+        let mut receipt = oxibrain_core::read_channels::ChannelReceipt {
+            plane: "memory_claims".into(),
+            channel: "dense".into(),
+            eligible: mode != QueryMode::Lexical && self.embedder.is_some(),
+            model_identity: self.embedding_identity.clone(),
+            total: Some(claims.len()),
+            ..Default::default()
         };
         let mut dense = Vec::new();
         let mut degradation = None;
@@ -702,6 +817,9 @@ impl Brain {
                     texts.push(rendered);
                 }
                 capped = claims.len().saturating_sub(ids.len());
+                receipt.indexed = Some(ids.len());
+                receipt.considered = ids.len();
+                receipt.capped = capped > 0;
                 if !ids.is_empty() {
                     let embedder = embedder.clone();
                     let dimension = embedder.dim();
@@ -721,6 +839,7 @@ impl Brain {
                                         && v.iter().all(|x| x.is_finite())
                                 }) =>
                         {
+                            receipt.executed = true;
                             dense = oxibrain_core::visible_memory::cosine_scores(&ids, &vectors)
                         }
                         Ok(_) => {
@@ -735,6 +854,8 @@ impl Brain {
                 ));
             }
         }
+        receipt.fallback = degradation.clone();
+        receipts.push(receipt);
         Ok((
             oxibrain_core::visible_memory::combine_claim_hits(
                 claims,

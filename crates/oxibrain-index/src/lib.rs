@@ -9,6 +9,7 @@ pub mod community;
 pub mod knn;
 pub mod ngram;
 pub mod quantize;
+pub mod quantized_distance;
 pub mod rrf;
 pub mod spec;
 pub mod vector;

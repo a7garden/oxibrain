@@ -422,4 +422,9 @@ become truth. Existing public-benchmark deferrals remain unchanged.
 The first milestone rollback is a ranking-policy rebuild where possible. An
 older binary cannot open schema 15: binary rollback requires a verified backup
 restored to a new directory, following the existing detached-restore contract.
+Post-M12 follow-up authorized 2026-10-24: implement source semantic indexing and
+channel receipts, relevant complete truth-group selection, canonical packing
+reuse, and conflict/abstention evaluation (ADR-020). The broad live quality gate
+remains independent of implementation completion.
+
 No downgrade, source conversion or bulk re-extraction is part of M12.

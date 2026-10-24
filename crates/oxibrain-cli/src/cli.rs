@@ -166,9 +166,10 @@ pub enum AdminCmd {
         #[command(subcommand)]
         command: ModelCmd,
     },
-    /// Run the extraction evaluation suite (DESIGN §14.2).
+    /// Run extraction or source-recall evaluations.
     Eval {
-        /// Suite: `fast` (fixture-replayed, no network) or `full` (live provider).
+        /// Suite: `fast` (cached extraction), `recall` (source spans),
+        /// `reader` (live reader only), or `full` (live extraction and reader).
         #[arg(long, default_value = "fast")]
         suite: String,
     },
@@ -195,10 +196,13 @@ pub enum AdminCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum SkillCmd {
-    /// Install to a target: `omp` (~/.omp/skills/oxibrain), `claude`
-    /// (~/.claude/skills/oxibrain), or `raw` (print to stdout).
+    /// Install to `omp`, `claude`, or `codex`, or print to stdout with `raw`.
     Install {
-        #[arg(long, default_value = "omp")]
+        #[arg(
+            long,
+            default_value = "omp",
+            help = "Install target: omp, claude, codex, or raw (default: omp)"
+        )]
         target: String,
     },
 }

@@ -5,6 +5,41 @@ squash-merged.
 
 
 
+## [Unreleased]
+
+## [0.21.0] — 2026-10-24
+
+### Added
+
+- Optional dense recall over document and primary/session source windows, without requiring extraction. Schema 16 adds rebuildable model/revision/window-bound memory vectors and explicit `admin index --memory --embed`.
+- Per-channel execution, coverage, cap and fallback receipts; query-relevant complete truth-group selection with scoped historical identity inputs and selection/source-count receipts.
+- Frozen multilingual source controls, four-arm live conflict/condition/abstention evaluation via `admin eval --suite reader`, and explicit release cost measurements. The broad supported-answer quality gate remains open.
+- Optional compact source labels with complete coordinate maps and text offsets; a consumer-side quote/condition envelope rejects invented citations and inconsistent actions without claiming entailment.
+- A pinned, separately labelled LongMemEval-S external retrieval runner with evaluator-only gold, complete session histories and source-range metrics.
+- Generated agent-skill frontmatter, scope/receipt/condition guidance, and a Codex install target honoring `CODEX_HOME`.
+
+### Fixed
+
+- Expand matching document headings into complete supporting sections and apply document space/trash eligibility before dense top-k.
+- Share process-wide llama.cpp initialization between local inference and embedding adapters; model combinations no longer panic on a second initialization.
+- Update Tokio to 1.53.3 for RUSTSEC-2026-0386.
+- Preserve signed int8 components in document/entity KNN distance instead of rounding most components to zero or comparing negative bytes as unsigned.
+- Expand bounded natural-question components through both lexical channels; preserve complete peer conditions, global retrieval order and stable FTS ties.
+- Preflight complete encoder sequences against configured/model context limits and size physical batches before native decode, preventing a process abort on inputs above the default micro-batch size.
+- Stage new release assets in a draft, verify checksum/archive contents/ARM64 architecture/version after download, and reject replacement of published assets.
+
+### Compatibility
+
+- Memory stores migrate to schema 16; older binaries cannot reopen an upgraded store. Document formats and the sixteen-tool MCP surface are unchanged.
+- Read policy version 3 adds optional semantic-source, scan/group and compact-render settings; existing serialized policy fields retain their defaults.
+
+### Changed
+
+- Pin development, CI and release builds to Rust 1.99.1; retain MSRV 1.96 with a dedicated CI check.
+- Adopt fixed-size array slices for vector decoding and quantization to satisfy Rust 1.99 Clippy without changing byte handling.
+- Render recall evidence directly into its output buffer, avoiding temporary formatting and support-list strings while preserving output bytes.
+- Reuse accepted context renders and unchanged layer token counts while preserving exact whole-context tokenization and byte-equivalent evidence.
+
 ## [0.20.1] — 2026-10-23
 
 ### Fixed

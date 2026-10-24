@@ -9,7 +9,8 @@
 # why oxibrain-client may not dev-depend on oxibrain-mcp (publish cycle).
 #
 # Usage:
-#   scripts/publish.sh               # publish (requires CARGO_REGISTRY_TOKEN)
+#   RELEASE_TAG=vX.Y.Z scripts/publish.sh  # publish tagged version
+#       (requires CARGO_REGISTRY_TOKEN and a matching checked-out tag)
 #   scripts/publish.sh --order-only  # print the computed order and exit
 
 set -euo pipefail
@@ -21,7 +22,7 @@ cd "$(dirname "$0")/.."
 # step on the Linux runner cannot compile it at all.
 # The `cargo build --workspace` + `cargo test --workspace` gates in the
 # publish workflow already compile and test these exact sources.
-NO_VERIFY="oxibrain-embed-local oxibrain-llm-local oxibrain-llm-mlx"
+NO_VERIFY="oxibrain-llama-runtime oxibrain-embed-local oxibrain-llm-local oxibrain-llm-mlx"
 
 order() {
   python3 - <<'PY'
@@ -73,6 +74,26 @@ PY
 if [[ "${1:-}" == "--order-only" ]]; then
   order
   exit 0
+fi
+
+if [[ -z "${RELEASE_TAG:-}" || "$RELEASE_TAG" != v* ]]; then
+  echo "publishing requires RELEASE_TAG=vX.Y.Z and a matching checked-out tag" >&2
+  exit 1
+fi
+tag_ref="refs/tags/$RELEASE_TAG"
+if ! git show-ref --verify --quiet "$tag_ref" || \
+  [[ "$(git rev-parse "$tag_ref^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+  echo "HEAD must be the checked-out release tag $RELEASE_TAG" >&2
+  exit 1
+fi
+tag_version="${RELEASE_TAG#v}"
+versions="$(cargo metadata --format-version 1 --no-deps | python3 -c '
+import json, sys
+print("\n".join(sorted({package["version"] for package in json.load(sys.stdin)["packages"]})))
+')"
+if [[ "$versions" != "$tag_version" ]]; then
+  echo "release tag $RELEASE_TAG does not match workspace version(s): $versions" >&2
+  exit 1
 fi
 
 publish() {

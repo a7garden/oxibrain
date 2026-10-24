@@ -68,7 +68,7 @@ impl LocalLlm {
     /// Load a GGUF model from `path`. Returns `BrainError::Model` on missing
     /// or corrupt weights — never panics.
     pub fn open(path: &Path, opts: LocalLlmOptions) -> Result<Self, BrainError> {
-        let backend = llama_backend();
+        let backend = llama_backend()?;
         let params = llama_cpp_2::model::params::LlamaModelParams::default()
             .with_n_gpu_layers(opts.n_gpu_layers);
         let model = LlamaModel::load_from_file(backend, path, &params).map_err(|e| {
@@ -104,23 +104,8 @@ impl LocalLlm {
 /// installed elsewhere in the process cannot resurrect the noise. When the
 /// env var is set, the default callback is left in place: byte-identical
 /// stderr passthrough, as before this hook existed.
-fn llama_backend() -> &'static llama_cpp_2::llama_backend::LlamaBackend {
-    use llama_cpp_2::llama_backend::LlamaBackend;
-    use std::sync::LazyLock;
-    static BACKEND: LazyLock<LlamaBackend> = LazyLock::new(|| {
-        if !verbose_c_logs() {
-            llama_cpp_2::send_logs_to_tracing(
-                llama_cpp_2::LogOptions::default().with_logs_enabled(false),
-            );
-        }
-        LlamaBackend::init().expect("llama.cpp backend init failed")
-    });
-    &BACKEND
-}
-
-/// `OXIBRAIN_VERBOSE=1` opts back into llama.cpp's default stderr logging.
-fn verbose_c_logs() -> bool {
-    std::env::var("OXIBRAIN_VERBOSE").is_ok_and(|v| v == "1")
+fn llama_backend() -> Result<&'static llama_cpp_2::llama_backend::LlamaBackend, BrainError> {
+    oxibrain_llama_runtime::backend()
 }
 
 // ─── LlmPort ────────────────────────────────────────────────────────────────
@@ -288,7 +273,7 @@ fn generate_blocking(
     use llama_cpp_2::model::AddBos;
     use llama_cpp_2::sampling::LlamaSampler;
 
-    let backend = llama_backend();
+    let backend = llama_backend()?;
 
     // Build the chat-formatted prompt. Qwen-style delimiters work for most
     // modern instruct models (Qwen, Llama 3, Mistral).

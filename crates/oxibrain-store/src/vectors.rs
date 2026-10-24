@@ -17,7 +17,7 @@
 //! before opening any connection (other vec0 tables may exist).
 
 use crate::sql_err;
-use oxibrain_index::{dequantize_i8, quantize_i8_unit};
+use oxibrain_index::{dequantize_i8, quantize_i8_unit, quantized_distance::l2_i8};
 use oxibrain_ports::BrainError;
 use rusqlite::{Connection, params};
 
@@ -31,12 +31,11 @@ pub fn upsert_vector(
     entity_id: &str,
     embedding: &[f32],
 ) -> Result<(), BrainError> {
-    assert_eq!(
-        embedding.len(),
-        EMBEDDING_DIM,
-        "embedding dimension mismatch: expected {EMBEDDING_DIM}, got {}",
-        embedding.len()
-    );
+    if embedding.len() != EMBEDDING_DIM || embedding.iter().any(|v| !v.is_finite()) {
+        return Err(BrainError::Invalid(
+            "invalid entity embedding dimensions/values".into(),
+        ));
+    }
     conn.execute(
         "INSERT OR REPLACE INTO entity_vectors(entity_id, embedding) VALUES (?1, ?2)",
         params![entity_id, quantize_i8_unit(embedding)],
@@ -94,12 +93,11 @@ pub fn knn_search(
     query: &[f32],
     k: usize,
 ) -> Result<Vec<VectorHit>, BrainError> {
-    assert_eq!(
-        query.len(),
-        EMBEDDING_DIM,
-        "query dimension mismatch: expected {EMBEDDING_DIM}, got {}",
-        query.len()
-    );
+    if query.len() != EMBEDDING_DIM || query.iter().any(|v| !v.is_finite()) {
+        return Err(BrainError::Invalid(
+            "invalid entity query dimensions/values".into(),
+        ));
+    }
     let q = quantize_i8_unit(query);
     let mut stmt = conn
         .prepare("SELECT entity_id, embedding FROM entity_vectors")
@@ -112,24 +110,18 @@ pub fn knn_search(
     let mut scored: Vec<VectorHit> = Vec::new();
     for row in rows {
         let (entity_id, blob) = row.map_err(sql_err)?;
-        // Exact integer L2 (ADR-014): both sides are int8, so the distance
-        // is computed on the integer domain — self-query is exactly 0.
-        let stored: &[u8] = &blob;
-        let dist: f64 = q
-            .iter()
-            .zip(stored)
-            .map(|(&a, &b)| {
-                let d = (a as i64) - (b as i8 as i64);
-                (d * d) as f64
-            })
-            .sum::<f64>()
-            .sqrt();
+        let dist = l2_i8(&q, &blob)
+            .ok_or_else(|| BrainError::Corruption("invalid entity vector dimensions".into()))?;
         scored.push(VectorHit {
             entity_id,
             distance: dist,
         });
     }
-    scored.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    scored.sort_by(|a, b| {
+        a.distance
+            .total_cmp(&b.distance)
+            .then(a.entity_id.cmp(&b.entity_id))
+    });
     scored.truncate(k);
     Ok(scored)
 }
@@ -172,6 +164,10 @@ mod tests {
             .unwrap();
         assert_eq!(len as usize, EMBEDDING_DIM, "int8 blob");
 
+        let negative = knn_search(&conn, &v2, 1).unwrap();
+        assert_eq!(negative[0].entity_id, "e2");
+        assert_eq!(negative[0].distance, 0.0);
+        assert!(knn_search(&conn, &[f32::NAN; EMBEDDING_DIM], 1).is_err());
         // KNN search: v1 should be closest to itself.
         let hits = knn_search(&conn, &v1, 2).unwrap();
         assert_eq!(hits.len(), 2);

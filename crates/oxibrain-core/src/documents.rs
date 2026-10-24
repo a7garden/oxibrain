@@ -278,3 +278,136 @@ pub fn chunk_id(document_id: &str, revision: &str, ordinal: u32) -> String {
         ("ordinal", ord.as_str()),
     ]))
 }
+
+/// A heading's UTF-8 byte range in the same decoded view as document chunks.
+/// This transient retrieval metadata never changes the source or cached text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentHeading {
+    pub start: usize,
+    pub end: usize,
+    pub level: u8,
+}
+
+/// Select a complete section for a heading or body hit. Descendant sections
+/// belong to their parent; the next peer or ancestor ends the range. No partial
+/// section is manufactured to fit a budget. Short heading-free documents can
+/// be read whole, while unsafe body-only fallbacks are rejected.
+pub fn recall_document_range(
+    text: &str,
+    headings: &[DocumentHeading],
+    hit: std::ops::Range<usize>,
+    query: &str,
+    short_document_bytes: usize,
+) -> Option<std::ops::Range<usize>> {
+    let mut ranges = recall_document_ranges(text, headings, hit, query, short_document_bytes)?;
+    (ranges.len() == 1).then(|| ranges.remove(0))
+}
+
+/// Select complete sections for a selected source hit. A chunk spanning peers
+/// may yield several distinct query matches; a whole-view chunk with no lexical
+/// section signal remains whole so dense-only retrieval keeps its uncertainty.
+pub fn recall_document_ranges(
+    text: &str,
+    headings: &[DocumentHeading],
+    hit: std::ops::Range<usize>,
+    query: &str,
+    short_document_bytes: usize,
+) -> Option<Vec<std::ops::Range<usize>>> {
+    text.get(hit.clone())?;
+    if headings.is_empty() {
+        return Some(vec![if text.len() <= short_document_bytes {
+            0..text.len()
+        } else {
+            hit
+        }]);
+    }
+
+    // A lexical chunk can hit the heading itself or any body text below it.
+    // Select the outermost complete section containing the whole hit. This
+    // keeps parent-level conditions and all child subsections together.
+    let mut sections = Vec::new();
+    for (index, heading) in headings.iter().enumerate() {
+        if heading.level == 0
+            || heading.start >= heading.end
+            || text.get(heading.start..heading.end).is_none()
+        {
+            continue;
+        }
+        let end = headings[index + 1..]
+            .iter()
+            .find(|next| {
+                next.level > 0
+                    && next.start >= heading.end
+                    && next.start <= text.len()
+                    && text.is_char_boundary(next.start)
+                    && next.level <= heading.level
+            })
+            .map_or(text.len(), |next| next.start);
+        let section = heading.start..end;
+        sections.push((heading.level, section));
+    }
+
+    let mut selected: Option<(u8, std::ops::Range<usize>)> = None;
+    for (level, section) in &sections {
+        if section.start <= hit.start
+            && hit.end <= section.end
+            && selected.as_ref().is_none_or(|(best_level, best_range)| {
+                level < best_level || (level == best_level && section.len() > best_range.len())
+            })
+        {
+            selected = Some((*level, section.clone()));
+        }
+    }
+    if let Some((_, section)) = selected {
+        return Some(vec![section]);
+    }
+
+    // A chunk can itself straddle peer sections. In that case use the same
+    // bounded, language-neutral query terms and trigrams to select the section
+    // that actually matched; never return the mixed chunk as a body-only
+    // fallback. Byte-source coordinates remain those of this decoded view.
+    // This also narrows a whole-document chunk when it contains a lexical hit;
+    // only a query with no section signal keeps the whole source intact.
+    let whole_document_hit = hit.start == 0 && hit.end == text.len();
+    let plan = crate::query_candidates::LexicalQueryPlan::new(query);
+    let mut scored_sections = Vec::new();
+    for (_, section) in sections {
+        let start = hit.start.max(section.start);
+        let end = hit.end.min(section.end);
+        if start >= end {
+            continue;
+        }
+        let Some(body) = text.get(section.clone()) else {
+            continue;
+        };
+        let score = plan.relevance(body);
+        if score == crate::query_candidates::LexicalRelevance::default() {
+            continue;
+        }
+        scored_sections.push((score, section));
+    }
+    // A stronger query match ranks a candidate first; it does not establish
+    // that another independently matched section is redundant. Preserve every
+    // lexical-signal peer so opposing conditions remain available as evidence.
+    let mut selected: Vec<_> = scored_sections
+        .into_iter()
+        .map(|(_, section)| section)
+        .collect();
+    // Prefer the complete outer section when a parent and one of its children
+    // both carry the query signal. That preserves the parent condition without
+    // duplicating a nested subsection as a second evidence unit.
+    let all_selected = selected.clone();
+    selected.retain(|section| {
+        !all_selected.iter().any(|other| {
+            other.start <= section.start
+                && section.end <= other.end
+                && (other.start < section.start || section.end < other.end)
+        })
+    });
+    selected.sort_by_key(|section| section.start);
+    if !selected.is_empty() {
+        Some(selected)
+    } else {
+        whole_document_hit.then_some(vec![hit])
+    }
+}

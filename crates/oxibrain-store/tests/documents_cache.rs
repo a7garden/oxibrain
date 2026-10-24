@@ -564,6 +564,130 @@ fn search_fts_quotes_punctuation() {
 }
 
 #[test]
+fn search_fts_many_returns_independent_natural_question_candidates_and_breadth() {
+    use oxibrain_store::documents::{ApplyPlan, RootApply};
+    let dir = TempDir::new().unwrap();
+    let cache = open(dir.path());
+    let files = [
+        (
+            "target.md",
+            "Kestrel-841 is available only if health-check fails.",
+        ),
+        ("decoy-a.md", "release release release planning note"),
+        ("decoy-b.md", "release release release schedule note"),
+    ];
+    cache
+        .apply(&ApplyPlan {
+            root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
+            roots: vec![RootApply {
+                fingerprint: fp("vault", "personal"),
+                expected_generation: 0,
+                actions: files
+                    .iter()
+                    .map(|(path, text)| FileAction::Add(obs(path, text.len() as u64, "rev1")))
+                    .collect(),
+                upserts: files
+                    .iter()
+                    .map(|(path, text)| ups(path, "rev1", text, 1))
+                    .collect(),
+            }],
+        })
+        .unwrap();
+
+    let queries = vec![
+        "Which recovery should run when the validation check fails?".to_owned(),
+        "Kestrel-841".to_owned(),
+        "release".to_owned(),
+    ];
+    let results = cache
+        .search_fts_many("personal", FtsTable::Word, &queries, 4)
+        .unwrap();
+    assert_eq!(results.len(), 3);
+    assert!(
+        results[0].hits.is_empty(),
+        "the question is an implicit-AND miss"
+    );
+    assert_eq!(results[1].breadth, 1);
+    assert_eq!(results[1].hits.len(), 1);
+    assert_eq!(results[2].breadth, 2);
+    assert_eq!(results[2].hits.len(), 2);
+
+    let ngrams = cache
+        .search_fts_many(
+            "personal",
+            FtsTable::Ngram,
+            &["est".to_owned(), "ava".to_owned()],
+            4,
+        )
+        .unwrap();
+    assert!(
+        ngrams[0]
+            .hits
+            .iter()
+            .any(|(id, _)| id == &results[1].hits[0].0)
+    );
+    assert!(
+        ngrams[1]
+            .hits
+            .iter()
+            .any(|(id, _)| id == &results[1].hits[0].0)
+    );
+}
+
+#[test]
+fn search_fts_many_breaks_equal_rank_ties_by_chunk_id_before_limit() {
+    use oxibrain_store::documents::{ApplyPlan, RootApply};
+    let dir = TempDir::new().unwrap();
+    let cache = open(dir.path());
+    let files = ["z.md", "a.md", "m.md"];
+    let text = "Kestrel-841 has identical indexed wording.";
+    cache
+        .apply(&ApplyPlan {
+            root_actions: vec![("vault".to_owned(), RootAction::KeepRoot)],
+            roots: vec![RootApply {
+                fingerprint: fp("vault", "personal"),
+                expected_generation: 0,
+                actions: files
+                    .iter()
+                    .map(|path| FileAction::Add(obs(path, text.len() as u64, "rev1")))
+                    .collect(),
+                upserts: files
+                    .iter()
+                    .map(|path| ups(path, "rev1", text, 1))
+                    .collect(),
+            }],
+        })
+        .unwrap();
+
+    let query = vec!["Kestrel-841".to_owned()];
+    let all = cache
+        .search_fts_many("personal", FtsTable::Word, &query, 3)
+        .unwrap()
+        .remove(0);
+    assert_eq!(all.hits.len(), 3);
+    assert_eq!(all.hits[0].1, all.hits[1].1);
+    assert_eq!(all.hits[1].1, all.hits[2].1);
+    let mut expected: Vec<_> = all.hits.iter().map(|(id, _)| id.clone()).collect();
+    expected.sort();
+    assert_eq!(
+        all.hits
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+
+    let capped = cache
+        .search_fts_many("personal", FtsTable::Word, &query, 2)
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        capped.hits.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        all.hits[..2].iter().map(|(id, _)| id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn meta_get_and_set_roundtrip() {
     let dir = TempDir::new().unwrap();
     let cache = open(dir.path());
@@ -634,18 +758,18 @@ fn knn_returns_nearest_chunk_ids() {
         .unwrap();
 
     // Query with the near vector: ids[0] must rank first (smallest L2).
-    let hits = cache.knn(&near, 2).unwrap();
+    let hits = cache.knn("personal", &near, 2).unwrap();
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].0, ids[0]);
     assert!(hits[0].1 <= hits[1].1, "hits must be distance-ascending");
 
     // limit=1 returns just the nearest.
-    let hits = cache.knn(&near, 1).unwrap();
+    let hits = cache.knn("personal", &near, 1).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].0, ids[0]);
 
     // Dimension mismatch is a typed error, not a panic.
-    let err = cache.knn(&[0.0f32; 8], 1).unwrap_err();
+    let err = cache.knn("personal", &[0.0f32; 8], 1).unwrap_err();
     assert!(matches!(err, BrainError::Invalid(_)));
 }
 
@@ -818,4 +942,136 @@ fn doc_texts_is_the_single_body_copy() {
         .query_row("SELECT COUNT(*) FROM doc_texts", [], |r| r.get(0))
         .unwrap();
     assert_eq!(bodies, 0, "doc_texts empties with the document");
+}
+
+#[test]
+fn scoped_knn_excludes_trash_missing_vectors_and_other_spaces_before_top_k() {
+    use oxibrain_core::documents::PdcProjectionMeta;
+    use oxibrain_store::documents::{ApplyPlan, PdcProjectionUpsert, RootApply};
+    let dir = TempDir::new().unwrap();
+    let cache = open(dir.path());
+    for (alias, space) in [("wanted", "personal"), ("outside", "other")] {
+        cache
+            .apply(&add_plan(alias, space, &[("a.md", "rev1")]))
+            .unwrap();
+    }
+    let mut trashed = ups("trash.md", "rev1", "deleted", 1);
+    trashed.pdc = Some(PdcProjectionUpsert {
+        uuid: "018f47c6-4a77-7c52-9db8-000000000001".into(),
+        body_profile: "pdc-markdown/1".into(),
+        meta: PdcProjectionMeta {
+            deleted: true,
+            ..Default::default()
+        },
+    });
+    cache
+        .apply(&ApplyPlan {
+            root_actions: vec![],
+            roots: vec![RootApply {
+                fingerprint: fp("wanted", "personal"),
+                expected_generation: 1,
+                actions: vec![FileAction::Add(obs("trash.md", 7, "rev1"))],
+                upserts: vec![trashed],
+            }],
+        })
+        .unwrap();
+    let all: Vec<String> = cache
+        .conn
+        .prepare("SELECT id FROM doc_chunks ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let chunks = cache
+        .chunks(&all.iter().map(String::as_str).collect::<Vec<_>>())
+        .unwrap();
+    let mut vectors = Vec::new();
+    let mut eligible = Vec::new();
+    for chunk in chunks {
+        let mut v = vec![0.0; EMBEDDING_DIM];
+        if chunk.root_alias == "wanted" && chunk.locator != "trash.md" {
+            v[1] = 1.0;
+            eligible.push(chunk.chunk_id.clone());
+        } else {
+            v[0] = 1.0;
+        }
+        vectors.push((chunk.chunk_id, v));
+    }
+    // Leave one eligible chunk without a vector.
+    let missing = eligible.pop().unwrap();
+    vectors.retain(|(id, _)| id != &missing);
+    cache.upsert_vectors(&vectors).unwrap();
+    let mut q = vec![0.0; EMBEDDING_DIM];
+    q[0] = 1.0;
+    let hits = cache.knn("personal", &q, 1).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(eligible.contains(&hits[0].0));
+    assert!(cache.knn("absent", &q, 1).unwrap().is_empty());
+    assert!(cache.knn("personal", &q, 0).unwrap().is_empty());
+    // Equal-distance results are ordered by stable chunk identity.
+    cache
+        .upsert_vectors(&[(
+            missing.clone(),
+            vectors
+                .iter()
+                .find(|(id, _)| eligible.contains(id))
+                .unwrap()
+                .1
+                .clone(),
+        )])
+        .unwrap();
+    eligible.push(missing);
+    eligible.sort();
+    let hits = cache.knn("personal", &q, 20).unwrap();
+    assert_eq!(
+        hits.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+        eligible
+    );
+}
+
+#[test]
+fn dense_small_signed_embeddings_preserve_identity_and_change_query_order() {
+    let dir = TempDir::new().unwrap();
+    let cache = open(dir.path());
+    cache
+        .apply(&add_plan("vault", "personal", &[("notes/a.md", "rev1")]))
+        .unwrap();
+    let ids: Vec<String> = cache
+        .conn
+        .prepare("SELECT id FROM doc_chunks ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let a: Vec<_> = (0..EMBEDDING_DIM)
+        .map(|i| if i % 2 == 0 { 0.02 } else { -0.03 })
+        .collect();
+    let b: Vec<_> = a.iter().map(|v| -v).collect();
+    cache
+        .upsert_vectors(&[(ids[0].clone(), a.clone()), (ids[1].clone(), b.clone())])
+        .unwrap();
+    for (expected, query) in [(&ids[0], &a), (&ids[1], &b)] {
+        let hits = cache.knn("personal", query, 2).unwrap();
+        assert_eq!(&hits[0].0, expected);
+        assert_eq!(hits[0].1, 0.0);
+        assert!(hits[1].1 > 0.0);
+    }
+    assert!(
+        cache
+            .knn("personal", &[f32::NAN; EMBEDDING_DIM], 1)
+            .is_err()
+    );
+    cache
+        .conn
+        .execute(
+            "UPDATE doc_vectors SET embedding=x'00' WHERE chunk_id=?1",
+            [&ids[0]],
+        )
+        .unwrap();
+    assert!(matches!(
+        cache.knn("personal", &a, 1),
+        Err(BrainError::Corruption(_))
+    ));
 }

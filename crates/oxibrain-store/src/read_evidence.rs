@@ -170,7 +170,7 @@ pub fn truth_input(
     conn: &Connection,
     space: &str,
     known_at: Timestamp,
-    maximum: usize,
+    selected: &[oxibrain_core::truth_selection::GroupObservation],
 ) -> Result<TruthInput, BrainError> {
     let known_at = known_at.0;
     let mut definitions: std::collections::BTreeMap<_, _> = oxibrain_core::registry::core_v1()
@@ -191,73 +191,37 @@ pub fn truth_input(
             .map_err(|e| BrainError::Storage(format!("historical predicate: {e}")))?;
         definitions.insert(name, definition);
     }
-    let mut q=conn.prepare("SELECT id FROM episodes WHERE space_id=?1 AND redacted_at IS NULL AND ingested_at<=?2 ORDER BY seq").map_err(sql_err)?;
-    let live_sources = q
-        .query_map(params![space, known_at], |r| r.get(0))
-        .map_err(sql_err)?
-        .collect::<Result<_, _>>()
-        .map_err(sql_err)?;
-    let mut q=conn.prepare("SELECT s.subject_id,s.predicate, sum(length(a.id)+length(a.episode_id)+length(s.id)+coalesce(length(CAST(s.object_literal AS BLOB)),0)+256) FROM statements s JOIN assertions a ON a.statement_id=s.id WHERE s.space_id=?1 GROUP BY s.subject_id,s.predicate ORDER BY s.subject_id,s.predicate").map_err(sql_err)?;
-    let rows = q
-        .query_map([space], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, usize>(2)?,
-            ))
-        })
-        .map_err(sql_err)?;
     let mut groups = Vec::new();
-    let mut bytes = 0;
-    let mut omitted_groups = 0;
-    for row in rows {
-        let (subject, predicate, size) = row.map_err(sql_err)?;
-        if bytes + size > maximum {
-            omitted_groups += 1;
-            continue;
+    let mut live_sources = std::collections::BTreeSet::new();
+    let mut entities = std::collections::BTreeSet::new();
+    for group in selected {
+        let entries = crate::knowledge::get_statement_group_at(
+            conn,
+            space,
+            &group.subject,
+            &group.predicate,
+            Some(Timestamp(known_at)),
+        )?;
+        for entry in &entries {
+            entities.insert(entry.statement.subject.clone());
+            if let oxibrain_core::Object::Entity(id) = &entry.statement.object {
+                entities.insert(id.clone());
+            }
+            live_sources.extend(entry.assertions.iter().map(|a| a.episode.clone()));
         }
-        bytes += size;
-        groups.push(crate::knowledge::get_statement_group(
-            conn, space, &subject, &predicate,
-        )?);
+        groups.push(entries);
     }
-    // Verbatim mentions visible at K provide historical labels; no current alias
-    // or merge-following lookup is allowed to enrich these rows.
-    let mut q=conn.prepare("SELECT CASE m.role WHEN 'subject' THEN s.subject_id ELSE s.object_entity END,m.surface FROM mentions m JOIN assertions a ON a.id=m.assertion_id JOIN statements s ON s.id=a.statement_id JOIN episodes e ON e.id=a.episode_id WHERE s.space_id=?1 AND a.recorded_at<=?2 AND e.ingested_at<=?2 AND e.redacted_at IS NULL ORDER BY a.recorded_at,m.id").map_err(sql_err)?;
-    let rows = q
-        .query_map(params![space, known_at], |r| {
-            Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))
-        })
-        .map_err(sql_err)?;
-    let mut surfaces = std::collections::BTreeMap::new();
-    for r in rows {
-        let (id, surface) = r.map_err(sql_err)?;
-        if let Some(id) = id {
-            surfaces.entry(id).or_insert(surface);
-        }
-    }
-    let mut q=conn.prepare("SELECT id,type_name FROM entities WHERE space_id=?1 AND created_at<=?2 ORDER BY id LIMIT 20000").map_err(sql_err)?;
-    let entity_types = q
-        .query_map(params![space, known_at], |r| Ok((r.get(0)?, r.get(1)?)))
-        .map_err(sql_err)?
-        .collect::<Result<_, _>>()
-        .map_err(sql_err)?;
-    let merges = crate::knowledge::list_merges(conn, space)?;
-    let mut q=conn.prepare("SELECT m.id,json_extract(p.content,'$.winner.surface') FROM entity_merges m JOIN episodes p ON p.id=m.provenance WHERE p.space_id=?1 AND json_valid(p.content) AND json_extract(p.content,'$.op')='merge' ORDER BY m.id").map_err(sql_err)?;
-    let merge_surfaces = q
-        .query_map([space], |r| Ok((r.get(0)?, r.get(1)?)))
-        .map_err(sql_err)?
-        .collect::<Result<_, _>>()
-        .map_err(sql_err)?;
+    let identities = crate::truth_groups::identities(conn, space, Timestamp(known_at), &entities)?;
+    live_sources.extend(identities.merges.iter().map(|m| m.provenance.clone()));
     Ok(TruthInput {
-        merge_surfaces,
-        merges,
-        entity_types,
+        merge_surfaces: identities.merge_surfaces,
+        merges: identities.merges,
+        entity_types: identities.types,
         groups,
         definitions,
         live_sources,
-        surfaces,
-        omitted_groups,
+        surfaces: identities.surfaces,
+        omitted_groups: 0,
     })
 }
 

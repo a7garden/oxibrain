@@ -1,0 +1,8 @@
+{
+  "schema": "semantic-controls/1",
+  "date": "2026-10-24",
+  "questions": 10,
+  "trajectories": 5,
+  "sha256": "a73bf30274c35b340b5fe8fe01f6511412ea7ccfeff7e42eae4fd2ccb25f6fe4",
+  "annotation": "Authored paired multilingual/synonym vs exact-key controls over shared source occurrences; retrieval coverage only, no general model-quality claim."
+}

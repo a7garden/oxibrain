@@ -70,6 +70,11 @@ pub struct ReadPolicy {
     pub explanation_bytes: usize,
     pub profile_tokens: usize,
     pub recency_tokens: usize,
+    pub semantic_sources: bool,
+    /// Compact response-scoped citation IDs; full source maps stay in evidence.
+    pub compact_evidence: bool,
+    pub dense_scan_vectors: usize,
+    pub truth_group_cap: usize,
 }
 impl Default for ReadPolicy {
     fn default() -> Self {
@@ -84,11 +89,15 @@ impl Default for ReadPolicy {
             explanation_bytes: 16384,
             profile_tokens: 300,
             recency_tokens: 200,
+            semantic_sources: true,
+            compact_evidence: false,
+            dense_scan_vectors: 16384,
+            truth_group_cap: 256,
         }
     }
 }
 impl ReadPolicy {
-    pub const VERSION: &'static str = "read-policy/1";
+    pub const VERSION: &'static str = "read-policy/3";
     pub fn validate(&self) -> Result<(), BrainError> {
         if [
             self.channel_depth,
@@ -98,6 +107,8 @@ impl ReadPolicy {
             self.materialization_bytes,
             self.reconcile_entries,
             self.metadata_bytes,
+            self.dense_scan_vectors,
+            self.truth_group_cap,
         ]
         .contains(&0)
         {

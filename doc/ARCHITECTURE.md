@@ -1,5 +1,21 @@
 # oxibrain — Architecture
-> **Version:** v2.25 · **Date:** 2026-10-23 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.27 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.27 — Recall delivery and release readiness.** Signed int8 distance
+> remains in the integer domain; lexical candidates include bounded query
+> components in both indexes. Selected heading/body hits expand to their complete
+> section. Optional `context_render/2` uses response-scoped citation IDs bound by
+> the unchanged full provenance map; `context_render/1` remains the default.
+> Pure consumer delivery validation rejects invented IDs/quotes and inconsistent
+> answer actions, without claiming semantic entailment or changing trust. See
+> [ADR-021](adr/ADR-021-recall-delivery.md).
+> **v2.26 — Source semantic candidates and bounded truth selection.** Optional
+> document and raw primary/session vectors are disposable ranking state, bound
+> to model weights/options, source revision, decoder/window policy and space.
+> Explicit indexing builds vectors; reads never download models or build a semantic index.
+> Per-channel receipts distinguish eligibility, execution, coverage and fallback.
+> Query-relevant group identities are selected in core before complete assertion
+> groups consume the truth budget; ranking values never enter the fold. See
+> [ADR-020](adr/ADR-020-source-candidates-and-truth-selection.md).
 > **v2.25 — Reliable recall implementation (M12, quality gate open).**
 > Shared scoped search/recall, historical folding, source windows, pure evidence
 > packing and independent tokenizer binding are implemented in workspace 0.20.0.

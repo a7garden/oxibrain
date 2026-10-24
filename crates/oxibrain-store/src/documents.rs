@@ -26,7 +26,7 @@ use fs2::FileExt;
 use oxibrain_core::documents::{
     CachedFile, CachedRootMeta, FileAction, PdcProjectionMeta, RootAction, RootFingerprint,
 };
-use oxibrain_index::{dequantize_i8, quantize_i8_unit};
+use oxibrain_index::{quantize_i8_unit, quantized_distance::l2_i8};
 use oxibrain_ports::BrainError;
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, params};
@@ -47,6 +47,14 @@ pub enum FtsTable {
     Word,
     /// `doc_fts_ngram` — trigram tokenizer.
     Ngram,
+}
+
+/// Ranked matches and the full eligible breadth for one independently queried
+/// lexical candidate channel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FtsQueryResult {
+    pub hits: Vec<(String, f64)>,
+    pub breadth: usize,
 }
 
 /// Input plan for one atomic apply over `documents.db`.
@@ -566,12 +574,7 @@ impl DocumentCache {
         // the query (`?`, `(`, `:`, `*`, `-`, …) cannot break the MATCH
         // expression with a syntax error. A literal `"` inside a token is
         // escaped by doubling. Mirrors `query::fts_search` (query.rs:466-471).
-        let fts_query: String = query
-            .split_whitespace()
-            .filter(|s| !s.is_empty())
-            .map(|tok| format!("\"{}\"", tok.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let fts_query = literal_fts_query(query);
         if fts_query.is_empty() {
             return Ok(Vec::new());
         }
@@ -585,7 +588,7 @@ impl DocumentCache {
                  WHERE dc.id = {table_name}.chunk_id
                    AND COALESCE(d.pdc_deleted, 0) = 1
                )
-             ORDER BY rank
+             ORDER BY rank, chunk_id
              LIMIT ?3"
         );
         let mut stmt = self.conn.prepare(&sql).map_err(sql_err)?;
@@ -603,14 +606,87 @@ impl DocumentCache {
         Ok(out)
     }
 
-    /// Exact Rust-side L2 KNN over the int8 `doc_vectors` blobs (v2,
-    /// ADR-014). Returns `(chunk_id, distance asc)`.
+    /// Fetch bounded results for separate literal queries using one table and
+    /// one scope. The matching count is computed before `limit`, allowing core
+    /// fusion to discount broad terms even when their result lists saturate.
+    pub fn search_fts_many(
+        &self,
+        space: &str,
+        table: FtsTable,
+        queries: &[String],
+        limit: usize,
+    ) -> Result<Vec<FtsQueryResult>, BrainError> {
+        let table_name = match table {
+            FtsTable::Word => "doc_fts_word",
+            FtsTable::Ngram => "doc_fts_ngram",
+        };
+        let mut results = Vec::with_capacity(queries.len());
+        for query in queries {
+            let fts_query = literal_fts_query(query);
+            if fts_query.is_empty() {
+                results.push(FtsQueryResult {
+                    hits: Vec::new(),
+                    breadth: 0,
+                });
+                continue;
+            }
+            let sql = format!(
+                "SELECT chunk_id, rank
+                 FROM {table_name}
+                 WHERE {table_name} MATCH ?1 AND space = ?2
+                   AND NOT EXISTS (
+                     SELECT 1 FROM doc_chunks dc
+                     JOIN documents d ON d.id = dc.document_id
+                     WHERE dc.id = {table_name}.chunk_id
+                       AND COALESCE(d.pdc_deleted, 0) = 1
+                   )
+                 ORDER BY rank, chunk_id
+                 LIMIT ?3"
+            );
+            let mut stmt = self.conn.prepare(&sql).map_err(sql_err)?;
+            let rows = stmt
+                .query_map(params![&fts_query, space, limit as i64], |r| {
+                    let chunk_id: String = r.get(0)?;
+                    let rank: f64 = r.get(1)?;
+                    Ok((chunk_id, -rank))
+                })
+                .map_err(sql_err)?;
+            let mut hits = Vec::new();
+            for row in rows {
+                hits.push(row.map_err(sql_err)?);
+            }
+            let count_sql = format!(
+                "SELECT COUNT(*)
+                 FROM {table_name}
+                 WHERE {table_name} MATCH ?1 AND space = ?2
+                   AND NOT EXISTS (
+                     SELECT 1 FROM doc_chunks dc
+                     JOIN documents d ON d.id = dc.document_id
+                     WHERE dc.id = {table_name}.chunk_id
+                       AND COALESCE(d.pdc_deleted, 0) = 1
+                   )"
+            );
+            let breadth: i64 = self
+                .conn
+                .query_row(&count_sql, params![&fts_query, space], |r| r.get(0))
+                .map_err(sql_err)?;
+            let breadth = usize::try_from(breadth)
+                .map_err(|_| BrainError::Corruption("negative document FTS match count".into()))?;
+            results.push(FtsQueryResult { hits, breadth });
+        }
+        Ok(results)
+    }
+
+    /// Exact Rust-side L2 KNN over eligible int8 `doc_vectors` blobs (v2,
+    /// ADR-014). Space and trash eligibility precede scoring and top-k.
+    /// Returns `(chunk_id, distance asc)`, breaking ties by chunk identity.
     pub fn knn(
         &self,
+        space: &str,
         query_vector: &[f32],
         limit: usize,
     ) -> Result<Vec<(String, f64)>, BrainError> {
-        if query_vector.len() != EMBEDDING_DIM {
+        if query_vector.len() != EMBEDDING_DIM || query_vector.iter().any(|v| !v.is_finite()) {
             return Err(BrainError::Invalid(format!(
                 "doc_vectors query dimension mismatch: expected {EMBEDDING_DIM}, got {}",
                 query_vector.len()
@@ -619,51 +695,29 @@ impl DocumentCache {
         let q = quantize_i8_unit(query_vector);
         let mut stmt = self
             .conn
-            .prepare("SELECT chunk_id, embedding FROM doc_vectors")
+            .prepare(
+                "SELECT v.chunk_id, v.embedding FROM doc_vectors v
+                 JOIN doc_chunks c ON c.id = v.chunk_id
+                 JOIN documents d ON d.id = c.document_id
+                 WHERE c.space = ?1 AND COALESCE(d.pdc_deleted, 0) = 0",
+            )
             .map_err(sql_err)?;
         let rows = stmt
-            .query_map([], |r| {
+            .query_map(params![space], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
             })
             .map_err(sql_err)?;
         let mut scored: Vec<(String, f64)> = Vec::new();
         for row in rows {
             let (chunk_id, blob) = row.map_err(sql_err)?;
-            let stored = dequantize_i8(&blob);
-            // Exact integer-domain L2 (self-query is exactly 0).
-            let dist: f64 = q
-                .iter()
-                .zip(stored.iter().map(|&b| b as i8 as i64))
-                .map(|(&a, sb)| {
-                    let d = a as i64 - sb;
-                    (d * d) as f64
-                })
-                .sum::<f64>()
-                .sqrt();
+            let dist = l2_i8(&q, &blob).ok_or_else(|| {
+                BrainError::Corruption("invalid document vector dimensions".into())
+            })?;
             scored.push((chunk_id, dist));
         }
-        // Trash semantics (pdc-adoption-v2): canonical documents whose
-        // envelope says deleted:true stay indexed but out of default
-        // retrieval, on the dense channel exactly like the lexical one.
-        let mut trashed = self
-            .conn
-            .prepare(
-                "SELECT 1 FROM doc_chunks dc
-                 JOIN documents d ON d.id = dc.document_id
-                 WHERE dc.id = ?1 AND COALESCE(d.pdc_deleted, 0) = 1",
-            )
-            .map_err(sql_err)?;
-        let mut kept: Vec<(String, f64)> = Vec::with_capacity(scored.len());
-        for (chunk_id, dist) in scored {
-            match trashed.query_row(params![&chunk_id], |_r| Ok(())) {
-                Ok(()) => {}
-                Err(rusqlite::Error::QueryReturnedNoRows) => kept.push((chunk_id, dist)),
-                Err(e) => return Err(sql_err(e)),
-            }
-        }
-        kept.sort_by(|a, b| a.1.total_cmp(&b.1));
-        kept.truncate(limit);
-        Ok(kept)
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        scored.truncate(limit);
+        Ok(scored)
     }
 
     /// Load the cached chunk rows for a set of chunk IDs (order preserved).
@@ -773,6 +827,11 @@ impl DocumentCache {
         Ok((embedded as u64, total as u64))
     }
 
+    /// Coverage of eligible current documents, excluding trash before counting.
+    pub fn retrieval_vector_coverage(&self, space: &str) -> Result<(usize, usize), BrainError> {
+        self.conn.query_row("SELECT coalesce(sum(v.chunk_id IS NOT NULL),0),count(*) FROM doc_chunks c JOIN documents d ON d.id=c.document_id LEFT JOIN doc_vectors v ON v.chunk_id=c.id WHERE c.space=?1 AND coalesce(d.pdc_deleted,0)=0",[space],|r|Ok((r.get(0)?,r.get(1)?))).map_err(sql_err)
+    }
+
     /// Rows in `documents` for one space (listing stat; spec §4.2).
     pub fn document_count_for_space(&self, space: &str) -> Result<u64, BrainError> {
         let n: i64 = self
@@ -859,7 +918,7 @@ impl DocumentCache {
     pub fn upsert_vectors(&self, rows: &[(String, Vec<f32>)]) -> Result<(), BrainError> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         for (chunk_id, embedding) in rows {
-            if embedding.len() != EMBEDDING_DIM {
+            if embedding.len() != EMBEDDING_DIM || embedding.iter().any(|v| !v.is_finite()) {
                 return Err(BrainError::Invalid(format!(
                     "doc_vectors upsert dimension mismatch for {chunk_id}: \
                      expected {EMBEDDING_DIM}, got {}",
@@ -917,6 +976,15 @@ impl DocumentCache {
             .map_err(sql_err)?;
         Ok(())
     }
+}
+
+fn literal_fts_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .map(|tok| format!("\"{}\"", tok.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `documents.db` v1 schema (spec §6, verbatim, plus `media_type` on

@@ -35,6 +35,21 @@ fn unit(n: usize, text: String, layer: LayerKind) -> EvidenceUnit {
     )
 }
 #[test]
+fn rendered_support_and_utf8_citation_bytes_remain_stable() {
+    let mut u = unit(1, "근거".into(), LayerKind::RecentEpisodes);
+    u.support = vec!["source-a".into(), "출처-b".into()];
+    let out = pack_evidence(&[u], 1000, &Framed);
+    let expected = "[episode://1; role=untrusted_observation; view=episode-utf8/1; bytes=0..6; window=0..6; uuid=; excerpt=false] 근거\n  sources: source-a, 출처-b";
+    assert_eq!(out.context.layers[0].text, expected);
+    assert_eq!(out.evidence[0].rendered_start, 0);
+    assert_eq!(out.evidence[0].rendered_end, expected.len());
+    assert_eq!(
+        out.context.total_tokens,
+        Framed.count(&render_context(&out.context))
+    );
+}
+
+#[test]
 fn oversized_first_continues_to_small_second_without_overflow_floor() {
     let units = vec![
         unit(0, "x".repeat(2000), LayerKind::RecentEpisodes),
@@ -121,4 +136,118 @@ fn many_structured_claims_cannot_starve_a_fitting_source_procedure() {
     let result = pack_evidence(&units, 1200, &Framed);
     assert!(render_context(&result.context).contains("restore the warm cache first"));
     assert_eq!(result.decisions.len(), units.len());
+}
+
+#[test]
+fn accepted_canonical_counts_are_reused_and_layer_token_counts_are_not_added() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Counted {
+        calls: AtomicUsize,
+    }
+    impl oxibrain_ports::TokenizerPort for Counted {
+        fn id(&self) -> &str {
+            "nonadditive-counted"
+        }
+        fn count(&self, s: &str) -> usize {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            s.as_bytes().windows(2).filter(|w| *w == b"\n\n").count() + s.len() / 3
+        }
+        fn truncate_to(&self, s: &str, n: usize) -> String {
+            s.chars().take(n).collect()
+        }
+    }
+    let tokenizer = Counted {
+        calls: AtomicUsize::new(0),
+    };
+    let units: Vec<_> = (0..64)
+        .map(|i| {
+            oxibrain_core::evidence::EvidenceUnit::new(
+                oxibrain_core::context::LayerKind::Documents,
+                format!("payload {i}"),
+                oxibrain_core::evidence::SourceCoordinate {
+                    reference: format!("doc://{i}"),
+                    revision: "r1".into(),
+                    view: "decoded-utf8/1".into(),
+                    view_digest: None,
+                    decoder: None,
+                    start: 0,
+                    end: 10,
+                    document_uuid: None,
+                },
+                "untrusted_observation",
+            )
+        })
+        .collect();
+    let result = oxibrain_core::evidence_pack::pack_evidence(&units, 2000, &tokenizer);
+    assert_eq!(tokenizer.calls.load(Ordering::Relaxed), 64);
+    assert_eq!(
+        result.context.total_tokens,
+        tokenizer.count(&oxibrain_core::context::render_context(&result.context))
+    );
+}
+
+#[test]
+fn compact_context_keeps_a_complete_response_scoped_source_and_uncertainty_map() {
+    let mut a = unit(
+        1,
+        "Proceed only after the failed health check.\nuncertainty: conflicting sources".into(),
+        LayerKind::Documents,
+    );
+    a.support = vec!["support-a".into(), "support-b".into()];
+    let b = unit(
+        2,
+        "동등한 권한의 반대 지시".into(),
+        LayerKind::RecentEpisodes,
+    );
+    let policy = oxibrain_core::read_scope::ReadPolicy {
+        compact_evidence: true,
+        ..Default::default()
+    };
+    let full = pack_evidence(&[a.clone(), b.clone()], 3000, &Framed);
+    let compact =
+        oxibrain_core::evidence_pack::pack_evidence_with_policy(&[a, b], 3000, &Framed, &policy);
+    let text = render_context(&compact.context);
+    assert!(
+        text.contains("only after")
+            && text.contains("conflicting sources")
+            && text.contains("반대 지시")
+    );
+    assert!(compact.context.total_tokens < full.context.total_tokens);
+    assert_eq!(compact.context.total_tokens, Framed.count(&text));
+    assert_eq!(compact.evidence.len(), 2);
+    for (index, citation) in compact.evidence.iter().enumerate() {
+        assert_eq!(citation.citation_id, format!("E{}", index + 1));
+        let layer = &compact.context.layers[citation.layer_index].text;
+        assert!(
+            layer[citation.rendered_start..citation.rendered_end]
+                .starts_with(&format!("[{};", citation.citation_id))
+        );
+        let original = full
+            .evidence
+            .iter()
+            .find(|c| c.unit_id == citation.unit_id)
+            .unwrap();
+        assert_eq!(citation.source, original.source);
+        assert_eq!(citation.support, original.support);
+        assert_eq!(citation.omitted_ranges, original.omitted_ranges);
+    }
+}
+
+proptest! {
+    #[test]
+    fn compact_binding_and_whole_context_budget_remain_exact(texts in prop::collection::vec(".{1,100}",0..16),budget in 0usize..2000) {
+        let units:Vec<_>=texts.iter().enumerate().map(|(i,s)|unit(i,s.clone(),if i%2==0{LayerKind::Documents}else{LayerKind::RecentEpisodes})).collect();
+        let policy=oxibrain_core::read_scope::ReadPolicy {compact_evidence:true,..Default::default()};
+        let out=oxibrain_core::evidence_pack::pack_evidence_with_policy(&units,budget,&Framed,&policy);
+        prop_assert!(out.context.total_tokens<=budget);
+        prop_assert_eq!(out.context.total_tokens,Framed.count(&render_context(&out.context)));
+        prop_assert_eq!(out.decisions.len(),units.len());
+        let packet=oxibrain_core::evidence_reader::from_result(&out).unwrap();
+        for (i,e) in packet.iter().enumerate() {
+            prop_assert_eq!(&e.id,&format!("E{}",i+1));
+            let source=e.source.as_ref().unwrap();
+            let ordinal:usize=source.reference.strip_prefix("episode://").unwrap().parse().unwrap();
+            prop_assert_eq!(&e.text,&texts[ordinal]);
+        }
+    }
 }

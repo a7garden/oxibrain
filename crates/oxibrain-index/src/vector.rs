@@ -84,8 +84,10 @@ impl TfIdfVector {
     }
     pub fn from_bytes(b: &[u8]) -> Self {
         Self(
-            b.chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            b.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect(),
         )
     }

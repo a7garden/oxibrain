@@ -11,6 +11,8 @@ keywords = ["embeddings", "multilingual", "gguf", "bge-m3"]
 categories = ["science"]
 
 [dependencies]
+oxibrain-llama-runtime.workspace = true
+blake3.workspace = true
 oxibrain-ports.workspace = true
 llama-cpp-2.workspace = true
 # Constrain the transitive FFI alongside the wrapper for registry consumers.

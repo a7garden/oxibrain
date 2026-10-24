@@ -1,0 +1,185 @@
+{
+  "schema": "oxibrain-research-diagnostics/1",
+  "research_date": "2026-10-23",
+  "timezone": "Asia/Seoul",
+  "source_commit": "40482ee71fa7d108fc5f48f09929ffe9eb2fbcf6",
+  "workspace_version": "0.20.1",
+  "toolchain": "1.96.1",
+  "profile": "debug",
+  "product_source_edits": false,
+  "source_blobs": {
+    "crates/oxibrain/src/recall.rs": "032e09c4574fbc14136356380326a487dbbadf90",
+    "crates/oxibrain/src/document_plane.rs": "6d3b19e5bbd1dd7e206cebd2d94deb679382a61e",
+    "crates/oxibrain-store/src/read_evidence.rs": "6f0d341371ed4f5cb711283cc6103fc1491a6a03",
+    "crates/oxibrain-store/src/documents.rs": "e39dc951fc3567223b3bebd709963ee1bd6fbcf7",
+    "crates/oxibrain-core/src/evidence_pack.rs": "40fb9c5ed83064efd136def791f961ea0a673b7f",
+    "crates/oxibrain-core/src/evidence.rs": "81881f36d4183054d6f86d097e1d235ae0b6b997",
+    "crates/oxibrain-cli/src/cmd/recall_eval.rs": "6e9d1356195bb79ccdd1e81f0341cd7cfce0bee6"
+  },
+  "harness": "eval/reliable-recall/followup_probe.rs",
+  "harness_sha256": "9e7fcd58a42a5502e4a86faffd17693e123bd8a74680a0220b02925ebfbed3e9",
+  "tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+  "observations": {
+    "heading": {
+      "answer_query_has_answer": true,
+      "budget": 2000,
+      "context": "[doc://vault/policy.md?rev=blake3:03f76568a4ec000a354e2a112acb00a8732a346188a1b2046d5dba602f759aa3; role=untrusted_observation; view=decoded-utf8/1; bytes=0..17; window=0..17; uuid=018f47c6-4a77-7c52-9db8-000000000001; excerpt=false] # OrionRecovery\n\n",
+      "context_tokens": 149,
+      "evidence": [
+        {
+          "layer_index": 0,
+          "omitted_ranges": [],
+          "rendered_end": 251,
+          "rendered_start": 0,
+          "role": "untrusted_observation",
+          "shortened": false,
+          "source": {
+            "decoder": "3:application/vnd.pdc.document+markdown;version=2",
+            "document_uuid": "018f47c6-4a77-7c52-9db8-000000000001",
+            "end": 17,
+            "reference": "doc://vault/policy.md?rev=blake3:03f76568a4ec000a354e2a112acb00a8732a346188a1b2046d5dba602f759aa3",
+            "revision": "blake3:03f76568a4ec000a354e2a112acb00a8732a346188a1b2046d5dba602f759aa3",
+            "start": 0,
+            "view": "decoded-utf8/1",
+            "view_digest": "0c6688344cff43260c32c0655d74643ccb38b4849ca1b3e7a2d7b738614c8880"
+          },
+          "support": [],
+          "unit_id": "d5c542622b76ba8ffb0a2b543ef89330ca4855c6028a127c20f08e26d106415a"
+        }
+      ],
+      "payload": "# OrionRecovery\n\n",
+      "payload_tokens": 5,
+      "search_hits": 1,
+      "source_unchanged": true,
+      "title_query_has_answer": false,
+      "tokenizer_digest": "b0cb923fc505fdf0a53f0287654fa26577d3f333d4134350da0a97664b228739"
+    },
+    "dense_routing": {
+      "document_execution": {
+        "answerability": "not_evaluated",
+        "dense_configured": true,
+        "dense_fallback": null,
+        "loss_scope": "normalized considered candidates; unseen index tails are not enumerated",
+        "partial": false,
+        "source_channels": [
+          "word",
+          "ngram"
+        ]
+      },
+      "document_recall_has_source": false,
+      "embedder": "deterministic test vector, not a semantic model",
+      "execution": {
+        "answerability": "not_evaluated",
+        "dense_configured": true,
+        "dense_fallback": null,
+        "loss_scope": "normalized considered candidates; unseen index tails are not enumerated",
+        "partial": false,
+        "source_channels": [
+          "word",
+          "ngram"
+        ]
+      },
+      "hybrid_document_search_has_source": true,
+      "raw_literal_has_source": true,
+      "raw_paraphrase_embedding_calls": 0,
+      "raw_paraphrase_has_source": false
+    },
+    "space_cap": {
+      "embedder": "deterministic routing fixture, not model quality",
+      "limit_1_execution": {
+        "answerability": "not_evaluated",
+        "dense_capability": true,
+        "dense_fallback": null,
+        "partial": false
+      },
+      "limit_1_hits": 0,
+      "limit_2_hits": 1,
+      "other_space_documents": 1,
+      "outside_content_returned": false,
+      "requested_space_documents": 1
+    },
+    "truth_cap": {
+      "capped_hits": 1,
+      "default_truth_bytes": 8388608,
+      "dropped": {
+        "dense_candidate_cap": 0,
+        "truth_group_incomplete": 23
+      },
+      "execution": {
+        "answerability": "not_evaluated",
+        "dense_capability": false,
+        "dense_fallback": null,
+        "partial": true
+      },
+      "explicit_target": "Person017",
+      "probe_truth_bytes": 512,
+      "qualification": "reduced-cap mechanism test; no default-size production outage demonstrated",
+      "target_returned": false,
+      "uncapped_hits": 24
+    },
+    "packing": {
+      "budget": 2000,
+      "qualification": "one debug-build run; operation counts are deterministic, latency is not an isolated benchmark; standalone payload counts are not an additive token allocation",
+      "rows": [
+        {
+          "candidates": 8,
+          "context_bytes": 1343,
+          "context_tokens": 424,
+          "count_calls": 32,
+          "counted_input_bytes": 24160,
+          "elapsed_ms": 41.8115,
+          "payload_tokens": 80,
+          "selected": 8
+        },
+        {
+          "candidates": 32,
+          "context_bytes": 5419,
+          "context_tokens": 1740,
+          "count_calls": 128,
+          "counted_input_bytes": 356712,
+          "elapsed_ms": 671.057,
+          "payload_tokens": 342,
+          "selected": 32
+        },
+        {
+          "candidates": 64,
+          "context_bytes": 6099,
+          "context_tokens": 1960,
+          "count_calls": 256,
+          "counted_input_bytes": 1142824,
+          "elapsed_ms": 1905.9067499999999,
+          "payload_tokens": 386,
+          "selected": 36
+        }
+      ],
+      "tokenizer_digest": "b0cb923fc505fdf0a53f0287654fa26577d3f333d4134350da0a97664b228739"
+    }
+  },
+  "checks": {
+    "diagnostic_probes": {
+      "passed": 5,
+      "failed": 0,
+      "meaning": "Control assertions and observations, not acceptance of desired behavior"
+    },
+    "reliable_recall": {
+      "passed": 12,
+      "failed": 0
+    },
+    "parity_corpus": {
+      "passed": 5,
+      "failed": 0
+    },
+    "reproject_determinism": {
+      "passed": 1,
+      "failed": 0
+    }
+  },
+  "not_performed": [
+    "Live reader or extraction evaluation",
+    "Real embedding or reranker quality evaluation",
+    "Default-cap scale/load test",
+    "Release-build performance benchmark",
+    "Production migration or deployment",
+    "CLI/MCP replay of the new diagnostics"
+  ]
+}

@@ -25,6 +25,7 @@ indexes and ranking metadata can be rebuilt separately.
 
 - [Install](#install)
 - [Quick start](#quick-start)
+- [Source retrieval](#source-retrieval)
 - [Backup and restore](#backup-and-restore)
 - [Agent skill](#agent-skill)
 - [Architecture](#architecture)
@@ -42,6 +43,12 @@ cargo install oxibrain-cli
 ```
 
 The binary is named `oxibrain`.
+
+Apple silicon macOS builds are also attached to each
+[GitHub release](https://github.com/a7garden/oxibrain/releases). Download
+the four assets from the exact version tag and verify the `.sha256` files
+before extracting; the standard archive contains `oxibrain`, and the MLX
+archive contains `oxibrain-mlx`.
 
 ### Managed install (ecosystem standard)
 
@@ -99,6 +106,35 @@ Agents use CLI operations directly or launch a caller-owned `admin serve --stdio
 child through `oxibrain-client`. The foreground `admin serve --http <address>`
 variant exposes the local operations console.
 
+## Source retrieval
+
+`recall` assembles source passages with their conditions, competing claims and
+provenance. It does not generate an authoritative answer. Inspect operation
+receipts under the CLI envelope's `data.meta`; `partial`, channel caps, pending
+indexing and skipped roots describe limits on the evidence considered. A hit
+does not prove an answer, and an empty read does not prove absence.
+
+Raw memory windows can be indexed without extraction. With the configured local
+embedding model available, explicitly build the optional semantic indexes:
+
+```bash
+oxibrain admin index --memory --embed
+oxibrain admin index --documents --embed
+oxibrain recall --json '{"space":"personal","query":"recovery conditions","token_budget":3000}'
+```
+
+Set `OXIBRAIN_TOKENIZER_JSON` to a local model tokenizer JSON for exact budgets.
+Optional `OXIBRAIN_READ_POLICY_JSON` points to a policy JSON; for example,
+`{"compact_evidence":true}` enables response-scoped E1/E2 citation labels.
+The complete source map remains in `data.data.evidence`: preserve its reference,
+revision, view and byte range. Rendered-context offsets are separate from source
+offsets. Both rendering modes retain explicit omissions and count their actual
+context with the configured tokenizer. Existing full rendering stays the default.
+
+Memory stores upgrade to schema 16 in version 0.21.0. Keep a verified schema-15
+backup before opening an existing store; older binaries cannot reopen it after
+upgrade. Source documents remain read-only and are never converted.
+
 ## Shared local HTTP inference
 
 Set `OXIBRAIN_LLM_PROVIDER=loopback`, `OXIBRAIN_LLM_BASE_URL=http://127.0.0.1:8768/v1`,
@@ -130,7 +166,7 @@ directory for an isolated restore check; moving it into service is a separate
 operator step.
 
 The artifact includes brain.db, documents.toml when present, and model weights
-under the brain directory. It excludes the rebuildable documents.db and all
+under the brain directory's `models/` subdirectory. It excludes the rebuildable documents.db and all
 external document roots and shared vaults; those source documents need their
 own backup. `--no-projection` omits rebuildable memory projection rows.
 `--no-cache` also omits extraction cache and brain-local model weights;
@@ -152,16 +188,21 @@ copy to verify this boundary before any operational reprojection.
 ## Agent skill
 
 oxibrain ships its own agent skill — a `SKILL.md` + `CONTEXT.md` pair that
-teaches an agent the op surface (all fourteen ops), the payload contract
+teaches an agent the op surface (all sixteen ops), the payload contract
 (`space` is required on every op; ids are resolved, never guessed), and the
 safety rails (dry-run plan tokens, `meta.dropped`, `locked` backoff). Install
 it into your agent's skill directory:
 
 ```bash
-oxibrain admin skill install                  # omp    → ~/.omp/skills/oxibrain
-oxibrain admin skill install --target claude  # claude → ~/.claude/skills/oxibrain
-oxibrain admin skill install --target raw     # print both files to stdout
+oxibrain admin skill install                 # omp    → ~/.omp/skills/oxibrain (default)
+oxibrain admin skill install --target claude # claude → ~/.claude/skills/oxibrain
+oxibrain admin skill install --target codex  # codex  → $CODEX_HOME/skills/oxibrain
+                                              #          or ~/.codex/skills/oxibrain
+oxibrain admin skill install --target raw    # print both files to stdout
 ```
+
+The `codex` target uses `$CODEX_HOME` when set and otherwise installs under
+`~/.codex/skills/oxibrain`.
 
 Both files are generated from the op registry (`oxibrain-ops`), not
 hand-maintained, so they cannot drift from the installed binary's surface.
@@ -186,6 +227,7 @@ at the boundary. [ARCHITECTURE.md](doc/ARCHITECTURE.md) is authoritative.
 | `oxibrain-views` | Pure renderers — Markdown briefs, exports |
 | `oxibrain` | Facade library — the engine |
 | `oxibrain-llm-local` | GGUF inference, grammar-constrained decoding |
+| `oxibrain-llama-runtime` | Shared llama.cpp runtime initialization for local adapters |
 | `oxibrain-llm-http` | HTTP LLM adapter (OpenAI-compatible) |
 | `oxibrain-embed-local` | Multilingual embedding adapter |
 | `oxibrain-connectors` | Source connectors — vault readers, file ingest |
@@ -224,8 +266,13 @@ cargo build -p oxibrain --no-default-features --features http-llm
 cargo tree -p oxibrain | grep -E 'oxios-|oxicode-' && exit 1
 ```
 
-Releases: tag `v*` publishes all crates in dependency order and creates the
-GitHub release (`.github/workflows/publish.yml`, `scripts/publish.sh`).
+Releases: pushing a `v*` tag (or manually dispatching the workflow with an
+existing tag) publishes the matching crate versions, checks the exact published
+version with a fresh consumer, and builds the macOS binaries. GitHub keeps the
+release as a draft until both archives and checksums have been downloaded back
+and verified, and both binaries report the tagged version and contain only
+ARM64 code (`.github/workflows/publish.yml`,
+`scripts/verify-release-assets.sh`).
 
 ## Contributing
 

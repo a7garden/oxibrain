@@ -1,0 +1,87 @@
+{
+  "annotation_caveat": "Human-curated questions and evidence labels; evidence sessions were LLM-simulated and manually screened/edited per the paper. English only; not real-user dialogue and not an independently collected multilingual benchmark.",
+  "dataset": "LongMemEval cleaned LongMemEval_S",
+  "gold": {
+    "bytes": 7854,
+    "path": "gold.jsonl",
+    "rows": 20,
+    "sha256": "a2e0f50dd2cc530454b24155d8da0701d54d4c15880400d1147f1268c1dfcf49"
+  },
+  "input": {
+    "bytes": 10221404,
+    "path": "input.jsonl",
+    "rows": 20,
+    "sha256": "3d098e4e4aa0f0c2a9a6f279921b23d25ab7c81d94432e57983975a69a0d06ca"
+  },
+  "license": "MIT (pinned Hugging Face card metadata; upstream repository LICENSE retained verbatim)",
+  "license_sha256": "d3c4b9aa54759df6ded337978a6f3b55b75615e5e4525c3b82d7e2627d4b9732",
+  "license_source": "https://raw.githubusercontent.com/xiaowu0162/LongMemEval/9e0b455f4ef0e2ab8f2e582289761153549043fc/LICENSE",
+  "official_dataset": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned",
+  "official_repo": "https://github.com/xiaowu0162/LongMemEval",
+  "paper": "https://arxiv.org/abs/2410.10813v2",
+  "preparation_script": {
+    "path": "freeze_subset.py",
+    "sha256": "9c88e7b4de701ec2e9fbb05d04289311edf0df788de018ac8b852a5660a92cac"
+  },
+  "question_type_counts": {
+    "knowledge-update": 78,
+    "multi-session": 133,
+    "single-session-assistant": 56,
+    "single-session-preference": 30,
+    "single-session-user": 70,
+    "temporal-reasoning": 133
+  },
+  "retrieval_caveat": "The S track keeps distractor histories; answer markers are present only in gold.jsonl. Requires a separate ingestion/evaluation adapter. Does not test cross-writing-system parity.",
+  "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+  "schema": "oxibrain-external-memory-qa/1",
+  "selected_count": 20,
+  "selected_coverage": {
+    "knowledge-update": {
+      "abstention": 2,
+      "answer_turn_annotations": 4,
+      "answerable": 2,
+      "sessions": 185,
+      "turns": 1925
+    },
+    "multi-session": {
+      "abstention": 2,
+      "answer_turn_annotations": 7,
+      "answerable": 2,
+      "sessions": 179,
+      "turns": 1978
+    },
+    "single-session-assistant": {
+      "abstention": 0,
+      "answer_turn_annotations": 2,
+      "answerable": 2,
+      "sessions": 92,
+      "turns": 1035
+    },
+    "single-session-preference": {
+      "abstention": 0,
+      "answer_turn_annotations": 4,
+      "answerable": 2,
+      "sessions": 98,
+      "turns": 951
+    },
+    "single-session-user": {
+      "abstention": 2,
+      "answer_turn_annotations": 3,
+      "answerable": 2,
+      "sessions": 200,
+      "turns": 2105
+    },
+    "temporal-reasoning": {
+      "abstention": 2,
+      "answer_turn_annotations": 6,
+      "answerable": 2,
+      "sessions": 189,
+      "turns": 2110
+    }
+  },
+  "selection": "Pinned upstream file order: first two answerable and first two abstention instances per question_type where available; output sorted by (question_type, status [abstention before answerable], source_question_id). Local LME-S-NNN IDs are assigned after sorting. Original haystack_session_ids and haystack_dates arrays are zipped by index with haystack_sessions. All answer/evidence markers and upstream question IDs are excluded from input.jsonl; gold.jsonl is a separate evaluator-only file.",
+  "source_rows_scanned": 500,
+  "upstream_file": "longmemeval_s_cleaned.json",
+  "upstream_file_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "upstream_file_url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json"
+}
