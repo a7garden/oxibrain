@@ -1,0 +1,17 @@
+{
+  "schema": "external-recall-attempt-failure/1",
+  "candidate_commit": "26c7acebcfa169bdcc68e2fd9a259cf585e87ca8",
+  "binary_sha256": "c240957f581654e8f8078c124aedc0feeee11fcc617f2e9543941d83c105ce8f",
+  "dataset_profile": "v4",
+  "freeze": "v4-prefix-freeze.json",
+  "exit_code": 101,
+  "error": "LongMemEval release run failed: manifest source_rows_scanned missing",
+  "phase": "report construction after all 18 retrieval requests and evaluator-only gold metric attachment",
+  "complete_report_produced": false,
+  "score_reported": false,
+  "wall_seconds": 328.0,
+  "test_seconds": 327.65,
+  "maximum_resident_set_bytes": 1354383360,
+  "repair": "Reuse the same preflight-tested profile-aware manifest source scan accessor in report construction.",
+  "rerun_constraints": "No input/gold/policy/model/budget/window changes. Root has not inspected v4 question content, answers or case labels."
+}

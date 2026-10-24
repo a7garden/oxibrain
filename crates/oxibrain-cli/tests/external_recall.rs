@@ -497,10 +497,7 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
             license_sha256: sha256_hex(&license_bytes),
             cases: profile.cases,
             full_history_sessions: profile.full_history_sessions,
-            source_rows_scanned: manifest["source_rows_scanned"]
-                .as_u64()
-                .context("manifest source_rows_scanned missing")?
-                as usize,
+            source_rows_scanned: manifest_source_rows_scanned(&manifest, profile)?,
             annotation_caveat: manifest["annotation_caveat"]
                 .as_str()
                 .context("manifest annotation caveat missing")?
@@ -1374,10 +1371,20 @@ fn validate_manifest(manifest: &Value, profile: &DatasetProfile) -> anyhow::Resu
         "unexpected manifest row count"
     );
     ensure!(
-        manifest[profile.manifest_scan_count_key] == 500,
+        manifest_source_rows_scanned(manifest, profile)? == 500,
         "unexpected source scan count"
     );
     Ok(())
+}
+
+fn manifest_source_rows_scanned(
+    manifest: &Value,
+    profile: &DatasetProfile,
+) -> anyhow::Result<usize> {
+    let count = manifest[profile.manifest_scan_count_key]
+        .as_u64()
+        .context("manifest source scan count missing")?;
+    usize::try_from(count).context("manifest source scan count exceeds platform range")
 }
 
 fn parse_jsonl<T: for<'de> Deserialize<'de>>(bytes: &[u8], label: &str) -> anyhow::Result<Vec<T>> {

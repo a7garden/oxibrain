@@ -403,3 +403,38 @@ also found a truncated v1 input hash constant introduced while adding profiles.
 The authoritative input and prior complete report agree; the constant is fixed,
 and profile validation now checks actual v1/v4 manifests rather than only
 self-generated fixtures. No historical report or corpus was changed.
+
+A later environment check found an old `OXIBRAIN_LLM_PROVIDER=loopback`
+export in the owner's `.zshenv`. The local model catalog alone could not override
+that explicit selection. After private backups, the Oxibrain-specific shell
+provider was changed to `local` and its obsolete loopback URL/model exports were
+removed. New shells report the local provider. Codex's existing Oxibrain stdio
+server also now has an explicit `env.OXIBRAIN_LLM_PROVIDER="local"`, using the
+[documented per-server environment setting](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+The parsed Codex configuration was compared before/after to ensure that only
+that server's environment changed. Existing MCP processes are not evidence of
+the new configuration until they reconnect; no unrelated model service was
+stopped or reconfigured. All subsequent native extraction checks explicitly
+select local inference and the verified 4B artifact.
+
+The first v4 run completed all eighteen retrieval requests and attached
+evaluator-only gold metrics, then failed while constructing the report: a
+remaining hard-coded `source_rows_scanned` access did not use v4's frozen
+`source_rows_scanned_per_pass` metadata key. No complete report or score was
+produced. The 328.00-second attempt and exact error are preserved in
+`v4-prefix-first-failure.json`. Report construction now shares the same
+profile-aware source-scan accessor used by preflight validation, which is
+exercised against actual frozen v1/v4 manifests. The rerun keeps input, gold,
+retrieval implementation, model, source windows, policy and budgets unchanged.
+Root has not inspected v4 questions, answers or individual case labels.
+
+The complete local all-feature workspace run at `26c7ace` passed 1,162 tests
+with zero failures and eleven explicit ignores across 122 suites. Clippy with
+all targets/features and warnings denied passed, as did fmt and cargo-deny.
+CI at `26c7ace` and metadata-only `fa445e5` passed every job, including MSRV,
+standalone dependency isolation, fresh consumers and the console bundle.
+An isolated restore of the verified schema-15 production backup upgraded to
+schema 18 and rebuilt raw lexical indexes. All rows and columns of all nine
+ledger/truth tables compared identically before/after; SQLite integrity was ok.
+This operation loaded no model and did not open or modify the production store
+or source documents. The private proof is retained outside the repository.
