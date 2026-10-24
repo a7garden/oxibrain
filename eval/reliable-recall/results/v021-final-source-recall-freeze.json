@@ -1,0 +1,16 @@
+{
+  "schema": "recall-regression-freeze/1",
+  "candidate_commit": "eb6c5212d1e712a4837f0d5a005f1ac19c9b8613",
+  "binary_sha256": "6e792ea39cc1a55df5430ae0bb3a236e2c1ced286dfa31e7cac3382c79767ae9",
+  "config_sha256": "ae5f2bb916cb3a27c9d16730f184734ce2f706ad348ef67c3ff0cdf8c0893ce0",
+  "corpus_sha256": "80bd70c48e107d89f179078d5c73d1a2a57c9f1092870b3b9d02b86616a77a67",
+  "source_window_policy": "source-paragraph-window/3",
+  "read_policy_version": "read-policy/5",
+  "source_context_bytes": 768,
+  "budgets": [
+    2000,
+    3000
+  ],
+  "reader": "not run",
+  "note": "Known diagnostic regression, not an untouched sample; no generation score."
+}

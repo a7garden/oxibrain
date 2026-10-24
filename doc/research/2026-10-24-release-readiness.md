@@ -438,3 +438,39 @@ schema 18 and rebuilt raw lexical indexes. All rows and columns of all nine
 ledger/truth tables compared identically before/after; SQLite integrity was ok.
 This operation loaded no model and did not open or modify the production store
 or source documents. The private proof is retained outside the repository.
+
+The report-repaired v4 execution completed with exit zero in 312.48 seconds
+(maximum resident set 1,176,895,488 bytes). All twenty-five annotated answer
+turns were fully retrieved at the frozen 3,000-token budget, covering all
+6,978 annotated bytes and all annotated answer-session occurrences in all twelve
+answerable cases. At 2,000 tokens it fully retrieved 23/25 turns (92%),
+6,734/6,978 bytes (96.50%), and every answer-session occurrence in eleven of
+twelve answerable cases; each of the twelve had at least one answer session.
+Both budgets meet the frozen 90% whole-turn target on this subset. Actual token
+spend never exceeded the declared budget. The complete capture is
+`v4-prefix-repaired.json`; both failed attempts and pre-execution freezes remain.
+
+V4 contains eighteen questions, 895 full-history sessions and 9,115 turns. Its
+twenty-five annotated turns are a small English-only sample from a public
+dataset with simulated source dialogue. These are retrieval measurements,
+not a reader, abstention-success or multilingual answer-quality score. The
+same-case failed reporting attempt did not expose scores to root or change the
+retrieval implementation. Differences from v1/v2/v3 are not a paired causal
+effect estimate. The broad automatic-answer quality gate remains open, and the
+retained reference reader continues to reject invalid delivery explicitly.
+
+The final known-source regression also passed: all eighteen answerable cases
+retain every required support span at both 2k and 3k, including Hangul and Latin
+cases, conditions, conflicts, identities and applicability. Two missing-answer
+cases remain controls, not positive retrieval successes. The lexical-only
+control reaches 17/18; default local hybrid recall reaches 18/18. Captures and
+the pre-execution freeze are `v021-final-source-recall*.json`. These repeated
+synthetic diagnostics are not added to the independent external sample.
+
+The final candidate's native 4B integration smoke completed with the verified
+`8712872a...` artifact and `evidence-reader/4`. Three existing extraction fixtures
+again produced all five expected relations, precision/recall/F1 1.0 and
+fabricated-entity rate zero. The full source and extraction reports are
+`v021-final-4b-smoke*.json`. Its companion one-case reader exercise is a repeated
+integration check, not a new answer-quality sample. No Dyno/HTTP provider was
+selected for these final checks.
