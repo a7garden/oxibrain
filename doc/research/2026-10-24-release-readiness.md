@@ -271,3 +271,17 @@ extraction evaluation. A workspace test run reached doctests but failed to load
 `oxibrain_connectors` (`E0463`) while another feature build shared its target
 directory. A serial full rerun is in progress; the failed invocation is not
 reported as a passed suite.
+
+The serial full all-feature workspace rerun passed 1,149 tests, zero failures
+and 11 explicit ignored tests across 121 suites, including doctests. The CI run
+at `07cb4b7` also passed every job, including Linux MSRV 1.96 and the frontend.
+
+A release reviewer found two additional publication defects: process substitution
+hid dependency-order computation failures, and source-file mtimes made archive
+bytes change on an otherwise identical draft-upload retry. Publication now checks
+and rejects a failed/empty order before any package upload. The two binary
+archives use the tagged commit's timestamp, normalized tar ownership/mode and a
+zero gzip timestamp. Exact comparisons still reject genuinely different existing
+assets. Root independently passed metadata/cycle/empty-order fixtures,
+archive reproducibility checks, the existing release verifier tests, actionlint
+and shell syntax checks. These changes do not alter the frozen retrieval binary.

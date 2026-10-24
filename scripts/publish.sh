@@ -135,13 +135,19 @@ publish() {
   return 1
 }
 
+publication_order="$(order)"
+if [[ -z "$publication_order" ]]; then
+  echo "workspace dependency order is empty; refusing to publish nothing" >&2
+  exit 1
+fi
+
 while read -r crate version; do
   flags=()
   if [[ " $NO_VERIFY " == *" $crate "* ]]; then
     flags+=(--no-verify)
   fi
   publish "$crate" "$version" "${flags[@]}"
-done < <(order)
+done <<<"$publication_order"
 # `cargo publish` leaves packaged crate trees under target/package; the
 # rust-cache post step walks them and ENOENTs on trybuild/target subdirs the
 # packaging deliberately omits (observed red v0.9.0 run despite full success).

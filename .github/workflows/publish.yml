@@ -68,6 +68,9 @@ jobs:
       - name: Test release artifact verifier
         run: bash scripts/test-verify-release-assets.sh
 
+      - name: Test publishing order and deterministic archive helpers
+        run: python3 scripts/test-package-release-archive.py
+
       - name: Install llama.cpp build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential libcurl4-openssl-dev
 
@@ -185,15 +188,21 @@ jobs:
 
       - name: Package tarballs and checksums
         run: |
-          dir=$(mktemp -d)
-          cp release-binaries/oxibrain "$dir/oxibrain"
-          tar -czf "oxibrain-aarch64-apple-darwin.tar.gz" -C "$dir" oxibrain
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${RELEASE_TAG}^{commit}")"
+          [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]
+          python3 scripts/package-release-archive.py \
+            --source release-binaries/oxibrain \
+            --member oxibrain \
+            --output oxibrain-aarch64-apple-darwin.tar.gz
           shasum -a 256 "oxibrain-aarch64-apple-darwin.tar.gz" \
             > "oxibrain-aarch64-apple-darwin.tar.gz.sha256"
           # MLX engine build: same binary plus the in-process MLX engine
           # (ADR-017). The GGUF embedder is unavailable in this build.
-          cp release-binaries/oxibrain-mlx "$dir/oxibrain-mlx"
-          tar -czf "oxibrain-mlx-aarch64-apple-darwin.tar.gz" -C "$dir" oxibrain-mlx
+          python3 scripts/package-release-archive.py \
+            --source release-binaries/oxibrain-mlx \
+            --member oxibrain-mlx \
+            --output oxibrain-mlx-aarch64-apple-darwin.tar.gz
           shasum -a 256 "oxibrain-mlx-aarch64-apple-darwin.tar.gz" \
             > "oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256"
 
