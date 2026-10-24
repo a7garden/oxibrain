@@ -92,6 +92,7 @@ pub struct BrainClient {
     /// keeps applying for the client's lifetime; dropping the client reaps it.
     child: Option<tokio::process::Child>,
     next_id: AtomicU64,
+    authenticated_scope: Option<Value>,
 }
 
 impl std::fmt::Debug for BrainClient {
@@ -234,6 +235,7 @@ impl BrainClient {
             reader: BufReader::new(Box::new(reader)),
             child: None,
             next_id: AtomicU64::new(1),
+            authenticated_scope: None,
         }
     }
 
@@ -248,6 +250,7 @@ impl BrainClient {
             reader: BufReader::new(Box::new(reader)),
             child: Some(child),
             next_id: AtomicU64::new(1),
+            authenticated_scope: None,
         })
     }
 
@@ -304,6 +307,7 @@ impl BrainClient {
     /// [`BrainClient::spawn_local_with_token`]; exposed for callers that
     /// attach with [`BrainClient::from_io`] to a gated session.
     pub async fn auth(&mut self, token: &str) -> Result<()> {
+        self.authenticated_scope = None;
         let id = self.alloc_id();
         let req = json!({
             "jsonrpc": "2.0",
@@ -321,7 +325,22 @@ impl BrainClient {
                     .unwrap_or("unknown")
             );
         }
+        if resp
+            .pointer("/result/authenticated")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            bail!("authentication response did not confirm authentication");
+        }
+        self.authenticated_scope = resp.pointer("/result/scope").cloned();
         Ok(())
+    }
+
+    /// Complete non-secret scope metadata returned by token authentication.
+    /// Older servers may omit it; consumers requiring exact scope verification
+    /// must fail closed instead of inferring authority from tools/list alone.
+    pub fn authenticated_scope(&self) -> Option<&Value> {
+        self.authenticated_scope.as_ref()
     }
 
     /// Negotiate capabilities with the server.
@@ -726,6 +745,42 @@ fn extract_text(result: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn authentication_retains_complete_scope_and_clears_it_on_failure() {
+        let scope = json!({"spaces":["space-id"],"caps":["read","admin","sample","trusted_ingest"],
+            "predicate_filter":null,"entity_type_filter":null,"expires_at":null,"label":"test"});
+        let expected = scope.clone();
+        let (client, server) = tokio::io::duplex(4096);
+        let (server_read, mut server_write) = tokio::io::split(server);
+        let task = tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(server_read);
+            for result in [
+                json!({"result":{"authenticated":true,"scope":scope}}),
+                json!({"error":{"code":-32001,"message":"revoked"}}),
+            ] {
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let mut response = result;
+                response["jsonrpc"] = json!("2.0");
+                response["id"] = request["id"].clone();
+                server_write
+                    .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                    .await
+                    .unwrap();
+                server_write.write_all(b"\n").await.unwrap();
+                server_write.flush().await.unwrap();
+            }
+        });
+        let (read, write) = tokio::io::split(client);
+        let mut client = BrainClient::from_io(read, write);
+        client.auth("synthetic-fixture-token").await.unwrap();
+        assert_eq!(client.authenticated_scope(), Some(&expected));
+        assert!(client.auth("revoked-fixture-token").await.is_err());
+        assert!(client.authenticated_scope().is_none());
+        task.await.unwrap();
+    }
 
     #[test]
     fn extract_text_parses_mcp_result() {
