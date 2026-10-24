@@ -46,7 +46,7 @@ pub enum ModelFormat {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub role: ModelRole,
-    /// Stable name, e.g. `qwen2.5-1.5b-instruct`.
+    /// Stable name, e.g. `qwen3-4b-instruct-2507`.
     pub name: String,
     /// Local file name (GGUF) or model-directory spec (MLX: a path, an
     /// `OXIBRAIN_MLX_HOME` name, or an HF-cache repo id) under the models dir.
@@ -69,11 +69,11 @@ pub fn default_manifest() -> Vec<ModelEntry> {
     vec![
         ModelEntry {
             role: ModelRole::Extract,
-            name: "qwen2.5-1.5b-instruct".into(),
-            file: "qwen2.5-1.5b-instruct-q4_k_m.gguf".into(),
-            url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf".into(),
-            digest: "2619da49b802f7bc7e92264edd12e4bf093dd97f42584535ae77dc587ab55362".into(),
-            size_mb: 1065,
+            name: "qwen3-4b-instruct-2507".into(),
+            file: "qwen3-4b-instruct-2507-q4_k_m.gguf".into(),
+            url: "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf".into(),
+            digest: "8712872ae483c8d3d4c51c15e44663bd05cbbc08dfefe56a9c6feec38b9f0c78".into(),
+            size_mb: 2382,
             license: "apache-2.0".into(),
             format: ModelFormat::Gguf,
         },
@@ -311,7 +311,7 @@ mod tests {
         save_manifest_at(dir.path(), &entries).expect("save");
         let loaded = load_manifest_at(dir.path()).expect("load");
         assert_eq!(loaded.len(), entries.len());
-        assert_eq!(loaded[0].name, "qwen2.5-1.5b-instruct");
+        assert_eq!(loaded[0].name, "qwen3-4b-instruct-2507");
         assert_eq!(loaded[0].role, ModelRole::Extract);
         assert_eq!(loaded[1].role, ModelRole::Embed);
     }

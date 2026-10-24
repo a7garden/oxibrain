@@ -285,3 +285,57 @@ zero gzip timestamp. Exact comparisons still reject genuinely different existing
 assets. Root independently passed metadata/cycle/empty-order fixtures,
 archive reproducibility checks, the existing release verifier tests, actionlint
 and shell syntax checks. These changes do not alter the frozen retrieval binary.
+
+## Owner-selected local 4B and evaluation adapter repair
+
+The owner explicitly selected local 4B and rejected further use of Dyno's heavy
+35B model. The existing Dyno service subsequently reported `llm=false`; no further
+35B generation is requested. Completed comparisons remain historical evidence.
+The shipped default extractor is now Qwen3-4B-Instruct-2507 Q4_K_M, pinned to
+HF revision `a06e946bb6b655725eafa393f4a9745d460374c9` and BLAKE3
+`8712872ae483c8d3d4c51c15e44663bd05cbbc08dfefe56a9c6feec38b9f0c78`.
+The artifact was already installed; no weights were downloaded. The local
+manifest's existing 4B URL was pinned and an incorrect pre-existing BGE digest
+was corrected after backing up the manifest. Both named artifacts pass CLI
+verification. Alternative model files and unrelated service configuration stay
+available; they are not selected for this work.
+
+`evidence-reader/4` completed 182 actual native-4B calls across the two budgets
+(including retries). It validates 16/20 retrieved replies and 16/20 gold replies
+per budget, with valid abstention for all 20 no-evidence controls. A fresh blind
+AI review judged 10/20 retrieved replies adequate, four inadequate, four failed
+delivery and two gray/evasive; gold had twelve adequate, four inadequate and four
+delivery failures. The full captures and independently returned judgment summaries
+are preserved as `v021-reader4-native*.json`. Valid-but-inadequate replies still
+include cross-project joins and missing mandatory guards. Delivery validation
+does not close that semantic gap.
+
+The already-completed loopback comparison made 166 actual calls: retrieved
+delivery 18/20 and gold 20/20 per budget, all no-evidence controls abstaining.
+Its blind review found 18/20 retrieved adequate and two delivery failures; gold
+was nineteen adequate with one operationally ambiguous unresolved-command choice.
+This service does not expose a weight digest, and the owner subsequently chose
+4B. These measurements do not change the selected model or qualify its quality.
+
+The next 4B-only diagnostic uses `evidence-reader/5`, aligning its instructions
+with the generated skill's same-entity/project scope, explicit identity bridge
+and complete conjunctive prerequisite rules. It keeps the schema, grammar,
+evidence, strict validator and two-attempt bound. It runs only the 3,000-token
+budget because paired 2k/3k requests in the preceding diagnostic were identical;
+this is not a new independent sample. Its binary, source/configuration hashes
+and model pin were captured before result inspection. Eight reader unit tests,
+seven model-catalog tests and the provider-selection tests passed.
+
+The first v3 external execution reached case 17 and failed before gold loading:
+the adapter incorrectly required globally unique upstream session IDs. No
+complete report or score was produced. Structural-only inspection found two
+different source occurrences with that ID at input indices 1 and 27; their
+date/body hashes differ. The failure is preserved in `v3-first-failure.json`.
+The adapter now preserves every occurrence, adding a deterministic collision-free
+ordinal suffix only for repeated IDs. Unique IDs keep their existing references.
+Gold still loads after all retrieval requests. Exact session/turn indices map
+annotations; ambiguous duplicate-ID session annotations fail rather than choosing
+a favorable copy. Counts expose both upstream IDs and occurrence denominators.
+Eight adapter tests passed, including identical-byte duplicate occurrences,
+ambiguous mapping rejection and unchanged unique-ID identity. The raw v3 input,
+gold, budgets, segmentation and retrieval policy are unchanged for the rerun.

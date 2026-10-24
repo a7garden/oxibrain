@@ -1,0 +1,15 @@
+{
+  "schema": "external-recall-failure/1",
+  "status": "failed_before_gold_loading",
+  "candidate_commit": "8549de97b49fd6f10dc670048e3a3e393c716b48",
+  "binary_sha256": "580ac99bc449665aad3bdfa421b5af7e1f2f800c823fa274fbdafc26e5785a38",
+  "input_sha256": "66b0f492c3315a31dba5e6c78fe06311e09ed76f9e981406fdbfb10b6cfde06d",
+  "gold_sha256": "65bc6612cd104cc7a05dbf5d02c2a773c16e53f0d71940ad6efbdc73f910b4fd",
+  "exit_code": 101,
+  "error": "LongMemEval release run failed: duplicate source session id in case LME-S-017",
+  "progress": "Started case 17 of 20; no complete retrieval report was produced and no scores were read.",
+  "wall_seconds": 977.41,
+  "maximum_resident_bytes": 1461059584,
+  "timing_note": "Native 4B reader, loopback35B reader and CPU tests overlapped; not an isolated latency measurement.",
+  "repair_scope": "Support distinct source occurrences for repeated upstream session IDs without dropping or deduplicating histories; preserve dataset and retrieval policy."
+}

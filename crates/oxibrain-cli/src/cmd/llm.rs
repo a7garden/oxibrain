@@ -922,10 +922,10 @@ mod tests {
         };
         let entries = vec![
             mk(ModelRole::Embed, "bge-m3"),
-            mk(ModelRole::Extract, "qwen2.5-1.5b-instruct"),
+            mk(ModelRole::Extract, "qwen3-4b-instruct-2507"),
         ];
         let got = extract_entry(&entries).expect("extract entry");
-        assert_eq!(got.name, "qwen2.5-1.5b-instruct");
-        assert_eq!(got.digest, "d-qwen2.5-1.5b-instruct");
+        assert_eq!(got.name, "qwen3-4b-instruct-2507");
+        assert_eq!(got.digest, "d-qwen3-4b-instruct-2507");
     }
 }

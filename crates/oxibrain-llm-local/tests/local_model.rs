@@ -1,8 +1,8 @@
 //! Integration test for oxibrain-llm-local against a real GGUF model.
 //!
-//! Ignored by default — requires a model at `~/.oxi/brain/models/`. Run with:
+//! Ignored by default — requires a model at `~/.oxi/brain/`. Run with:
 //!   cargo test -p oxibrain-llm-local --test local_model -- --ignored
-//! The Qwen2.5-1.5B-Instruct-Q4_K_M model validates generation + tokenizer.
+//! The shipped Qwen3-4B-Instruct-2507-Q4_K_M model validates generation + tokenizer.
 //! Set `OXIBRAIN_LLM_TEST_MODEL` to use an explicit local GGUF artifact instead.
 
 use oxibrain_llm_local::{LocalLlm, LocalLlmOptions};
@@ -14,7 +14,7 @@ fn model_path() -> PathBuf {
         return PathBuf::from(path);
     }
     let mut p = home_dir();
-    p.push(".oxi/brain/models/qwen2.5-1.5b-instruct-q4_k_m.gguf");
+    p.push(".oxi/brain/qwen3-4b-instruct-2507-q4_k_m.gguf");
     p
 }
 

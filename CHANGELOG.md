@@ -40,6 +40,7 @@ squash-merged.
 
 ### Changed
 
+- Switch the shipped local extractor to Qwen3-4B-Instruct-2507 Q4_K_M (2,382 MiB), pinned to its verified Hugging Face revision.
 - Pin development, CI and release builds to Rust 1.99.1; retain MSRV 1.96 with a dedicated CI check.
 - Adopt fixed-size array slices for vector decoding and quantization to satisfy Rust 1.99 Clippy without changing byte handling.
 - Render recall evidence directly into its output buffer, avoiding temporary formatting and support-list strings while preserving output bytes.

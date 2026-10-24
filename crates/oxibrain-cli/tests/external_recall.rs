@@ -84,7 +84,7 @@ struct InputCase {
     history_sessions: Vec<InputSession>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputSession {
     session_id: String,
@@ -92,7 +92,7 @@ struct InputSession {
     turns: Vec<InputTurn>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputTurn {
     content: String,
@@ -120,7 +120,8 @@ struct AnnotatedTurn {
 
 #[derive(Debug)]
 struct SessionSource {
-    session_id: String,
+    upstream_session_id: String,
+    session_index: usize,
     reference: String,
     revision: String,
     episode_id: String,
@@ -193,6 +194,7 @@ struct CaseReport {
     question_type: String,
     annotated_abstention: bool,
     answer_session_annotation_count: usize,
+    mapped_answer_session_occurrence_count: usize,
     answer_turn_annotation_count: usize,
     history_sessions: usize,
     history_turns: usize,
@@ -234,8 +236,15 @@ struct FullHistorySessionRetrieval {
     selected_history_sessions: usize,
     selected_fraction: f64,
     selected_session_ids: Vec<String>,
+    selected_session_occurrences: Vec<SessionOccurrence>,
     unresolved_session_references: Vec<String>,
     interpretation: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct SessionOccurrence {
+    session_id: String,
+    session_index: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -269,6 +278,8 @@ struct AnswerSessionRetrieval {
     gold_answer_session_ids: Vec<String>,
     missing_gold_session_ids: Vec<String>,
     retrieved_gold_session_ids: Vec<String>,
+    gold_answer_session_occurrences: Vec<SessionOccurrence>,
+    retrieved_gold_session_occurrences: Vec<SessionOccurrence>,
     any_retrieved: Option<bool>,
     all_retrieved: Option<bool>,
 }
@@ -277,7 +288,6 @@ struct AnswerSessionRetrieval {
 struct CapturedCase {
     case: CaseReport,
     sources: Vec<SessionSource>,
-    session_index_by_id: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -501,6 +511,7 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
             "This is a 20-case selected subset, not the complete 500-row source corpus.",
             "The benchmark is English-only, uses curated questions, and is not real-user dialogue.",
             "Answer-turn annotations cover entire source turns, not minimal supporting substrings.",
+            "Repeated upstream session IDs are indexed as separate input-ordinal occurrences; answer-session mapping uses annotated session indices and fails when a duplicate ID is ambiguous.",
             "Full-history session selection fraction describes retrieval breadth; it is not a relevance score.",
             "Abstention annotations are not counted as successful abstentions because no reader was run.",
             "No string-only answer matching or answer correctness score is computed.",
@@ -537,7 +548,7 @@ async fn run_case(
     let space = brain.ensure_space("longmemeval").await?;
 
     let mut sources = Vec::with_capacity(input.history_sessions.len());
-    let mut session_index_by_id = BTreeMap::new();
+    let indexed_session_ids = indexed_session_ids(&input.history_sessions);
     let mut source_turn_bytes = 0;
     let mut indexed_episode_bytes = 0;
     let mut history_turns = 0;
@@ -546,13 +557,6 @@ async fn run_case(
         ensure!(
             !session.session_id.is_empty() && !session.turns.is_empty(),
             "empty source session in case {}",
-            input.case_id
-        );
-        ensure!(
-            session_index_by_id
-                .insert(session.session_id.clone(), session_index)
-                .is_none(),
-            "duplicate source session id in case {}",
             input.case_id
         );
         let occurred_at = timestamp_from_source_date(&session.date)?;
@@ -565,12 +569,14 @@ async fn run_case(
             .sum::<usize>();
         history_turns += session.turns.len();
         indexed_episode_bytes += body.len();
+        let indexed_session_id = &indexed_session_ids[session_index];
         let episode_id = brain
-            .record_session(&space, &session.session_id, body.clone(), occurred_at)
+            .record_session(&space, indexed_session_id, body.clone(), occurred_at)
             .await?;
         sources.push(SessionSource {
-            session_id: session.session_id.clone(),
-            reference: format!("session://{}", session.session_id),
+            upstream_session_id: session.session_id.clone(),
+            session_index,
+            reference: format!("session://{indexed_session_id}"),
             revision,
             episode_id,
             body,
@@ -671,6 +677,7 @@ async fn run_case(
         question_type: String::new(),
         annotated_abstention: false,
         answer_session_annotation_count: 0,
+        mapped_answer_session_occurrence_count: 0,
         answer_turn_annotation_count: 0,
         history_sessions: input.history_sessions.len(),
         history_turns,
@@ -685,11 +692,7 @@ async fn run_case(
         embedding_ms,
         queries,
     };
-    Ok(CapturedCase {
-        case,
-        sources,
-        session_index_by_id,
-    })
+    Ok(CapturedCase { case, sources })
 }
 
 fn attach_gold_metrics(capture: &mut CapturedCase, gold: &GoldCase) -> anyhow::Result<()> {
@@ -702,6 +705,12 @@ fn attach_gold_metrics(capture: &mut CapturedCase, gold: &GoldCase) -> anyhow::R
     capture.case.question_type = gold.question_type.clone();
     capture.case.annotated_abstention = gold.abstention;
     capture.case.answer_session_annotation_count = gold.answer_session_ids.len();
+    capture.case.mapped_answer_session_occurrence_count = gold_answer_occurrences(
+        &gold.answer_session_ids,
+        &gold.annotated_answer_turns,
+        &capture.sources,
+    )?
+    .len();
     capture.case.answer_turn_annotation_count = gold.annotated_answer_turns.len();
     for query in &mut capture.case.queries {
         query.answer_turn_byte_coverage = Some(answer_turn_coverage(
@@ -711,9 +720,9 @@ fn attach_gold_metrics(capture: &mut CapturedCase, gold: &GoldCase) -> anyhow::R
         )?);
         query.answer_session_retrieval = Some(answer_session_retrieval(
             gold,
-            &capture.session_index_by_id,
+            &capture.sources,
             &query.full_history_session_retrieval,
-        ));
+        )?);
     }
     Ok(())
 }
@@ -752,7 +761,7 @@ fn answer_turn_coverage(
             .get(annotation.session_index)
             .context("annotated answer session missing")?;
         ensure!(
-            source.session_id == annotation.session_id,
+            source.upstream_session_id == annotation.session_id,
             "annotated answer session ID does not match input index"
         );
         let turn = source
@@ -777,7 +786,7 @@ fn answer_turn_coverage(
         turns_with_any += usize::from(retrieved > 0);
         turns_fully += usize::from(retrieved == turn_bytes && turn_bytes > 0);
         per_turn.push(TurnCoverage {
-            session_id: source.session_id.clone(),
+            session_id: source.upstream_session_id.clone(),
             session_index: annotation.session_index,
             turn_index: turn.turn_index,
             role: turn.role.clone(),
@@ -806,14 +815,27 @@ fn answer_turn_coverage(
 
 fn answer_session_retrieval(
     gold: &GoldCase,
-    session_index_by_id: &BTreeMap<String, usize>,
+    sources: &[SessionSource],
     full_history: &FullHistorySessionRetrieval,
-) -> AnswerSessionRetrieval {
-    let selected: BTreeSet<_> = full_history.selected_session_ids.iter().cloned().collect();
+) -> anyhow::Result<AnswerSessionRetrieval> {
+    let occurrences = gold_answer_occurrences(
+        &gold.answer_session_ids,
+        &gold.annotated_answer_turns,
+        sources,
+    )?;
+    let selected: BTreeSet<_> = full_history
+        .selected_session_occurrences
+        .iter()
+        .map(|occurrence| occurrence.session_index)
+        .collect();
     let missing: Vec<_> = gold
         .answer_session_ids
         .iter()
-        .filter(|id| !session_index_by_id.contains_key(*id))
+        .filter(|id| {
+            !sources
+                .iter()
+                .any(|source| source.upstream_session_id.as_str() == id.as_str())
+        })
         .cloned()
         .collect();
     let status = if gold.abstention {
@@ -825,29 +847,25 @@ fn answer_session_retrieval(
     } else {
         "measured"
     };
-    let mapped: Vec<_> = if missing.is_empty() {
-        gold.answer_session_ids.clone()
-    } else {
-        gold.answer_session_ids
-            .iter()
-            .filter(|id| session_index_by_id.contains_key(*id))
-            .cloned()
-            .collect()
-    };
-    let retrieved: Vec<_> = mapped
+    let retrieved: Vec<_> = occurrences
         .iter()
-        .filter(|id| selected.contains(*id))
+        .filter(|occurrence| selected.contains(&occurrence.session_index))
         .cloned()
         .collect();
     let can_score = status == "measured";
-    AnswerSessionRetrieval {
+    Ok(AnswerSessionRetrieval {
         status,
         gold_answer_session_ids: gold.answer_session_ids.clone(),
         missing_gold_session_ids: missing,
-        retrieved_gold_session_ids: retrieved.clone(),
+        retrieved_gold_session_ids: retrieved
+            .iter()
+            .map(|occurrence| occurrence.session_id.clone())
+            .collect(),
+        gold_answer_session_occurrences: occurrences.clone(),
+        retrieved_gold_session_occurrences: retrieved.clone(),
         any_retrieved: can_score.then_some(!retrieved.is_empty()),
-        all_retrieved: can_score.then_some(retrieved.len() == mapped.len()),
-    }
+        all_retrieved: can_score.then_some(retrieved.len() == occurrences.len()),
+    })
 }
 
 fn selected_overlap_bytes(
@@ -888,33 +906,46 @@ fn full_history_retrieval(
     evidence: &[EvidenceCitation],
     sources: &[SessionSource],
 ) -> FullHistorySessionRetrieval {
-    let known: BTreeSet<String> = sources
+    let known: BTreeMap<&str, &SessionSource> = sources
         .iter()
-        .map(|source| source.session_id.clone())
+        .map(|source| (source.reference.as_str(), source))
         .collect();
-    let mut selected = BTreeSet::new();
+    let mut selected_indices = BTreeSet::new();
     let mut unresolved = BTreeSet::new();
     for citation in evidence {
-        if let Some(id) = citation.source.reference.strip_prefix("session://") {
-            if known.contains(id) {
-                selected.insert(id.to_string());
+        if citation.source.reference.starts_with("session://") {
+            if let Some(source) = known.get(citation.source.reference.as_str()) {
+                selected_indices.insert(source.session_index);
             } else {
                 unresolved.insert(citation.source.reference.clone());
             }
         }
     }
+    let selected_occurrences: Vec<_> = sources
+        .iter()
+        .filter(|source| selected_indices.contains(&source.session_index))
+        .map(|source| SessionOccurrence {
+            session_id: source.upstream_session_id.clone(),
+            session_index: source.session_index,
+        })
+        .collect();
+    let selected_ids: BTreeSet<_> = selected_occurrences
+        .iter()
+        .map(|occurrence| occurrence.session_id.clone())
+        .collect();
     let total = sources.len();
     FullHistorySessionRetrieval {
         total_history_sessions: total,
-        selected_history_sessions: selected.len(),
+        selected_history_sessions: selected_occurrences.len(),
         selected_fraction: if total == 0 {
             0.0
         } else {
-            selected.len() as f64 / total as f64
+            selected_occurrences.len() as f64 / total as f64
         },
-        selected_session_ids: selected.into_iter().collect(),
+        selected_session_ids: selected_ids.into_iter().collect(),
+        selected_session_occurrences: selected_occurrences,
         unresolved_session_references: unresolved.into_iter().collect(),
-        interpretation: "Descriptive breadth only: selected full-history source sessions divided by all indexed sessions; not a relevance or answer-session metric.",
+        interpretation: "Descriptive breadth only: selected source occurrences divided by all indexed input occurrences; selected_session_ids lists distinct upstream IDs, while selected_session_occurrences preserves duplicate-ID identities. This is not a relevance or answer-session metric.",
     }
 }
 
@@ -990,8 +1021,152 @@ fn validate_input_cases(cases: &[InputCase]) -> anyhow::Result<()> {
         );
         ensure!(!case.question.is_empty(), "input question is empty");
         ensure!(!case.question_date.is_empty(), "question date is empty");
+        let occurrence_ids = indexed_session_ids(&case.history_sessions);
+        ensure!(
+            occurrence_ids.iter().collect::<BTreeSet<_>>().len() == occurrence_ids.len(),
+            "source occurrence identities are not unique in case {}",
+            case.case_id
+        );
+        for session in &case.history_sessions {
+            ensure!(
+                !session.session_id.is_empty() && !session.turns.is_empty(),
+                "empty source session in case {}",
+                case.case_id
+            );
+            timestamp_from_source_date(&session.date)
+                .with_context(|| format!("invalid source date in case {}", case.case_id))?;
+            for turn in &session.turns {
+                ensure!(!turn.role.is_empty(), "source turn has an empty role");
+            }
+        }
     }
     Ok(())
+}
+
+/// Give duplicate upstream IDs unique per-input identities. Unique IDs retain
+/// their original identity, while every repeated occurrence gets a stable
+/// ordinal suffix. Candidate IDs are checked against every original ID to
+/// avoid colliding with a legitimate upstream identifier.
+fn indexed_session_ids(sessions: &[InputSession]) -> Vec<String> {
+    let mut counts = BTreeMap::<&str, usize>::new();
+    let mut used: BTreeSet<String> = sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect();
+    for session in sessions {
+        *counts.entry(&session.session_id).or_default() += 1;
+    }
+
+    sessions
+        .iter()
+        .enumerate()
+        .map(|(session_index, session)| {
+            if counts[session.session_id.as_str()] == 1 {
+                return session.session_id.clone();
+            }
+            let base = format!(
+                "{}#longmemeval-occurrence-{session_index}",
+                session.session_id
+            );
+            let mut candidate = base.clone();
+            let mut suffix = 1usize;
+            while used.contains(&candidate) {
+                candidate = format!("{base}-{suffix}");
+                suffix += 1;
+            }
+            used.insert(candidate.clone());
+            candidate
+        })
+        .collect()
+}
+
+fn gold_answer_occurrences(
+    answer_session_ids: &[String],
+    annotations: &[AnnotatedTurn],
+    sources: &[SessionSource],
+) -> anyhow::Result<Vec<SessionOccurrence>> {
+    let mut seen_turns = BTreeSet::new();
+    for annotation in annotations {
+        ensure!(
+            seen_turns.insert((annotation.session_index, annotation.turn_index)),
+            "duplicate annotated answer turn"
+        );
+        let source = sources
+            .get(annotation.session_index)
+            .context("annotated answer session index missing")?;
+        ensure!(
+            source.upstream_session_id == annotation.session_id,
+            "annotated answer session ID does not match input index"
+        );
+        ensure!(
+            source
+                .turn_ranges
+                .iter()
+                .any(|turn| turn.turn_index == annotation.turn_index),
+            "annotated answer turn index missing"
+        );
+    }
+
+    let mut seen_ids = BTreeSet::new();
+    let mut seen_occurrences = BTreeSet::new();
+    let mut occurrences = Vec::new();
+    for session_id in answer_session_ids {
+        ensure!(
+            seen_ids.insert(session_id.as_str()),
+            "duplicate gold answer session ID {:?}",
+            session_id
+        );
+        let matching: Vec<_> = sources
+            .iter()
+            .filter(|source| source.upstream_session_id.as_str() == session_id.as_str())
+            .collect();
+        match matching.as_slice() {
+            [source] => {
+                let occurrence = SessionOccurrence {
+                    session_id: source.upstream_session_id.clone(),
+                    session_index: source.session_index,
+                };
+                if seen_occurrences.insert(occurrence.clone()) {
+                    occurrences.push(occurrence);
+                }
+            }
+            [] => {}
+            _ => {
+                let indices: BTreeSet<_> = annotations
+                    .iter()
+                    .filter(|annotation| annotation.session_id.as_str() == session_id.as_str())
+                    .map(|annotation| annotation.session_index)
+                    .collect();
+                ensure!(
+                    !indices.is_empty(),
+                    "ambiguous gold session ID {:?}: it occurs at input indices {:?}, but annotated_answer_turns has no matching session_index",
+                    session_id,
+                    matching
+                        .iter()
+                        .map(|source| source.session_index)
+                        .collect::<Vec<_>>()
+                );
+                for session_index in indices {
+                    let source = sources
+                        .get(session_index)
+                        .context("gold occurrence index missing from captured sources")?;
+                    ensure!(
+                        source.upstream_session_id.as_str() == session_id.as_str(),
+                        "gold occurrence index conflicts with upstream session ID {:?}",
+                        session_id
+                    );
+                    let occurrence = SessionOccurrence {
+                        session_id: source.upstream_session_id.clone(),
+                        session_index,
+                    };
+                    if seen_occurrences.insert(occurrence.clone()) {
+                        occurrences.push(occurrence);
+                    }
+                }
+            }
+        }
+    }
+    Ok(occurrences)
 }
 
 fn timestamp_from_source_date(value: &str) -> anyhow::Result<Timestamp> {
@@ -1282,6 +1457,169 @@ fn dataset_profiles_default_to_v1_and_keep_distinct_pins() {
     assert_ne!(default.manifest_sha256, v2.manifest_sha256);
     assert_ne!(v2.manifest_sha256, v3.manifest_sha256);
     assert!(dataset_profile(Some("v4")).is_err());
+}
+
+#[test]
+fn duplicate_upstream_ids_keep_ordinal_occurrences_and_gold_indices() {
+    let duplicate = InputSession {
+        session_id: "session-duplicate".into(),
+        date: "2025/02/03 (Mon) 04:05".into(),
+        turns: vec![InputTurn {
+            content: "same source bytes".into(),
+            role: "assistant".into(),
+        }],
+    };
+    let input = InputCase {
+        case_id: "case-duplicate".into(),
+        question: "synthetic question".into(),
+        question_date: "2025/02/04".into(),
+        history_sessions: vec![duplicate.clone(), duplicate],
+    };
+    validate_input_cases(std::slice::from_ref(&input))
+        .expect("duplicate source IDs pass ordinal structural preflight");
+    let indexed_ids = indexed_session_ids(&input.history_sessions);
+    assert_ne!(indexed_ids[0], indexed_ids[1]);
+    assert!(indexed_ids[0].contains("occurrence-0"));
+    assert!(indexed_ids[1].contains("occurrence-1"));
+
+    let gold = GoldCase {
+        case_id: input.case_id.clone(),
+        question_type: "single-session-user".into(),
+        abstention: false,
+        answer: Value::Null,
+        answer_session_ids: vec!["session-duplicate".into()],
+        annotated_answer_turns: vec![
+            AnnotatedTurn {
+                session_id: "session-duplicate".into(),
+                session_index: 0,
+                turn_index: 0,
+            },
+            AnnotatedTurn {
+                session_id: "session-duplicate".into(),
+                session_index: 1,
+                turn_index: 0,
+            },
+        ],
+    };
+    let sources = test_session_sources(&input.history_sessions);
+    let occurrences = gold_answer_occurrences(
+        &gold.answer_session_ids,
+        &gold.annotated_answer_turns,
+        &sources,
+    )
+    .expect("both independently annotated occurrences map");
+    assert_eq!(
+        occurrences,
+        vec![
+            SessionOccurrence {
+                session_id: "session-duplicate".into(),
+                session_index: 0,
+            },
+            SessionOccurrence {
+                session_id: "session-duplicate".into(),
+                session_index: 1,
+            },
+        ]
+    );
+
+    let ambiguous = GoldCase {
+        annotated_answer_turns: Vec::new(),
+        ..gold
+    };
+    let error = gold_answer_occurrences(
+        &ambiguous.answer_session_ids,
+        &ambiguous.annotated_answer_turns,
+        &sources,
+    )
+    .expect_err("ambiguous gold fails");
+    assert!(error.to_string().contains("ambiguous gold session ID"));
+}
+
+#[test]
+fn unique_upstream_session_ids_keep_their_existing_identity() {
+    let sessions = vec![test_session("unique-one"), test_session("unique-two")];
+    assert_eq!(
+        indexed_session_ids(&sessions),
+        vec!["unique-one".to_string(), "unique-two".to_string()]
+    );
+}
+
+#[test]
+fn retrieval_counts_duplicate_session_occurrences_independently() {
+    let sessions = vec![test_session("same-id"), test_session("same-id")];
+    let sources = test_session_sources(&sessions);
+    let evidence = vec![test_citation(&sources[1].reference)];
+    let retrieval = full_history_retrieval(&evidence, &sources);
+
+    assert_eq!(retrieval.total_history_sessions, 2);
+    assert_eq!(retrieval.selected_history_sessions, 1);
+    assert_eq!(retrieval.selected_session_ids, vec!["same-id".to_string()]);
+    assert_eq!(
+        retrieval.selected_session_occurrences,
+        vec![SessionOccurrence {
+            session_id: "same-id".into(),
+            session_index: 1,
+        }]
+    );
+}
+
+fn test_session(session_id: &str) -> InputSession {
+    InputSession {
+        session_id: session_id.into(),
+        date: "2025/02/03 (Mon) 04:05".into(),
+        turns: vec![InputTurn {
+            content: "synthetic source".into(),
+            role: "assistant".into(),
+        }],
+    }
+}
+
+fn test_session_sources(sessions: &[InputSession]) -> Vec<SessionSource> {
+    let indexed_ids = indexed_session_ids(sessions);
+    sessions
+        .iter()
+        .enumerate()
+        .map(|(session_index, session)| {
+            let (body, turn_ranges) = format_session(session).expect("valid test session");
+            let indexed_id = &indexed_ids[session_index];
+            let revision = oxibrain_core::id::content_hash(&body).hex().to_uppercase();
+            SessionSource {
+                upstream_session_id: session.session_id.clone(),
+                session_index,
+                reference: format!("session://{indexed_id}"),
+                revision,
+                episode_id: format!("episode-{session_index}"),
+                body,
+                turn_ranges,
+            }
+        })
+        .collect()
+}
+
+fn test_citation(reference: &str) -> EvidenceCitation {
+    EvidenceCitation {
+        citation_id: String::new(),
+        unit_id: "unit".into(),
+        layer_index: 0,
+        rendered_start: 0,
+        rendered_end: 0,
+        rendered_text_start: 0,
+        rendered_text_end: 0,
+        source: SourceCoordinate {
+            reference: reference.into(),
+            revision: "revision".into(),
+            view: "episode-utf8/1".into(),
+            view_digest: None,
+            decoder: None,
+            start: 0,
+            end: 0,
+            document_uuid: None,
+        },
+        role: "untrusted_observation".into(),
+        support: Vec::new(),
+        shortened: false,
+        omitted_ranges: Vec::new(),
+    }
 }
 
 #[test]

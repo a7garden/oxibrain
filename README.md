@@ -70,7 +70,8 @@ launcher taking precedence in hosts that resolve both.
 # Create the store and a brain space (more spaces: oxibrain admin space add <name>).
 oxibrain admin init --space personal
 
-# Pull the local GGUF model set (otherwise pulled lazily on first extraction).
+# Pull the local GGUF set: Qwen3 4B Instruct 2507 + BGE-M3.
+# The extraction model is otherwise pulled lazily on first extraction.
 oxibrain admin model pull
 
 # Register a document root by editing ~/.oxi/brain/documents.toml (there is no
