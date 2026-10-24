@@ -7,6 +7,17 @@ squash-merged.
 
 ## [Unreleased]
 
+## [0.21.1] — 2026-10-24
+
+### Fixed
+
+- Include pinned external-evaluation manifests inside the CLI crate so its integration tests compile outside the repository.
+- Verify the CLI package file inventory in an isolated source export without repository-only evaluation files before publication, and run the registry package's adapter tests in the public consumer smoke.
+
+Version 0.21.0 packages were published, but its GitHub binary release was not
+promoted after the package-test fixture defect was found. Version 0.21.1 retains
+the same retrieval, inference, schema and policy behavior with the packaging fix.
+
 ## [0.21.0] — 2026-10-24
 
 ### Added

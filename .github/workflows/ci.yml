@@ -41,6 +41,8 @@ jobs:
         run: bash scripts/publish.sh --order-only
       - name: fresh consumer dependencies
         run: bash scripts/check-consumer.sh
+      - name: packaged CLI integration tests
+        run: bash scripts/check-cli-package.sh
       - name: test
         run: cargo test --all-features
 

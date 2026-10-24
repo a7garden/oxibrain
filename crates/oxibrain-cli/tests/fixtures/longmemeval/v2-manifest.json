@@ -1,0 +1,100 @@
+{
+  "annotation_caveat": "Human-curated questions and evidence labels; evidence sessions were LLM-simulated and manually screened/edited per the paper. English only; not real-user dialogue and not an independently collected multilingual benchmark.",
+  "dataset": "LongMemEval cleaned LongMemEval_S",
+  "gold": {
+    "audience": "evaluator-only",
+    "bytes": 7729,
+    "path": "/tmp/oxibrain-longmemeval-s-public-v2/gold.jsonl",
+    "rows": 20,
+    "sha256": "d4fac57d5b98ab672e05e5ebfbf789e110e4cc480ce031135463fb7160c124d3"
+  },
+  "input": {
+    "bytes": 10309609,
+    "path": "/tmp/oxibrain-longmemeval-s-public-v2/input.jsonl",
+    "rows": 20,
+    "sha256": "2ed7811b885afaaf04752248c8e3a9a7a4823f6eefb971ab67ab37cc085345a3"
+  },
+  "license": "MIT (pinned Hugging Face card metadata; upstream repository LICENSE retained verbatim)",
+  "license_sha256": "d3c4b9aa54759df6ded337978a6f3b55b75615e5e4525c3b82d7e2627d4b9732",
+  "license_source": "https://raw.githubusercontent.com/xiaowu0162/LongMemEval/9e0b455f4ef0e2ab8f2e582289761153549043fc/LICENSE",
+  "official_dataset": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned",
+  "official_repo": "https://github.com/xiaowu0162/LongMemEval",
+  "paper": "https://arxiv.org/abs/2410.10813v2",
+  "preparation_script": {
+    "path": "freeze_subset.py",
+    "sha256": "fdc7d4351fbf09e73564c14c6804a5564746711f4ac259f629cefc93a7d6fd0c"
+  },
+  "question_type_counts": {
+    "knowledge-update": 78,
+    "multi-session": 133,
+    "single-session-assistant": 56,
+    "single-session-preference": 30,
+    "single-session-user": 70,
+    "temporal-reasoning": 133
+  },
+  "retrieval_caveat": "The S track keeps distractor histories; answer markers are present only in gold.jsonl. Requires a separate ingestion/evaluation adapter. Does not test cross-writing-system parity.",
+  "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+  "schema": "oxibrain-external-memory-qa/1",
+  "selected_count": 20,
+  "selected_coverage": {
+    "knowledge-update": {
+      "abstention": 2,
+      "answer_turn_annotations": 4,
+      "answerable": 2,
+      "sessions": 193,
+      "turns": 1915
+    },
+    "multi-session": {
+      "abstention": 2,
+      "answer_turn_annotations": 4,
+      "answerable": 2,
+      "sessions": 191,
+      "turns": 2031
+    },
+    "single-session-assistant": {
+      "abstention": 0,
+      "answer_turn_annotations": 2,
+      "answerable": 2,
+      "sessions": 94,
+      "turns": 1016
+    },
+    "single-session-preference": {
+      "abstention": 0,
+      "answer_turn_annotations": 4,
+      "answerable": 2,
+      "sessions": 100,
+      "turns": 1044
+    },
+    "single-session-user": {
+      "abstention": 2,
+      "answer_turn_annotations": 3,
+      "answerable": 2,
+      "sessions": 200,
+      "turns": 2104
+    },
+    "temporal-reasoning": {
+      "abstention": 2,
+      "answer_turn_annotations": 7,
+      "answerable": 2,
+      "sessions": 202,
+      "turns": 2016
+    }
+  },
+  "selected_profile": {
+    "abstention": 8,
+    "answer_turn_annotations": 24,
+    "answerable": 12,
+    "cases": 20,
+    "sessions": 980,
+    "turns": 10126
+  },
+  "selected_source_question_ids_sha256": "2c7767c1d4819679e97445bb193e661acf5d0b10fd492993a7447cd5f362b1b0",
+  "selection": "The v1 exclusion set is reconstructed from the pinned v1 rule (first two answerable and first two abstention records per type where available) and verified against the frozen v1 input and gold hashes. For v2, the two lowest SHA256(seed + source_question_id) ranks are selected among remaining records for each v1 category quota: two answerable in each of six types and two abstentions in the four types that had abstentions in v1. Rank ties use source question ID. Output case IDs are assigned after sorting by type, status (abstention before answerable), then rank and source ID. Session IDs and dates remain zipped by index with sessions. Input excludes has_answer, answer_session_ids, source question IDs, and gold labels; gold is a separate evaluator-only file.",
+  "selection_seed": "oxibrain-release-0.21.0-unseen-v2",
+  "source_rows_scanned": 500,
+  "upstream_file": "longmemeval_s_cleaned.json",
+  "upstream_file_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "upstream_file_url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json",
+  "v1_exclusion_count": 20,
+  "v1_exclusion_ids_sha256": "38a861cb70d53c7cff9a63642b8ba3901f43f404cd0d6e7e8d0d8079b180366c"
+}

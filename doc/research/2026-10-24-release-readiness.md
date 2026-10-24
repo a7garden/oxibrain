@@ -474,3 +474,49 @@ fabricated-entity rate zero. The full source and extraction reports are
 `v021-final-4b-smoke*.json`. Its companion one-case reader exercise is a repeated
 integration check, not a new answer-quality sample. No Dyno/HTTP provider was
 selected for these final checks.
+
+## Package-test recovery before public binary promotion
+
+The 0.21.0 workflow uploaded all seventeen crates, then was canceled before
+public GitHub binary promotion when root found a packaging defect in the new
+profile test: two `include_str!` paths referred to repository-level manifests,
+which are absent from the CLI crate archive. Workspace tests and consumer
+library compilation could not detect this integration-test file-closure error.
+No 0.21.0 GitHub binaries were promoted or installed. The tag and draft are
+preserved; published registry versions are immutable, so recovery uses 0.21.1.
+
+The patch copies all four immutable manifests into package-local test fixtures,
+checks each complete fixture hash against its frozen profile pin, and validates
+all ordered cross-profile rejections. A source-export gate selects only the
+CLI's Cargo package file inventory, omits the repository evaluation directory,
+and compiles/runs the adapter integration tests. It keeps local workspace
+manifests for dependency resolution, so the later registry smoke additionally
+tests the actual downloaded CLI package through its own manifest. These are
+different checks. Retrieval, inference, schema 18 and read policy 5 are unchanged;
+the recorded holdout and 4B results are retained without counting reruns as new
+quality evidence.
+
+The production tokenizer was also made durable after a research subagent fetched
+the official Qwen 4B tokenizer at revision
+`cdbee75f17c01a7cc42f958dc650907174af0554` and confirmed byte-for-byte equality
+with the evaluated artifact. Root verified the durable copy's SHA-256
+`aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4`.
+Shell and Codex MCP configuration explicitly bind that file and the local
+provider. This does not claim token-count parity against the GGUF's embedded
+metadata; it binds the exact official model artifact used in evaluation.
+
+The package-source gate reproduced both missing repository-manifest compiler
+errors with the old test. After restoring the package-local fixtures and
+rebuilding an inconsistent cloned native cache, the isolated gate passed all
+eight adapter tests with the external live benchmark explicitly ignored. The
+source export contained no repository evaluation directory. All four fixture
+bytes and SHA-256 pins match their frozen original manifests; no benchmark was
+rerun or counted as a new quality sample for this patch. Shell syntax, Rust
+formatting and whitespace checks passed. A read-only subagent reviewed the
+source-export and actual-registry test stages and found no remaining blocker;
+registry execution remains a publication gate, not a completed local check.
+
+The 0.21.1 recovery tree also passed all-target/all-feature Clippy with warnings
+denied, deterministic archive/publish-order tests and release-asset verifier
+tests. The seventeen workspace and lockfile package versions are consistently
+0.21.1. Full CI and publication checks remain required before promotion.

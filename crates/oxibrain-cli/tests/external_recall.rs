@@ -1678,31 +1678,63 @@ fn render_mode_default_preserves_constructor_policy_and_overrides_are_explicit()
 
 #[test]
 fn each_profile_accepts_only_its_manifest_paths_and_pins() {
-    let actual_v1: Value = serde_json::from_str(include_str!(
-        "../../../eval/research/longmemeval-s/manifest.json"
-    ))
-    .expect("frozen v1 manifest");
-    validate_manifest(&actual_v1, &V1_PROFILE).expect("actual frozen v1 manifest validates");
-    let v1 = manifest_fixture(&V1_PROFILE);
-    let v2 = manifest_fixture(&V2_PROFILE);
-    let v3 = manifest_fixture(&V3_PROFILE);
-    validate_manifest(&v1, &V1_PROFILE).expect("v1 manifest fixture validates");
-    validate_manifest(&v2, &V2_PROFILE).expect("v2 manifest fixture validates");
-    validate_manifest(&v3, &V3_PROFILE).expect("v3 manifest fixture validates");
-    assert!(validate_manifest(&v1, &V2_PROFILE).is_err());
-    assert!(validate_manifest(&v2, &V1_PROFILE).is_err());
-    assert!(validate_manifest(&v1, &V3_PROFILE).is_err());
-    assert!(validate_manifest(&v2, &V3_PROFILE).is_err());
-    assert!(validate_manifest(&v3, &V1_PROFILE).is_err());
-    assert!(validate_manifest(&v3, &V2_PROFILE).is_err());
-    let v4: Value = serde_json::from_str(include_str!(
-        "../../../eval/research/longmemeval-s/v4/manifest.json"
-    ))
-    .expect("frozen v4 manifest");
-    validate_manifest(&v4, &V4_PROFILE).expect("actual frozen v4 manifest validates");
-    for other in [&V1_PROFILE, &V2_PROFILE, &V3_PROFILE] {
-        assert!(validate_manifest(&v4, other).is_err());
-        assert!(validate_manifest(&manifest_fixture(other), &V4_PROFILE).is_err());
+    let manifests: [(&DatasetProfile, &[u8]); 4] = [
+        (
+            &V1_PROFILE,
+            include_bytes!("fixtures/longmemeval/v1-manifest.json"),
+        ),
+        (
+            &V2_PROFILE,
+            include_bytes!("fixtures/longmemeval/v2-manifest.json"),
+        ),
+        (
+            &V3_PROFILE,
+            include_bytes!("fixtures/longmemeval/v3-manifest.json"),
+        ),
+        (
+            &V4_PROFILE,
+            include_bytes!("fixtures/longmemeval/v4-manifest.json"),
+        ),
+    ];
+
+    for (profile, bytes) in manifests {
+        assert_eq!(
+            sha256_hex(bytes),
+            profile.manifest_sha256,
+            "{} frozen manifest SHA-256",
+            profile.name
+        );
+        let manifest: Value = serde_json::from_slice(bytes)
+            .unwrap_or_else(|error| panic!("{} frozen manifest parses: {error}", profile.name));
+        validate_manifest(&manifest, profile)
+            .unwrap_or_else(|error| panic!("{} frozen manifest validates: {error}", profile.name));
+
+        for (other_profile, _) in manifests {
+            if profile.name != other_profile.name {
+                assert!(
+                    validate_manifest(&manifest, other_profile).is_err(),
+                    "{} manifest must not validate as {}",
+                    profile.name,
+                    other_profile.name
+                );
+            }
+        }
+    }
+
+    for profile in [&V1_PROFILE, &V2_PROFILE, &V3_PROFILE, &V4_PROFILE] {
+        validate_manifest(&manifest_fixture(profile), profile).unwrap_or_else(|error| {
+            panic!("{} synthetic manifest validates: {error}", profile.name)
+        });
+        for other in [&V1_PROFILE, &V2_PROFILE, &V3_PROFILE, &V4_PROFILE] {
+            if profile.name != other.name {
+                assert!(
+                    validate_manifest(&manifest_fixture(profile), other).is_err(),
+                    "{} synthetic manifest must not validate as {}",
+                    profile.name,
+                    other.name
+                );
+            }
+        }
     }
 }
 
