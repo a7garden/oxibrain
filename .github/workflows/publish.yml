@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to publish (for example v0.21.0)
+        description: Existing release tag to publish (for example v0.21.1)
         required: true
         type: string
 
@@ -96,6 +96,9 @@ jobs:
       - name: Fresh consumer preflight (before package publication)
         run: bash scripts/check-consumer.sh
 
+      - name: Packaged CLI integration tests (before package publication)
+        run: bash scripts/check-cli-package.sh
+
       - name: Refuse published releases and create draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -135,6 +138,16 @@ jobs:
             "oxibrain-mcp@=$VERSION" \
             "oxibrain-cli@=$VERSION"
           cargo +stable check --quiet
+          published_cli_manifest="$(cargo +stable metadata --format-version 1 | python3 -c '
+          import json, sys
+          packages = [p for p in json.load(sys.stdin)["packages"]
+                      if p["name"] == "oxibrain-cli" and p["version"] == sys.argv[1]]
+          if len(packages) != 1:
+              sys.exit("expected exactly one published CLI package")
+          print(packages[0]["manifest_path"])
+          ' "$VERSION")"
+          cargo +stable test --quiet --manifest-path "$published_cli_manifest" \
+            --target-dir "$dir/consumer/target" --test external_recall
           echo "consumer smoke ok: oxibrain $VERSION stack (incl. cli) resolves and compiles"
 
   # oxios's BrainInstaller downloads `releases/latest` and expects exactly
