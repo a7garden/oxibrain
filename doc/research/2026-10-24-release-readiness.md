@@ -230,3 +230,44 @@ metadata was copied beside the unchanged input/gold, and the freeze file was
 written before the actual retrieval run. Neither failure exposed scores or
 changed candidate policy. Other CPU checks and a separate local-reader run
 overlapped, so elapsed times are descriptive rather than isolated benchmarks.
+
+## Third candidate and consumer checks
+
+Commit `8549de97b49fd6f10dc670048e3a3e393c716b48` changes normal reads to
+`read-policy/4`, using compact `context_render/2` by default. Complete source
+coordinates, roles, supports, uncertainty and omission metadata remain available
+out of band. Explicit `compact_evidence=false` requests full framing; the old
+`pack_evidence` compatibility helper retains full framing for its frozen baseline.
+The policy-aware packer has an exact-budget/source-map regression test.
+
+The independently frozen v3 subset excludes all 40 v1/v2 question IDs. Its
+20 cases contain 931 sessions, 9,638 turns and 20 annotated answer turns. The
+compiled default-feature runner was copied before launch and frozen with the
+candidate commit, exact compact policy, dataset/model/tokenizer hashes and both
+budgets in `eval/research/longmemeval-s/results/v3-compact-freeze.json`.
+Root has not inspected v3 questions, answers or case labels. Gold loading occurs
+only after every retrieval request. The run is pending at this checkpoint.
+
+`evidence-reader/4` permits at most two attempts for invalid JSON or a delivery
+contract failure. The retry retains the question, evidence, model, output budget,
+schema and grammar; it adds typed diagnostics and the prior reply as an untrusted
+JSON string. It never receives gold or expected action labels. Provider failures
+are not retried. Every request, response, validation error and latency is captured;
+the final response passes the same validator or exposes an explicit failure.
+Eight reference-reader unit tests, seven skill tests, sixteen packer tests and
+five external-profile tests passed (one external execution test remains opt-in).
+
+The release executable generated and installed the actual skill into a temporary
+Codex directory. `skill-creator` validation passed. A fresh independent consumer,
+given no expected answers, handled two new offline evidence scenarios: it kept
+both conjunctive rollout prerequisites, rejected cross-project approvals, and did
+not infer entity identity or transfer policy from an incidental nickname. The
+generated-file/binary hashes, complete responses and scope of this check are in
+`eval/research/skill-forward/v021-final-forward.json`. This checks those consumer
+answers, not MCP transport, retrieval quality or universal agent compliance.
+
+All-target/all-feature clippy passed on this candidate, as did the cached CLI
+extraction evaluation. A workspace test run reached doctests but failed to load
+`oxibrain_connectors` (`E0463`) while another feature build shared its target
+directory. A serial full rerun is in progress; the failed invocation is not
+reported as a passed suite.
