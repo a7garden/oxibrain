@@ -1,5 +1,12 @@
 # oxibrain — Architecture
-> **Version:** v2.29 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.30 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.30 — Bounded source context.** Raw-source paragraph/line windows use
+> 1,024 bytes with 128-byte overlap for oversized lines (`source-paragraph-window/3`).
+> Schema 18 clears only disposable source chunks, indexes, vectors and cursors.
+> `read-policy/5` can accompany the first ranked later hit from a source with
+> up to 768 UTF-8-safe prefix bytes. Core plans, store fetches through the same
+> scope filters, and facade sequences ordinary untrusted evidence. Full source
+> coordinates and the final tokenizer budget apply; no inferred trust enters truth.
 > **v2.29 — Compact read default.** `read-policy/4` uses `context_render/2`
 > response-scoped labels by default, with complete provenance, uncertainty,
 > source/text coordinates and omissions in the same response. Explicit

@@ -98,6 +98,28 @@ fn coordinate(reference: String, revision: String, start: usize, end: usize) -> 
     }
 }
 
+fn source_reference(episode: &str, source_kind: &str, source_ref: Option<&str>) -> String {
+    if source_kind == "session" {
+        format!(
+            "session://{}",
+            source_ref
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                .and_then(|value| value["session_id"].as_str().map(str::to_string))
+                .unwrap_or_else(|| episode.to_string())
+        )
+    } else {
+        format!("episode://{episode}")
+    }
+}
+
+fn source_layer(source_kind: &str) -> LayerKind {
+    if source_kind == "session" {
+        LayerKind::SessionSummaries
+    } else {
+        LayerKind::RecentEpisodes
+    }
+}
+
 impl Brain {
     /// Bind a local tokenizer independently of extraction. Does not load/download a model.
     pub fn with_tokenizer(
@@ -198,7 +220,7 @@ impl Brain {
             loop {
                 let space = row.id.clone();
                 let (n,done)=self.write(move |c| {
-                    let key=format!("raw-index/{space}/2");
+                    let key=format!("raw-index/{space}/3");
                     let mut saved=oxibrain_store::meta::get(c,&key)?.and_then(|v|serde_json::from_str::<serde_json::Value>(&v).ok());
                     if saved.as_ref().is_some_and(|v|v["complete"]==true) && oxibrain_store::read_evidence::missing_source_count(c,&space)? > 0 {saved=None;}
                     let target=saved.as_ref().and_then(|v|v["target"].as_i64()).unwrap_or(oxibrain_store::read_evidence::frontier(c,&space)?);
@@ -576,6 +598,166 @@ impl Brain {
                     rows.entry(h.id.clone()).or_insert(h);
                 }
                 let mut raw: Vec<_> = selected.iter().filter_map(|id| rows.remove(id)).collect();
+                let query_count = raw.len();
+                let mut source_prefix_units = BTreeMap::new();
+                if self.read_policy.source_context_bytes > 0 {
+                    let first_hits: Vec<_> = raw
+                        .iter()
+                        .filter(|hit| hit.source_kind == "session" || !req.hints.skip_episodes)
+                        .map(|hit| oxibrain_core::source_context::QuerySourceHit {
+                            episode: hit.episode.clone(),
+                            start: hit.start,
+                        })
+                        .collect();
+                    let prefix_bytes = self
+                        .read_policy
+                        .source_context_bytes
+                        .min(self.read_policy.materialization_bytes);
+                    let maximum = self.read_policy.channel_depth.min(
+                        self.read_policy
+                            .materialization_bytes
+                            .checked_div(prefix_bytes)
+                            .unwrap_or(0),
+                    );
+                    let plan = oxibrain_core::source_context::plan_prefixes(&first_hits, maximum);
+                    let (space, known, valid, excluded, episodes) = (
+                        req.scope.space.clone(),
+                        req.scope.known_at.unwrap_or(now),
+                        req.scope.as_of.unwrap_or(Timestamp(i64::MAX)),
+                        req.session_id.clone(),
+                        plan.episodes.clone(),
+                    );
+                    let (source_context_bytes, channel_depth, materialization_bytes) = (
+                        self.read_policy.source_context_bytes,
+                        self.read_policy.channel_depth,
+                        self.read_policy.materialization_bytes,
+                    );
+                    let fetch = self
+                        .read(move |c| {
+                            oxibrain_store::source_context::fetch_prefixes(
+                                c,
+                                &oxibrain_store::read_evidence::SourceReadScope {
+                                    space: &space,
+                                    known_at: known,
+                                    as_of: valid,
+                                    excluded_session: excluded.as_deref(),
+                                },
+                                &episodes,
+                                source_context_bytes,
+                                channel_depth,
+                                materialization_bytes,
+                            )
+                        })
+                        .await?;
+                    let mut invalid_prefixes = 0;
+                    for prefix in &fetch.prefixes {
+                        let reference = source_reference(
+                            &prefix.episode,
+                            &prefix.source_kind,
+                            prefix.source_ref.as_deref(),
+                        );
+                        let source =
+                            coordinate(reference, prefix.revision.clone(), 0, prefix.bytes.len());
+                        let Some(source_prefix) = oxibrain_core::source_context::utf8_prefix(
+                            &prefix.bytes,
+                            prefix_bytes,
+                            &source,
+                        ) else {
+                            invalid_prefixes += 1;
+                            continue;
+                        };
+                        let text = format!(
+                            "[observed_at={}; trust={}] {}",
+                            prefix.occurred_at.0, prefix.trust, source_prefix.text
+                        );
+                        let mut unit = EvidenceUnit::new(
+                            source_layer(&prefix.source_kind),
+                            text,
+                            source_prefix.source,
+                            "untrusted_observation",
+                        );
+                        unit.support.push(prefix.episode.clone());
+                        source_prefix_units
+                            .entry(prefix.episode.clone())
+                            .or_insert(unit);
+                    }
+                    let capped = plan.capped || fetch.capped;
+                    let fallback = if !fetch.available {
+                        Some("raw source prefix index unavailable".to_string())
+                    } else if invalid_prefixes > 0 {
+                        Some("invalid UTF-8 source prefix omitted".to_string())
+                    } else {
+                        None
+                    };
+                    meta.channels
+                        .push(oxibrain_core::read_channels::ChannelReceipt {
+                            plane: "memory_sources".into(),
+                            channel: "source_context".into(),
+                            eligible: true,
+                            executed: !plan.episodes.is_empty() && fetch.available,
+                            total: Some(plan.eligible_episodes),
+                            indexed: Some(fetch.prefixes.len()),
+                            considered: plan.unique_episodes,
+                            capped,
+                            limit_reached: capped,
+                            fallback: fallback.clone(),
+                            algorithm_version: Some(
+                                oxibrain_core::source_context::SOURCE_CONTEXT_POLICY.into(),
+                            ),
+                            query_limit: Some(self.read_policy.source_context_bytes),
+                            plan_candidates_examined: plan.unique_episodes,
+                            plan_candidates_selected: source_prefix_units.len(),
+                            queries_run: fetch.considered,
+                            ..Default::default()
+                        });
+                    meta.scope["source_context"] = serde_json::json!({
+                        "policy": oxibrain_core::source_context::SOURCE_CONTEXT_POLICY,
+                        "enabled": true,
+                        "examined_episodes": plan.unique_episodes,
+                        "eligible_episodes": plan.eligible_episodes,
+                        "planned_prefixes": plan.episodes.len(),
+                        "fetched_prefixes": fetch.prefixes.len(),
+                        "candidate_prefixes": source_prefix_units.len(),
+                        "capped": capped,
+                        "executed": !plan.episodes.is_empty() && fetch.available,
+                        "bytes_read": fetch.bytes_read,
+                        "bytes_candidates": source_prefix_units
+                            .values()
+                            .map(|unit: &EvidenceUnit| unit.source.end)
+                            .sum::<usize>(),
+                        "materialization_bytes": self.read_policy.materialization_bytes,
+                        "channel_depth": self.read_policy.channel_depth,
+                        "fallback": fallback,
+                    });
+                } else {
+                    meta.channels
+                        .push(oxibrain_core::read_channels::ChannelReceipt {
+                            plane: "memory_sources".into(),
+                            channel: "source_context".into(),
+                            eligible: false,
+                            executed: false,
+                            algorithm_version: Some(
+                                oxibrain_core::source_context::SOURCE_CONTEXT_POLICY.into(),
+                            ),
+                            query_limit: Some(0),
+                            ..Default::default()
+                        });
+                    meta.scope["source_context"] = serde_json::json!({
+                        "policy": oxibrain_core::source_context::SOURCE_CONTEXT_POLICY,
+                        "enabled": false,
+                        "examined_episodes": 0,
+                        "eligible_episodes": 0,
+                        "planned_prefixes": 0,
+                        "fetched_prefixes": 0,
+                        "candidate_prefixes": 0,
+                        "capped": false,
+                        "executed": false,
+                        "bytes_read": 0,
+                        "bytes_candidates": 0,
+                        "materialization_bytes": self.read_policy.materialization_bytes,
+                        "channel_depth": self.read_policy.channel_depth,
+                    });
+                }
                 let space = req.scope.space.clone();
                 let exclude = req.session_id.clone();
                 let known = req.scope.known_at.unwrap_or(now);
@@ -593,30 +775,17 @@ impl Brain {
                         )
                     })
                     .await?;
-                let query_count = raw.len();
                 raw.extend(recent);
+                let mut seen_query_episodes = BTreeSet::new();
                 for (position, h) in raw.into_iter().enumerate() {
                     if h.source_kind != "session" && req.hints.skip_episodes {
                         *meta.dropped.entry("hint_excluded".into()).or_default() += 1;
                         continue;
                     }
-                    let reference = if h.source_kind == "session" {
-                        format!(
-                            "session://{}",
-                            h.source_ref
-                                .as_deref()
-                                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                                .and_then(|v| v["session_id"].as_str().map(str::to_string))
-                                .unwrap_or(h.episode.clone())
-                        )
-                    } else {
-                        format!("episode://{}", h.episode)
-                    };
-                    let layer = if h.source_kind == "session" {
-                        LayerKind::SessionSummaries
-                    } else {
-                        LayerKind::RecentEpisodes
-                    };
+                    let episode = h.episode.clone();
+                    let reference =
+                        source_reference(&episode, &h.source_kind, h.source_ref.as_deref());
+                    let layer = source_layer(&h.source_kind);
                     let mut u = EvidenceUnit::new(
                         layer,
                         format!(
@@ -639,8 +808,14 @@ impl Brain {
                             h.occurred_at.0, h.trust, variant.text
                         );
                     }
-                    u.support.push(h.episode);
+                    u.support.push(episode.clone());
                     units.push(u);
+                    if position < query_count
+                        && seen_query_episodes.insert(episode.clone())
+                        && let Some(prefix) = source_prefix_units.remove(&episode)
+                    {
+                        units.push(prefix);
+                    }
                 }
             }
             if req.planes.contains(&SearchPlane::Documents) {

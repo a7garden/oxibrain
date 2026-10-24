@@ -19,7 +19,7 @@ pub fn index_source(
         [episode],
     )
     .map_err(sql_err)?;
-    for c in oxibrain_core::chunking::source_paragraph_windows(body, 2048, 256) {
+    for c in oxibrain_core::chunking::source_paragraph_windows(body, 1024, 128) {
         let id = format!("raw-{}", oxibrain_core::chunk_id(episode, c.ordinal));
         conn.execute("INSERT INTO memory_source_chunks(id,space_id,episode_id,ordinal,span_start,span_end) VALUES(?1,?2,?3,?4,?5,?6)",
             params![id,space,episode,c.ordinal,c.span_start,c.span_end]).map_err(sql_err)?;

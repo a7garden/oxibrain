@@ -410,7 +410,7 @@ fn default_compact_mode_preserves_source_binding_and_fits_the_exact_budget() {
     assert!(policy.compact_evidence);
     assert_eq!(
         oxibrain_core::read_scope::ReadPolicy::VERSION,
-        "read-policy/4"
+        "read-policy/5"
     );
 
     let probe = oxibrain_core::evidence_pack::pack_evidence_with_policy(

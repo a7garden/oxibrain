@@ -362,5 +362,44 @@ smoke has one known case and is not added as an independent quality sample.
 At `78cba7c`, the all-feature workspace run passed 1,152 tests with zero failures
 and eleven explicit ignored tests across 121 suites. After restoring the prior
 reader prompt, all 68 CLI unit tests passed. CI at `78cba7c` passed every job,
-including MSRV and frontend checks. The production reader still exposes explicit
+including MSRV and frontend checks. The retained reference reader still exposes explicit
 delivery limitations; the evaluation client is not a new automatic-answer engine.
+
+## Smaller source units and bounded source context
+
+The occurrence-preserving v3 run completed at `78cba7c`. At both 2,000 and
+3,000 tokens it fully retrieved 17/20 annotated answer turns (85%), with
+6,661/7,500 annotated bytes (88.81%). This fails the frozen 90% whole-turn
+target. All answer sessions were retrieved for 11/12 answerable cases; at 3k,
+at least one answer session was found in all twelve. Session coverage and byte
+coverage do not replace whole-turn coverage. The full report is preserved as
+`v3-occurrence-compact.json`.
+
+V3 is now a development diagnostic. A separate agent inspected its three
+missing turns: one was at the beginning of an otherwise retrieved session;
+two were mixed into large windows with unrelated dialogue. The next generic
+candidate uses 1,024-byte paragraph/line windows (128-byte overlap for oversized
+lines) and a bounded source prefix after the first ranked later query hit.
+No benchmark role/turn markers, languages, answer strings or per-case exceptions
+define this behavior. Schema 18 invalidates only rebuildable raw ranking state;
+read policy 5 records candidate context bytes independently from final packing.
+
+Before running this candidate, a separate agent froze v4 by strictly excluding
+all 60 prior source question IDs. Only six unseen abstentions remained, all in
+the multi-session category. The preregistered subset therefore contains eighteen
+cases: two answerable cases per each of six categories and those six abstentions.
+The manifest records this quota deviation and makes no reader or abstention
+success claim. Its 895 full-history sessions, 9,115 turns and 25 annotated answer
+turns remain separated from retrieval input. Root has not inspected its questions,
+answers or individual labels. The external runner loads gold only after all
+retrieval requests complete. Frozen hashes are in `longmemeval-s/v4/manifest.json`.
+
+The targeted candidate run passed 287 tests across six suites (zero failures,
+one explicit external-run ignore), including prefix planning properties, every
+source scope exclusion, exact-budget facade packing, historical migration and
+the occurrence adapter. A separate read-only reviewer found no material defect;
+its cursor-version test correction is included. Comparing actual frozen metadata
+also found a truncated v1 input hash constant introduced while adding profiles.
+The authoritative input and prior complete report agree; the constant is fixed,
+and profile validation now checks actual v1/v4 manifests rather than only
+self-generated fixtures. No historical report or corpus was changed.

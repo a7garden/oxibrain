@@ -1,6 +1,6 @@
 # Post-M12 source recall
 
-Date: 2026-10-24. Architecture v2.29 / ADR-020 and ADR-021.
+Date: 2026-10-24. Architecture v2.30 / ADR-020 and ADR-021.
 
 ## Read and index behavior
 
@@ -19,10 +19,10 @@ weights does not reuse vectors just because dimensions match.
 
 Memory schema 16 adds `memory_source_vectors`: chunk identity, revision, window
 policy, model binding, dimension and little-endian float32 bytes. This projection
-is disposable. Schema 17 invalidates old raw source chunks, their lexical/vector
+is disposable. Schema 18 invalidates old raw source chunks, their lexical/vector
 indexes and raw-index cursors for an explicit ledger-based rebuild under
-`source-paragraph-window/2`. Complete paragraphs/lines are preferred, with
-UTF-8-safe overlapping windows for oversized lines. These boundaries preserve
+`source-paragraph-window/3`. Complete paragraphs/lines are preferred within
+1,024 bytes, with 128-byte UTF-8-safe overlap for oversized lines. These boundaries preserve
 bytes rather than proving semantic completeness. Source windows refer to immutable ledger text, including readable
 compacted bytes. Delete/redact/rebuild cascades invalidate vectors. Upserts check
 source revision/liveness after inference. Reprojection with an embedder rebuilds
@@ -60,6 +60,18 @@ incomplete configured semantic index or failed adapter makes execution partial.
 Reaching a return limit conservatively marks coverage partial as well. The
 response never infers answerability from retrieval success.
 
+`source-prefix-context/1` adds at most one source prefix after its first ranked
+query hit when that hit starts later than byte zero. It does not expand recency
+hits. `source_context_bytes` defaults to 768; zero disables it. Prefixes come
+only from the indexed ordinal-zero window, through the same space, time,
+redaction, kind and session filters. They retain full source revision and exact
+UTF-8 byte coordinates as ordinary untrusted evidence. Planning and byte-boundary
+decisions are pure core functions; the store only fetches bounded source bytes.
+Channel depth and materialization bytes bound this fetch, and all candidates
+still pass through the final exact tokenizer budget. Its receipt reports planned,
+fetched and candidate prefixes and bytes, rather than claiming all candidates
+were delivered. Final evidence maps and drop receipts describe actual packing.
+
 ## Complete truth groups
 
 The store pages subject/predicate observations with bounded seed text visible at
@@ -79,7 +91,7 @@ measured explicitly; no unmeasured cache or sublinear latency claim is made.
 
 ## Exact packing
 
-`read-policy/4` defaults to compact response labels with a complete out-of-band
+`read-policy/5` defaults to compact response labels with a complete out-of-band
 source/uncertainty/omission map. Explicit `compact_evidence:false` and the legacy
 `pack_evidence()` convenience function preserve full text framing.
 

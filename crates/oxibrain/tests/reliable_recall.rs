@@ -319,7 +319,7 @@ async fn raw_index_batch_rolls_back_rows_and_cursor_together() {
         .unwrap();
     oxibrain_store::meta::set(
         &conn,
-        &format!("raw-index/{space}/2"),
+        &format!("raw-index/{space}/3"),
         "{\"target\":0,\"after\":0,\"complete\":true}",
     )
     .unwrap();
@@ -329,7 +329,7 @@ async fn raw_index_batch_rolls_back_rows_and_cursor_together() {
         1
     );
     assert!(
-        oxibrain_store::meta::get(&conn, &format!("raw-index/{space}/2"))
+        oxibrain_store::meta::get(&conn, &format!("raw-index/{space}/3"))
             .unwrap()
             .is_none()
     );

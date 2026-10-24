@@ -88,6 +88,7 @@ pub mod evidence_pack;
 
 pub mod query_candidates;
 pub mod read_scope;
+pub mod source_context;
 pub mod visible_memory;
 
 pub mod eval_recall;

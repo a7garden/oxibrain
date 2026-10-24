@@ -408,3 +408,73 @@ fn migrates_v16_to_v17_clearing_only_rebuildable_raw_source_state() {
     );
     assert_eq!(migration::run(&conn).unwrap(), LEDGER_SCHEMA_VERSION);
 }
+
+#[test]
+fn migrates_v17_to_v18_clearing_only_rebuildable_raw_source_state() {
+    migration::ensure_vec_extension();
+    let conn = Connection::open_in_memory().unwrap();
+    migration::run(&conn).unwrap();
+    insert_test_data(&conn);
+
+    conn.execute(
+        "INSERT INTO memory_source_chunks(id,space_id,episode_id,ordinal,span_start,span_end)
+         VALUES('raw-v2','sp1','ep1',0,0,12)",
+        [],
+    )
+    .unwrap();
+    let rowid = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO memory_chunk_fts_word(rowid,body) VALUES(?1,'needlev2')",
+        [rowid],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO memory_chunk_fts_ngram(rowid,body) VALUES(?1,'needlev2')",
+        [rowid],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO memory_source_vectors
+         (chunk_id,revision,window_policy,model_identity,dimensions,embedding)
+         VALUES('raw-v2',hex((SELECT content_hash FROM episodes WHERE id='ep1')),
+                'source-paragraph-window/2','test-model',1,x'00000000')",
+        [],
+    )
+    .unwrap();
+    oxibrain_store::meta::set(&conn, "raw-index/sp1/2", "old-complete-cursor").unwrap();
+    let truth_before = oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap();
+    conn.pragma_update(None, "user_version", 17i64).unwrap();
+
+    assert_eq!(migration::run(&conn).unwrap(), LEDGER_SCHEMA_VERSION);
+    assert_eq!(
+        truth_before,
+        oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap()
+    );
+    for table in ["memory_source_chunks", "memory_source_vectors"] {
+        assert_eq!(
+            conn.query_row::<usize, _, _>(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                .get(0))
+                .unwrap(),
+            0,
+            "{table} should be invalidated"
+        );
+    }
+    for table in ["memory_chunk_fts_word", "memory_chunk_fts_ngram"] {
+        assert_eq!(
+            conn.query_row::<usize, _, _>(
+                &format!("SELECT count(*) FROM {table} WHERE {table} MATCH 'needlev2'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap(),
+            0,
+            "{table} should be cleared by the chunk delete trigger"
+        );
+    }
+    assert!(
+        oxibrain_store::meta::get(&conn, "raw-index/sp1/2")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(migration::run(&conn).unwrap(), LEDGER_SCHEMA_VERSION);
+}

@@ -24,9 +24,17 @@ and could omit conditions while returning a valid action label.
   Dense errors gain relative influence; external evaluation must measure quality.
 - Prefer generic paragraph and line boundaries in raw-source segmentation, with
   UTF-8 windows for oversized lines and byte-for-byte complete source coverage.
-  Schema 17 invalidates only disposable raw chunks, FTS, vectors and cursors;
+  Use 1,024-byte windows with 128-byte overlap for oversized lines, under
+  `source-paragraph-window/3`. Schema 18 invalidates only disposable raw chunks, FTS, vectors and cursors;
   explicit indexing rebuilds from unchanged episodes. No connector marker or
   language-specific parser defines segmentation.
+- Accompany a source's first ranked query hit at a nonzero offset with one
+  bounded prefix (default 768 bytes, zero disables). Preserve query-hit order;
+  do not create companions from recency alone. Core selects episodes and UTF-8
+  boundaries, store fetches ordinal-zero indexed bytes through every source
+  scope filter, and facade sequences ordinary untrusted observations immediately
+  after their query hit. Channel/materialization bounds and final exact packing
+  apply. Receipts describe candidate bytes separately from delivered evidence.
 - Drop a source range as duplicate only when a delivered range fully contains it
   with identical revision/view/decoder/UUID provenance. Partial overlaps retain
   their unique tails and consume actual rendered tokens.
@@ -38,7 +46,7 @@ and could omit conditions while returning a valid action label.
   condition or veto is redundant. Match strength orders evidence; budget losses
   stay explicit. Citation ranges remain section-bound even when another peer
   appears as separate evidence.
-- Use compact evidence by default (`ReadPolicy.compact_evidence`, policy v4).
+- Use compact evidence by default (`ReadPolicy.compact_evidence`, policy v5).
   `context_render/2` uses E1, E2, ... only within a response. `evidence` retains
   full source coordinates, revisions, views, support, omissions, and text ranges.
   IDs are never durable document or ledger identities. Full legacy rendering

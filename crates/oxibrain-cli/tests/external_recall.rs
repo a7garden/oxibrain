@@ -37,11 +37,12 @@ struct DatasetProfile {
     full_history_sessions: usize,
     manifest_input_path: &'static str,
     manifest_gold_path: &'static str,
+    manifest_scan_count_key: &'static str,
 }
 
 const V1_PROFILE: DatasetProfile = DatasetProfile {
     name: "v1",
-    input_sha256: "3d098e4e4aa0f0c2a9a6f279921b23d25ab7c81d94432e57975a69a0d06ca",
+    input_sha256: "3d098e4e4aa0f0c2a9a6f279921b23d25ab7c81d94432e57983975a69a0d06ca",
     gold_sha256: "a2e0f50dd2cc530454b24155d8da0701d54d4c15880400d1147f1268c1dfcf49",
     manifest_sha256: "f489c4b5a3b7c4088cfbccbe8cb11181ec1a485babe0c115d5a46cc2e35b670d",
     freezer_sha256: "9c88e7b4de701ec2e9fbb05d04289311edf0df788de018ac8b852a5660a92cac",
@@ -49,6 +50,7 @@ const V1_PROFILE: DatasetProfile = DatasetProfile {
     full_history_sessions: 943,
     manifest_input_path: "input.jsonl",
     manifest_gold_path: "gold.jsonl",
+    manifest_scan_count_key: "source_rows_scanned",
 };
 
 const V2_PROFILE: DatasetProfile = DatasetProfile {
@@ -61,6 +63,7 @@ const V2_PROFILE: DatasetProfile = DatasetProfile {
     full_history_sessions: 980,
     manifest_input_path: "/tmp/oxibrain-longmemeval-s-public-v2/input.jsonl",
     manifest_gold_path: "/tmp/oxibrain-longmemeval-s-public-v2/gold.jsonl",
+    manifest_scan_count_key: "source_rows_scanned",
 };
 
 const V3_PROFILE: DatasetProfile = DatasetProfile {
@@ -73,6 +76,20 @@ const V3_PROFILE: DatasetProfile = DatasetProfile {
     full_history_sessions: 931,
     manifest_input_path: "/tmp/oxibrain-longmemeval-s-public-v3/input.jsonl",
     manifest_gold_path: "/tmp/oxibrain-longmemeval-s-public-v3/gold.jsonl",
+    manifest_scan_count_key: "source_rows_scanned",
+};
+
+const V4_PROFILE: DatasetProfile = DatasetProfile {
+    name: "v4",
+    input_sha256: "d2e37016fe91d2133b8d8a6cdf90228d5bcc7b9291219fe7398abc03600acaef",
+    gold_sha256: "c3eb941cec5788c0e6c81bb0b5867502907c664c06e0a4c0ec90411ad855cfbe",
+    manifest_sha256: "7d558c07d6e67cfa066792be5e9cdcf3e96ce14becfadd2f3d1f3c5a9d4b87d5",
+    freezer_sha256: "e604e651ef884c784f6a2bf7238c90854a75192d38b074b6cbae8e4c3129d585",
+    cases: 18,
+    full_history_sessions: 895,
+    manifest_input_path: "/tmp/oxibrain-longmemeval-s-public-v4/input.jsonl",
+    manifest_gold_path: "/tmp/oxibrain-longmemeval-s-public-v4/gold.jsonl",
+    manifest_scan_count_key: "source_rows_scanned_per_pass",
 };
 
 #[derive(Debug, Deserialize)]
@@ -1289,8 +1306,11 @@ fn dataset_profile(choice: Option<&str>) -> anyhow::Result<&'static DatasetProfi
         "v1" => Ok(&V1_PROFILE),
         "v2" => Ok(&V2_PROFILE),
         "v3" => Ok(&V3_PROFILE),
+        "v4" => Ok(&V4_PROFILE),
         other => {
-            anyhow::bail!("unsupported OXIBRAIN_LONGMEMEVAL_SUBSET {other:?}; choose v1, v2, or v3")
+            anyhow::bail!(
+                "unsupported OXIBRAIN_LONGMEMEVAL_SUBSET {other:?}; choose v1, v2, v3, or v4"
+            )
         }
     }
 }
@@ -1354,7 +1374,7 @@ fn validate_manifest(manifest: &Value, profile: &DatasetProfile) -> anyhow::Resu
         "unexpected manifest row count"
     );
     ensure!(
-        manifest["source_rows_scanned"] == 500,
+        manifest[profile.manifest_scan_count_key] == 500,
         "unexpected source scan count"
     );
     Ok(())
@@ -1430,7 +1450,7 @@ fn manifest_fixture(profile: &DatasetProfile) -> Value {
         },
         "preparation_script": { "sha256": profile.freezer_sha256 },
         "license_sha256": LICENSE_SHA256,
-        "source_rows_scanned": 500,
+        (profile.manifest_scan_count_key): 500,
     })
 }
 
@@ -1440,6 +1460,7 @@ fn dataset_profiles_default_to_v1_and_keep_distinct_pins() {
     let explicit_v1 = dataset_profile(Some("v1")).expect("v1 profile");
     let v2 = dataset_profile(Some("v2")).expect("v2 profile");
     let v3 = dataset_profile(Some("v3")).expect("v3 profile");
+    let v4 = dataset_profile(Some("v4")).expect("v4 profile");
 
     assert_eq!(default.name, "v1");
     assert_eq!(explicit_v1.name, "v1");
@@ -1456,7 +1477,12 @@ fn dataset_profiles_default_to_v1_and_keep_distinct_pins() {
     assert_ne!(v2.gold_sha256, v3.gold_sha256);
     assert_ne!(default.manifest_sha256, v2.manifest_sha256);
     assert_ne!(v2.manifest_sha256, v3.manifest_sha256);
-    assert!(dataset_profile(Some("v4")).is_err());
+    assert_eq!(v4.cases, 18);
+    assert_eq!(v4.full_history_sessions, 895);
+    assert_ne!(v3.input_sha256, v4.input_sha256);
+    assert_ne!(v3.gold_sha256, v4.gold_sha256);
+    assert_ne!(v3.manifest_sha256, v4.manifest_sha256);
+    assert!(dataset_profile(Some("v5")).is_err());
 }
 
 #[test]
@@ -1645,6 +1671,11 @@ fn render_mode_default_preserves_constructor_policy_and_overrides_are_explicit()
 
 #[test]
 fn each_profile_accepts_only_its_manifest_paths_and_pins() {
+    let actual_v1: Value = serde_json::from_str(include_str!(
+        "../../../eval/research/longmemeval-s/manifest.json"
+    ))
+    .expect("frozen v1 manifest");
+    validate_manifest(&actual_v1, &V1_PROFILE).expect("actual frozen v1 manifest validates");
     let v1 = manifest_fixture(&V1_PROFILE);
     let v2 = manifest_fixture(&V2_PROFILE);
     let v3 = manifest_fixture(&V3_PROFILE);
@@ -1657,6 +1688,15 @@ fn each_profile_accepts_only_its_manifest_paths_and_pins() {
     assert!(validate_manifest(&v2, &V3_PROFILE).is_err());
     assert!(validate_manifest(&v3, &V1_PROFILE).is_err());
     assert!(validate_manifest(&v3, &V2_PROFILE).is_err());
+    let v4: Value = serde_json::from_str(include_str!(
+        "../../../eval/research/longmemeval-s/v4/manifest.json"
+    ))
+    .expect("frozen v4 manifest");
+    validate_manifest(&v4, &V4_PROFILE).expect("actual frozen v4 manifest validates");
+    for other in [&V1_PROFILE, &V2_PROFILE, &V3_PROFILE] {
+        assert!(validate_manifest(&v4, other).is_err());
+        assert!(validate_manifest(&manifest_fixture(other), &V4_PROFILE).is_err());
+    }
 }
 
 #[test]

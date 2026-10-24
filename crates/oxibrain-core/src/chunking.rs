@@ -339,6 +339,26 @@ mod tests {
     }
 
     #[test]
+    fn short_paragraph_between_long_paragraphs_gets_an_independent_chunk() {
+        let left = "unrelated left paragraph ".repeat(60);
+        let salient = "Distinct short paragraph.";
+        let right = "unrelated right paragraph ".repeat(60);
+        let content = format!("{left}\n\n{salient}\n\n{right}");
+        let chunks = source_paragraph_windows(&content, 1_024, 128);
+        let start = content.find(salient).unwrap();
+        let end = start + salient.len();
+        let chunk = chunks
+            .iter()
+            .find(|chunk| chunk.span_start <= start && chunk.span_end >= end)
+            .expect("the complete short paragraph is indexed");
+        assert_eq!(
+            &content[chunk.span_start..chunk.span_end],
+            format!("{salient}\n\n")
+        );
+        assert!(chunk.span_end - chunk.span_start < 2_048);
+    }
+
+    #[test]
     fn paragraph_windows_fall_back_to_utf8_windows_for_long_lines() {
         let content = "界".repeat(900);
         let chunks = source_paragraph_windows(&content, 1_024, 128);

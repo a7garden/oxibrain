@@ -28,15 +28,16 @@ squash-merged.
 - Preflight complete encoder sequences against configured/model context limits and size physical batches before native decode, preventing a process abort on inputs above the default micro-batch size.
 - Preserve partially overlapping source windows and their unique conditions; deduplicate query terms before caps and report channel limits as partial coverage.
 - Balance lexical and dense source rankings as two families so query expansion does not multiply one family's voting power.
-- Prefer complete paragraph/line boundaries in raw-source chunks; schema 17 invalidates old disposable source chunks, vectors and index cursors for a ledger-based rebuild.
+- Prefer complete paragraph/line boundaries in 1,024-byte raw-source chunks with 128-byte overlap for oversized lines; schema 18 invalidates old disposable source chunks, vectors and index cursors for a ledger-based rebuild.
+- Accompany the first ranked later source hit with at most 768 UTF-8-safe prefix bytes, preserving scope, revision coordinates and the final tokenizer budget; receipts expose this bounded context channel.
 - Deliver reference-reader evidence as explicit JSON fields and report typed, exact-quotation/action validation failures.
 - Reject over-context local LLM prompts before native decode and retain bounded output capacity; correct CLI recovery commands to use the `admin` namespace.
 - Stage new release assets in a draft, verify checksum/archive contents/ARM64 architecture/version after download, and reject replacement of published assets.
 
 ### Compatibility
 
-- Memory stores migrate to schema 17; older binaries cannot reopen an upgraded store. Document formats and the sixteen-tool MCP surface are unchanged.
-- Read policy version 4 defaults to compact context rendering. Full source maps remain in evidence; set `compact_evidence:false` for full framing. The legacy `pack_evidence()` helper retains full rendering.
+- Memory stores migrate to schema 18; older binaries cannot reopen an upgraded store. Document formats and the sixteen-tool MCP surface are unchanged.
+- Read policy version 5 retains compact context rendering and adds bounded raw-source prefix context (`source_context_bytes`, default 768; zero disables). Full source maps remain in evidence; set `compact_evidence:false` for full framing. The legacy `pack_evidence()` helper retains full rendering.
 
 ### Changed
 

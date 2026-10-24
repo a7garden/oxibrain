@@ -6,7 +6,7 @@ use crate::{
 use oxibrain_ports::{BrainError, Timestamp};
 use rusqlite::{Connection, params};
 
-pub const WINDOW_POLICY: &str = "source-paragraph-window/2";
+pub const WINDOW_POLICY: &str = "source-paragraph-window/3";
 const ELIGIBLE: &str = "e.space_id=?1 AND e.kind='primary' AND e.redacted_at IS NULL AND e.source_kind NOT IN ('document','document_revision') AND e.ingested_at<=?2 AND e.occurred_at<=?3 AND (?4 IS NULL OR e.source_kind!='session' OR json_extract(e.source_ref,'$.session_id') IS NOT ?4)";
 const BODY: &str = "CAST(substr(CASE WHEN e.content='' THEN e.content_compacted ELSE CAST(e.content AS BLOB) END,c.span_start+1,c.span_end-c.span_start) AS TEXT)";
 

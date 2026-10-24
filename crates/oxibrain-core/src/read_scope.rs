@@ -73,6 +73,8 @@ pub struct ReadPolicy {
     pub semantic_sources: bool,
     /// Compact response-scoped citation IDs; full source maps stay in evidence.
     pub compact_evidence: bool,
+    /// Maximum raw-source prefix bytes to accompany a later ranked chunk; zero disables.
+    pub source_context_bytes: usize,
     pub dense_scan_vectors: usize,
     pub truth_group_cap: usize,
 }
@@ -91,13 +93,14 @@ impl Default for ReadPolicy {
             recency_tokens: 200,
             semantic_sources: true,
             compact_evidence: true,
+            source_context_bytes: 768,
             dense_scan_vectors: 16384,
             truth_group_cap: 256,
         }
     }
 }
 impl ReadPolicy {
-    pub const VERSION: &'static str = "read-policy/4";
+    pub const VERSION: &'static str = "read-policy/5";
     pub fn validate(&self) -> Result<(), BrainError> {
         if [
             self.channel_depth,
