@@ -1,0 +1,243 @@
+{
+  "schema": "reader-semantic-review/1",
+  "provenance": "Root persisted a summary of a fresh independent read-only AI reviewer's returned per-record judgments; not a verbatim transcript.",
+  "capture_sha256": "6195b2888421adbbd961fa1ae79f9bd9cef3efebd78eb82cb52ec49805b74b76",
+  "blind_input_sha256": "7577ed17701922da3c119026496d3222f315feff8dd7f7fb45811e11f94b36ca",
+  "arm_mapping": {
+    "A": "retrieved",
+    "B": "gold"
+  },
+  "budget": 3000,
+  "records": [
+    {
+      "record": "R01",
+      "arm": "A",
+      "verdict": "gray",
+      "note": "Clarifies relevant conflict but imports unrelated project condition and citation."
+    },
+    {
+      "record": "R02",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R03",
+      "arm": "A",
+      "verdict": "inadequate",
+      "note": "Selects one conflicting command despite unresolved priority."
+    },
+    {
+      "record": "R04",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R05",
+      "arm": "A",
+      "verdict": "inadequate",
+      "note": "Omits mandatory health-check guard."
+    },
+    {
+      "record": "R06",
+      "arm": "B",
+      "verdict": "inadequate",
+      "note": "Omits mandatory health-check guard."
+    },
+    {
+      "record": "R07",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R08",
+      "arm": "B",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R09",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R10",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R11",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R12",
+      "arm": "B",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R13",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R14",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R15",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R16",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R17",
+      "arm": "A",
+      "verdict": "inadequate",
+      "note": "Evasive bare abstention despite conditional mapping."
+    },
+    {
+      "record": "R18",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R19",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R20",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R21",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R22",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R23",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R24",
+      "arm": "B",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R25",
+      "arm": "A",
+      "verdict": "gray",
+      "note": "Supported identity and checkpoint with unrelated project contamination."
+    },
+    {
+      "record": "R26",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R27",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R28",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R29",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R30",
+      "arm": "B",
+      "verdict": "gray",
+      "note": "Makes established mandatory prerequisite status sound contingent."
+    },
+    {
+      "record": "R31",
+      "arm": "A",
+      "verdict": "gray",
+      "note": "Correct conjunction, but unrelated citation/condition and missing snapshot citation."
+    },
+    {
+      "record": "R32",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R33",
+      "arm": "A",
+      "verdict": "adequate",
+      "note": "Correct temporal answer with an extraneous unrelated citation."
+    },
+    {
+      "record": "R34",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R35",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R36",
+      "arm": "B",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R37",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R38",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R39",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R40",
+      "arm": "B",
+      "verdict": "adequate"
+    }
+  ],
+  "arm_totals": {
+    "A": {
+      "adequate": 8,
+      "inadequate": 3,
+      "delivery_failure": 6,
+      "gray": 3
+    },
+    "B": {
+      "adequate": 14,
+      "inadequate": 1,
+      "delivery_failure": 4,
+      "gray": 1
+    }
+  },
+  "decision": "Do not retain prompt5 as the default: longer general scope instructions did not improve the retrieved-evidence diagnostic (8/20 adequate versus10/20 in prompt4). Keep prompt4 with its explicit limitations. Generated skill scope guidance remains.",
+  "limitations": [
+    "All40records inspected from the blindfile and sharedrubric only; no expectedlabels, modelidentity or implementation.",
+    "AI judgments on a known synthetic20case development diagnostic, not human labels or an untouched benchmark.",
+    "A gray reply is not counted adequate; plausible raw output cannot rescue deliveryfailure.",
+    "Prompt5 gold-only adequacy improves while retrieved adequacy drops; this does not establish a general prompt ranking."
+  ]
+}

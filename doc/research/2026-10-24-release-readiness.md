@@ -339,3 +339,28 @@ a favorable copy. Counts expose both upstream IDs and occurrence denominators.
 Eight adapter tests passed, including identical-byte duplicate occurrences,
 ambiguous mapping rejection and unchanged unique-ID identity. The raw v3 input,
 gold, budgets, segmentation and retrieval policy are unchanged for the rerun.
+
+The 4B-only prompt-5 diagnostic made 98 requests at 3,000 tokens: retrieved
+delivery was 14/20, gold 16/20 and no-evidence abstention 20/20. Its independent
+blind review found eight retrieved adequate, three inadequate, six delivery
+failures and three gray replies; gold had fourteen adequate, one inadequate,
+four delivery failures and one gray reply. Longer general instructions did not
+improve this retrieved-evidence diagnostic, so the implementation restores
+`evidence-reader/4` rather than retaining the experimental prompt. Prompt-5
+source identity, requests, responses and judgment summaries remain available in
+`v021-reader5-native*.json`; its gold-only improvement does not establish a
+general prompt ranking. The generated skill keeps its independently exercised
+scope and conjunction guidance.
+
+The selected 4B also passed the real grammar-constrained extraction smoke:
+three existing English fixtures, all five expected relations, precision/recall
+1.0 and fabricated-entity rate zero. This uses the pinned local artifact, not a
+canned provider; it is a small extraction check, not a general answer benchmark.
+The complete report is `v021-4b-full-smoke.extraction.json`. The companion reader
+smoke has one known case and is not added as an independent quality sample.
+
+At `78cba7c`, the all-feature workspace run passed 1,152 tests with zero failures
+and eleven explicit ignored tests across 121 suites. After restoring the prior
+reader prompt, all 68 CLI unit tests passed. CI at `78cba7c` passed every job,
+including MSRV and frontend checks. The production reader still exposes explicit
+delivery limitations; the evaluation client is not a new automatic-answer engine.

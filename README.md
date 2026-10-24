@@ -140,12 +140,15 @@ discarded source-search cache from the ledger; add `--embed` to rebuild optional
 dense vectors. Reads report pending coverage until indexing completes. Source
 documents remain read-only and are never converted.
 
-## Shared local HTTP inference
+## Local inference
 
-Set `OXIBRAIN_LLM_PROVIDER=loopback`, `OXIBRAIN_LLM_BASE_URL=http://127.0.0.1:8768/v1`,
-and `OXIBRAIN_LLM_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit` when using the
-Dyno-owned MLX endpoint. These are process-scoped overrides, not a change to the
-default local engine. The HTTP adapter sends strict `response_format: json_schema`.
+Fresh installations default to the pinned Qwen3 4B GGUF, running in process.
+Set `OXIBRAIN_LLM_PROVIDER=local` to select it explicitly. Existing installations
+retain their artifact manifest and its selected extractor.
+
+An optional HTTP endpoint requires `OXIBRAIN_LLM_PROVIDER=loopback`, an explicit
+`OXIBRAIN_LLM_BASE_URL`, and the endpoint's `OXIBRAIN_LLM_MODEL`. The HTTP adapter
+sends strict `response_format: json_schema`.
 Extraction object variants use `anyOf` with a required `kind` and mutually
 exclusive `entity`/`literal` constants: the accepted language is identical to
 `oneOf`, without decoder coercion. Quote/span and predicate/type validation still
