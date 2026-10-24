@@ -150,21 +150,21 @@ impl LexicalQueryPlan {
             if trigrams.len() == MAX_TRIGRAMS {
                 break;
             }
-            if let Some(gram) = grams.get(grams.len() / 2) {
-                if chosen.insert(gram.clone()) {
-                    trigrams.push(gram.clone());
-                }
+            if let Some(gram) = grams.get(grams.len() / 2)
+                && chosen.insert(gram.clone())
+            {
+                trigrams.push(gram.clone());
             }
         }
         let mut offset = 0;
         while trigrams.len() < MAX_TRIGRAMS {
             for grams in &per_term {
-                if let Some(gram) = grams.get(offset) {
-                    if chosen.insert(gram.clone()) {
-                        trigrams.push(gram.clone());
-                        if trigrams.len() == MAX_TRIGRAMS {
-                            break;
-                        }
+                if let Some(gram) = grams.get(offset)
+                    && chosen.insert(gram.clone())
+                {
+                    trigrams.push(gram.clone());
+                    if trigrams.len() == MAX_TRIGRAMS {
+                        break;
                     }
                 }
             }

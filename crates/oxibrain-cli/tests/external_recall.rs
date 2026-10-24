@@ -1032,14 +1032,14 @@ fn aggregate_by_budget(cases: &[CaseReport]) -> BTreeMap<usize, BudgetAggregate>
                     answer_turn_annotated_bytes += coverage.total_annotated_bytes;
                     answer_turn_retrieved_bytes += coverage.retrieved_annotated_bytes;
                 }
-                if let Some(answer_sessions) = &query.answer_session_retrieval {
-                    if answer_sessions.status == "measured" {
-                        answer_session_measured_cases += 1;
-                        any_answer_session_retrieved_cases +=
-                            usize::from(answer_sessions.any_retrieved == Some(true));
-                        all_answer_sessions_retrieved_cases +=
-                            usize::from(answer_sessions.all_retrieved == Some(true));
-                    }
+                if let Some(answer_sessions) = &query.answer_session_retrieval
+                    && answer_sessions.status == "measured"
+                {
+                    answer_session_measured_cases += 1;
+                    any_answer_session_retrieved_cases +=
+                        usize::from(answer_sessions.any_retrieved == Some(true));
+                    all_answer_sessions_retrieved_cases +=
+                        usize::from(answer_sessions.all_retrieved == Some(true));
                 }
                 history_fraction_total += query.full_history_session_retrieval.selected_fraction;
             }
@@ -1153,7 +1153,7 @@ fn file_blake3(path: &Path) -> anyhow::Result<String> {
 fn check_optional_pin(name: &str, actual: &str) -> anyhow::Result<()> {
     if let Ok(expected) = std::env::var(name) {
         ensure!(
-            expected.to_ascii_lowercase() == actual.to_ascii_lowercase(),
+            expected.eq_ignore_ascii_case(actual),
             "{name} does not match the loaded local artifact"
         );
     }
