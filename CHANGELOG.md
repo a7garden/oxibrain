@@ -5,6 +5,48 @@ squash-merged.
 
 
 
+## [Unreleased]
+
+## [0.21.0] — 2026-10-24
+
+### Added
+
+- Optional dense recall over document and primary/session source windows, without requiring extraction. Schema 16 adds rebuildable model/revision/window-bound memory vectors and explicit `admin index --memory --embed`.
+- Per-channel execution, coverage, cap and fallback receipts; query-relevant complete truth-group selection with scoped historical identity inputs and selection/source-count receipts.
+- Frozen multilingual source controls, four-arm live conflict/condition/abstention evaluation via `admin eval --suite reader`, and explicit release cost measurements. The broad supported-answer quality gate remains open.
+- Default compact source labels with complete coordinate maps and text offsets; a consumer-side quote/condition envelope rejects invented citations and inconsistent actions without claiming entailment.
+- A pinned, separately labelled LongMemEval-S external retrieval runner with evaluator-only gold, complete session histories and source-range metrics.
+- Generated agent-skill frontmatter, scope/receipt/condition guidance, and a Codex install target honoring `CODEX_HOME`.
+
+### Fixed
+
+- Expand matching document headings into complete supporting sections and apply document space/trash eligibility before dense top-k.
+- Share process-wide llama.cpp initialization between local inference and embedding adapters; model combinations no longer panic on a second initialization.
+- Update Tokio to 1.53.3 for RUSTSEC-2026-0386.
+- Preserve signed int8 components in document/entity KNN distance instead of rounding most components to zero or comparing negative bytes as unsigned.
+- Expand bounded natural-question components through both lexical channels; preserve complete peer conditions, global retrieval order and stable FTS ties.
+- Preflight complete encoder sequences against configured/model context limits and size physical batches before native decode, preventing a process abort on inputs above the default micro-batch size.
+- Preserve partially overlapping source windows and their unique conditions; deduplicate query terms before caps and report channel limits as partial coverage.
+- Balance lexical and dense source rankings as two families so query expansion does not multiply one family's voting power.
+- Prefer complete paragraph/line boundaries in 1,024-byte raw-source chunks with 128-byte overlap for oversized lines; schema 18 invalidates old disposable source chunks, vectors and index cursors for a ledger-based rebuild.
+- Accompany the first ranked later source hit with at most 768 UTF-8-safe prefix bytes, preserving scope, revision coordinates and the final tokenizer budget; receipts expose this bounded context channel.
+- Deliver reference-reader evidence as explicit JSON fields and report typed, exact-quotation/action validation failures.
+- Reject over-context local LLM prompts before native decode and retain bounded output capacity; correct CLI recovery commands to use the `admin` namespace.
+- Stage new release assets in a draft, verify checksum/archive contents/ARM64 architecture/version after download, and reject replacement of published assets.
+
+### Compatibility
+
+- Memory stores migrate to schema 18; older binaries cannot reopen an upgraded store. Document formats and the sixteen-tool MCP surface are unchanged.
+- Read policy version 5 retains compact context rendering and adds bounded raw-source prefix context (`source_context_bytes`, default 768; zero disables). Full source maps remain in evidence; set `compact_evidence:false` for full framing. The legacy `pack_evidence()` helper retains full rendering.
+
+### Changed
+
+- Switch the shipped local extractor to Qwen3-4B-Instruct-2507 Q4_K_M (2,382 MiB), pinned to its verified Hugging Face revision.
+- Pin development, CI and release builds to Rust 1.99.1; retain MSRV 1.96 with a dedicated CI check.
+- Adopt fixed-size array slices for vector decoding and quantization to satisfy Rust 1.99 Clippy without changing byte handling.
+- Render recall evidence directly into its output buffer, avoiding temporary formatting and support-list strings while preserving output bytes.
+- Reuse accepted context renders and unchanged layer token counts while preserving exact whole-context tokenization and byte-equivalent evidence.
+
 ## [0.20.1] — 2026-10-23
 
 ### Fixed

@@ -1,0 +1,62 @@
+[
+  {
+    "groups": 10,
+    "query_ms": [
+      2.774292,
+      2.261458,
+      2.202709,
+      2.448334,
+      2.5975
+    ],
+    "selection": {
+      "bytes": 896,
+      "examined": 10,
+      "fold_ms": 0.005084,
+      "materialized": 2,
+      "omitted": 8,
+      "selection_ms": 1.1644590000000001,
+      "sources": 2,
+      "truncated_seeds": 0
+    }
+  },
+  {
+    "groups": 100,
+    "query_ms": [
+      5.816166,
+      5.5649999999999995,
+      5.706125,
+      5.974083,
+      5.6521669999999995
+    ],
+    "selection": {
+      "bytes": 896,
+      "examined": 100,
+      "fold_ms": 0.00325,
+      "materialized": 2,
+      "omitted": 98,
+      "selection_ms": 4.3583750000000006,
+      "sources": 2,
+      "truncated_seeds": 0
+    }
+  },
+  {
+    "groups": 1000,
+    "query_ms": [
+      45.637667,
+      44.36125,
+      43.0,
+      44.597333000000006,
+      45.241375
+    ],
+    "selection": {
+      "bytes": 896,
+      "examined": 1000,
+      "fold_ms": 0.008,
+      "materialized": 2,
+      "omitted": 998,
+      "selection_ms": 43.615500000000004,
+      "sources": 2,
+      "truncated_seeds": 0
+    }
+  }
+]

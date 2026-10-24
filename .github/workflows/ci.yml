@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -43,6 +43,15 @@ jobs:
         run: bash scripts/check-consumer.sh
       - name: test
         run: cargo test --all-features
+
+  msrv:
+    name: Minimum supported Rust 1.96
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.96.0 check --locked --workspace --all-targets --all-features
 
   console:
     runs-on: ubuntu-latest

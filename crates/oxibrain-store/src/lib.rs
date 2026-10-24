@@ -184,3 +184,7 @@ impl Store {
 }
 
 pub mod read_evidence;
+
+pub mod source_context;
+pub mod source_vectors;
+pub mod truth_groups;

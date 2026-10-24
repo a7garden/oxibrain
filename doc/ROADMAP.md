@@ -1,6 +1,6 @@
 # oxibrain Roadmap — M7 onward
 
-> **Version:** v1.3 · **Date:** 2026-10-23
+> **Version:** v1.4 · **Date:** 2026-10-24
 > **Status:** Canonical for sequencing. Per-app sequencing lives in `doc/ECOSYSTEM.md`.
 > **Scope:** what happens after M6. M0–M6 shipped (`doc/ARCHITECTURE.md` §20).
 > **Convention:** `§n` refers to `doc/ARCHITECTURE.md`. `F n` are findings in its §21.
@@ -383,7 +383,8 @@ all shipped as part of M7.
 > context budget and visibility scope.
 > **Design:** [spec](spec/reliable-recall-v1.md), [ADR-019](adr/ADR-019-read-scope-and-evidence-recall.md),
 > architecture §27. The owner requested all implementation. A–C and the D runner/corpora
-> are present in the working tree; live reader/dense quality validation remains unrun.
+> are implemented. Live reader, native embedding and extraction measurements are
+> recorded; the broad supported-answer quality gate remains open.
 
 ### 11.1 Work sequence
 
@@ -407,8 +408,14 @@ Implementation acceptance status ([evidence](research/2026-10-23-reliable-recall
       exact context accounting and deterministic output have property tests.
 - [x] New ranking state reprojects and redacts correctly; schema-14 up-test and
       crash/resume tests pass; the truth determinism test remains enabled.
-- [ ] A real-tokenizer synthetic verification run is recorded. The live extraction/reader run must still report its
-      actual coverage, quality and cost; canned reachability is labeled separately.
+- [x] Real-tokenizer synthetic verification, native multilingual embedding and
+      local 4B extraction/reader runs report their actual coverage, quality, cost
+      and failures in [the readiness record](research/2026-10-24-release-readiness.md).
+      Canned reachability and external retrieval remain separately labeled.
+- [ ] The local 4B reader does not satisfy a broad automatic-answer quality tier:
+      independent diagnostics still find unsupported source joins and omitted
+      guards. Quote containment is not semantic correctness; recall continues to
+      report answerability as not evaluated.
 
 ### 11.2 Follow-up boundaries
 
@@ -422,4 +429,9 @@ become truth. Existing public-benchmark deferrals remain unchanged.
 The first milestone rollback is a ranking-policy rebuild where possible. An
 older binary cannot open schema 15: binary rollback requires a verified backup
 restored to a new directory, following the existing detached-restore contract.
+Post-M12 follow-up authorized 2026-10-24: implement source semantic indexing and
+channel receipts, relevant complete truth-group selection, canonical packing
+reuse, and conflict/abstention evaluation (ADR-020). The broad live quality gate
+remains independent of implementation completion.
+
 No downgrade, source conversion or bulk re-extraction is part of M12.

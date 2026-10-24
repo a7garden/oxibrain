@@ -1,0 +1,94 @@
+{
+  "extractor": {
+    "max_tokens": 8192,
+    "mechanism": "grammar",
+    "model_digest": "8712872ae483c8d3d4c51c15e44663bd05cbbc08dfefe56a9c6feec38b9f0c78",
+    "model_id": "qwen3-4b-instruct-2507",
+    "prompt_version": 2,
+    "provider_profile_id": null,
+    "registry_major": 1
+  },
+  "fixtures": [
+    {
+      "expected": [
+        {
+          "object_surface": "ProjectX",
+          "predicate": "works_on",
+          "subject_surface": "Alice"
+        },
+        {
+          "object_surface": "Acme Corp",
+          "predicate": "employed_by",
+          "subject_surface": "Alice"
+        }
+      ],
+      "extracted": [
+        {
+          "object_surface": "ProjectX",
+          "predicate": "works_on",
+          "subject_surface": "Alice"
+        },
+        {
+          "object_surface": "Acme Corp",
+          "predicate": "employed_by",
+          "subject_surface": "Alice"
+        }
+      ],
+      "raw_response": "{\n  \"claims\": [\n    {\n      \"predicate\": \"works_on\",\n      \"subject\": {\n        \"surface\": \"Alice\",\n        \"entity_type\": \"Person\"\n     ,\n      \"quote\": \"Alice works on ProjectX\"\n      },\n      \"object\": {\n        \"kind\": \"entity\",\n        \"mention\": {\n          \"surface\": \"ProjectX\",\n          \"entity_type\": \"Project\"\n        ,\n        \"quote\": \"works on ProjectX\"\n        }\n      },\n      \"polarity\": \"affirm\",\n      \"confidence\": 0.95\n    },\n    {\n      \"predicate\": \"employed_by\",\n      \"subject\": {\n        \"surface\": \"Alice\",\n        \"entity_type\": \"Person\"\n      ,\n      \"quote\": \"Alice works on ProjectX at Acme Corp\"\n      },\n      \"object\": {\n        \"kind\": \"entity\",\n        \"mention\": {\n          \"surface\": \"Acme Corp\",\n          \"entity_type\": \"Organization\"\n        ,\n        \"quote\": \"at Acme Corp\"\n        }\n      },\n      \"polarity\": \"affirm\",\n      \"confidence\": 0.95\n    }\n  ]\n}",
+      "source": "Alice works on ProjectX at Acme Corp"
+    },
+    {
+      "expected": [
+        {
+          "object_surface": "Carol",
+          "predicate": "knows",
+          "subject_surface": "Bob"
+        },
+        {
+          "object_surface": "Seoul",
+          "predicate": "born_in",
+          "subject_surface": "Bob"
+        }
+      ],
+      "extracted": [
+        {
+          "object_surface": "Seoul",
+          "predicate": "born_in",
+          "subject_surface": "Bob"
+        },
+        {
+          "object_surface": "Carol",
+          "predicate": "knows",
+          "subject_surface": "Bob"
+        }
+      ],
+      "raw_response": "{\n  \"claims\": [\n    {\n      \"predicate\": \"knows\",\n      \"subject\": {\n        \"surface\": \"Bob\",\n        \"entity_type\": \"Person\"\n      ,\n        \"quote\": \"Bob knows Carol\"\n      },\n      \"object\": {\n        \"kind\": \"entity\",\n        \"mention\": {\n          \"surface\": \"Carol\",\n          \"entity_type\": \"Person\",\n          \"quote\": \"Bob knows Carol\"\n        }\n      },\n      \"polarity\": \"affirm\",\n      \"confidence\": 0.95\n    },\n    {\n      \"predicate\": \"born_in\",\n      \"subject\": {\n        \"surface\": \"Bob\",\n        \"entity_type\": \"Person\"\n      ,\n        \"quote\": \"Bob was born in Seoul\"\n      },\n      \"object\": {\n        \"kind\": \"entity\",\n        \"mention\": {\n          \"surface\": \"Seoul\",\n          \"entity_type\": \"Place\",\n          \"quote\": \"born in Seoul\"\n        }\n      },\n      \"polarity\": \"affirm\",\n      \"confidence\": 0.95\n    }\n  ]\n}",
+      "source": "Bob knows Carol. Bob was born in Seoul."
+    },
+    {
+      "expected": [
+        {
+          "object_surface": "Alice Smith",
+          "predicate": "full_name",
+          "subject_surface": "Alice"
+        }
+      ],
+      "extracted": [
+        {
+          "object_surface": "Alice Smith",
+          "predicate": "full_name",
+          "subject_surface": "Alice"
+        }
+      ],
+      "raw_response": "{\n  \"claims\": [\n    {\n      \"predicate\": \"full_name\",\n      \"subject\": {\n        \"surface\": \"Alice\",\n        \"entity_type\": \"Person\"\n     ,\n      \"quote\": \"Alice full name is Alice Smith\"\n    },\n    \"object\": {\n      \"kind\": \"literal\",\n      \"literal_type\": \"text\",\n      \"value\": \"Alice Smith\",\n      \"quote\": \"is Alice Smith\"\n    },\n    \"polarity\": \"affirm\",\n    \"confidence\": 0.95\n  }\n]}",
+      "source": "Alice full name is Alice Smith."
+    }
+  ],
+  "metrics": {
+    "fabricated_entity_rate": 0.0,
+    "statement_f1": 1.0,
+    "statement_precision": 1.0,
+    "statement_recall": 1.0
+  },
+  "schema": "extraction-eval/1"
+}

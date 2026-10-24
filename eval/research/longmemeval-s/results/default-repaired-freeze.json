@@ -1,0 +1,18 @@
+{
+  "profile": "debug Rust harness, native llama runtime optimized by dependency build",
+  "binary_sha256": "ea4cd114a715281b6e82b885df045564bacc7fda6fa58c36f9868f08e8d0af8f",
+  "memory_scope_only": true,
+  "policy": "read-policy/3 production defaults, fixed before opening external gold",
+  "scope_note": "Subsequent peer-document section repairs do not participate in this memory-plane run. Compilation may overlap; latency is descriptive, not production performance.",
+  "source_sha256": {
+    "crates/oxibrain/src/recall.rs": "fc6066821bdaf3f202a9d52a2e09dda9789e5da08a012d7fe70ef2a07b8d082a",
+    "crates/oxibrain/src/semantic_sources.rs": "e05f547fea1213c88646728c9081a262232bf827423d45318b0a575944d1a9ea",
+    "crates/oxibrain-store/src/read_evidence.rs": "bf05403a9ac8310fa90bd5848ebe6c554b2e8c7199e28e96565ec5db170b6e09",
+    "crates/oxibrain-store/src/source_vectors.rs": "a0cb33dd13988dc049301d3a0b5557414a2215d3d2dda1410e75cc63dbbc6c6c",
+    "crates/oxibrain-core/src/evidence_pack.rs": "bf4a58387e852b860b8387955e421eb08d952784b20202d9877761d972361823",
+    "crates/oxibrain-core/src/read_scope.rs": "0f40194a7c3fd131090f77e9159a397d0c1e2a9a0afd90b77c78defb5c766600",
+    "crates/oxibrain-cli/tests/external_recall.rs": "a9821e5c62bde1ac8bf38e8c82580c34fb44c24c0c40ac56a68649ccb73e3e21",
+    "crates/oxibrain-embed-local/src/lib.rs": "68918a228fc705a8031f70cccfaad750eff87034fb08964da93b7981d811dbf0"
+  },
+  "predecessor": "First frozen attempt aborted on native encoder micro-batch capacity before gold was opened; repaired only encoder safety without inspecting external labels."
+}

@@ -22,6 +22,7 @@ toml.workspace = true
 blake3.workspace = true
 hex.workspace = true
 yaml-rust2 = "0.13"
+pulldown-cmark = { version = "0.13.4", default-features = false }
 thiserror.workspace = true
 oxibrain-core.workspace = true
 oxibrain-ports.workspace = true

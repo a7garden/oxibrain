@@ -1,5 +1,40 @@
 # oxibrain — Architecture
-> **Version:** v2.25 · **Date:** 2026-10-23 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.30 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.30 — Bounded source context.** Raw-source paragraph/line windows use
+> 1,024 bytes with 128-byte overlap for oversized lines (`source-paragraph-window/3`).
+> Schema 18 clears only disposable source chunks, indexes, vectors and cursors.
+> `read-policy/5` can accompany the first ranked later hit from a source with
+> up to 768 UTF-8-safe prefix bytes. Core plans, store fetches through the same
+> scope filters, and facade sequences ordinary untrusted evidence. Full source
+> coordinates and the final tokenizer budget apply; no inferred trust enters truth.
+> **v2.29 — Compact read default.** `read-policy/4` uses `context_render/2`
+> response-scoped labels by default, with complete provenance, uncertainty,
+> source/text coordinates and omissions in the same response. Explicit
+> `compact_evidence:false` and the legacy `pack_evidence()` helper preserve full
+> context framing. This changes only evidence rendering/packing, never the fold.
+> **v2.28 — Source granularity and family fusion.** Raw sources prefer complete
+> paragraph/line boundaries with UTF-8 windows for oversized lines. Schema 17
+> discards only derived raw chunks, indexes, vectors and cursors so explicit
+> indexing rebuilds them from the unchanged ledger under `source-paragraph-window/2`.
+> Lexical expansion votes within one retrieval family before equal-family fusion
+> with dense candidates; query length cannot multiply lexical family weight.
+> Evidence packing drops fully contained ranges only, preserving partial overlaps.
+> **v2.27 — Recall delivery and release readiness.** Signed int8 distance
+> remains in the integer domain; lexical candidates include bounded query
+> components in both indexes. Selected heading/body hits expand to their complete
+> section. Optional `context_render/2` uses response-scoped citation IDs bound by
+> the unchanged full provenance map; `context_render/1` remains the default.
+> Pure consumer delivery validation rejects invented IDs/quotes and inconsistent
+> answer actions, without claiming semantic entailment or changing trust. See
+> [ADR-021](adr/ADR-021-recall-delivery.md).
+> **v2.26 — Source semantic candidates and bounded truth selection.** Optional
+> document and raw primary/session vectors are disposable ranking state, bound
+> to model weights/options, source revision, decoder/window policy and space.
+> Explicit indexing builds vectors; reads never download models or build a semantic index.
+> Per-channel receipts distinguish eligibility, execution, coverage and fallback.
+> Query-relevant group identities are selected in core before complete assertion
+> groups consume the truth budget; ranking values never enter the fold. See
+> [ADR-020](adr/ADR-020-source-candidates-and-truth-selection.md).
 > **v2.25 — Reliable recall implementation (M12, quality gate open).**
 > Shared scoped search/recall, historical folding, source windows, pure evidence
 > packing and independent tokenizer binding are implemented in workspace 0.20.0.

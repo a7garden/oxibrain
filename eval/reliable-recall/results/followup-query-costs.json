@@ -1,0 +1,39 @@
+{
+  "embedding_probe": {
+    "batch_max_absolute_difference": 0.0,
+    "query_car_cosine": 0.6904019117355347,
+    "query_exhibition_cosine": 0.4428512752056122,
+    "scope": "Batch-invariance sanity check, not a ranking benchmark.",
+    "texts": [
+      "automobile maintenance interval",
+      "The car needs servicing every 7300 kilometers.",
+      "Die Ausstellung öffnet jeden Morgen um 09:45 Uhr."
+    ]
+  },
+  "query_runs": [
+    {
+      "cold_model_plus_first_query_ms": 646.037792,
+      "model_load_ms": 622.4967919999999,
+      "run": 0,
+      "scope": "Cold model in process, warm OS/index; not a process-cold p95 claim.",
+      "source_retrieved": true,
+      "warm_query_ms": [
+        23.541,
+        21.298291,
+        18.903709000000003
+      ]
+    },
+    {
+      "cold_model_plus_first_query_ms": 644.576334,
+      "model_load_ms": 621.406334,
+      "run": 1,
+      "scope": "Cold model in process, warm OS/index; not a process-cold p95 claim.",
+      "source_retrieved": true,
+      "warm_query_ms": [
+        23.169999999999998,
+        22.173959,
+        19.532332999999998
+      ]
+    }
+  ]
+}

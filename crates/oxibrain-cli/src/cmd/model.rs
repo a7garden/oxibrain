@@ -1,4 +1,4 @@
-//! `oxibrain model {list,pull,verify,use}` — model artifact management (§8.4).
+//! `oxibrain admin model {list,pull,verify,use}` — model artifact management (§8.4).
 
 use anyhow::Context as _;
 use oxibrain::models::{
@@ -20,7 +20,7 @@ async fn list(dir: &std::path::Path) -> anyhow::Result<()> {
     let manifest = load_manifest().context("load manifest")?;
     println!("models dir: {}", dir.display());
     if manifest.is_empty() {
-        println!("(no models installed — run `oxibrain model pull`)");
+        println!("(no models installed — run `oxibrain admin model pull`)");
         return Ok(());
     }
     println!(
@@ -144,7 +144,7 @@ async fn r#use(dir: &std::path::Path, name: &str) -> anyhow::Result<()> {
         .with_context(|| format!("model `{name}` not in manifest"))?;
     let path = dir.join(&entry.file);
     if !path.exists() {
-        anyhow::bail!("model file not downloaded: run `oxibrain model pull {name}`");
+        anyhow::bail!("model file not downloaded: run `oxibrain admin model pull {name}`");
     }
     verify_entry(entry, dir).context("verify")?;
     // The digest is what matters for ExtractorId; the resolved file path

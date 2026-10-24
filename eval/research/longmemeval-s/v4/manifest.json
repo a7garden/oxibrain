@@ -1,0 +1,209 @@
+{
+  "annotation_caveat": "Human-curated questions and evidence labels; evidence sessions were LLM-simulated and manually screened/edited per the paper. English only; not real-user dialogue and not an independently collected multilingual benchmark.",
+  "dataset": "LongMemEval cleaned LongMemEval_S",
+  "eligible_counts_after_strict_id_exclusion": {
+    "knowledge-update": {
+      "abstention": 0,
+      "answerable": 66
+    },
+    "multi-session": {
+      "abstention": 6,
+      "answerable": 115
+    },
+    "single-session-assistant": {
+      "abstention": 0,
+      "answerable": 50
+    },
+    "single-session-preference": {
+      "abstention": 0,
+      "answerable": 24
+    },
+    "single-session-user": {
+      "abstention": 0,
+      "answerable": 58
+    },
+    "temporal-reasoning": {
+      "abstention": 0,
+      "answerable": 121
+    }
+  },
+  "evaluation_claims": {
+    "abstention_success_score": false,
+    "note": "This 18-case subset does not claim reader or abstention-success performance.",
+    "reader_score": false
+  },
+  "gold": {
+    "audience": "evaluator-only",
+    "bytes": 7499,
+    "path": "/tmp/oxibrain-longmemeval-s-public-v4/gold.jsonl",
+    "rows": 18,
+    "sha256": "c3eb941cec5788c0e6c81bb0b5867502907c664c06e0a4c0ec90411ad855cfbe"
+  },
+  "input": {
+    "bytes": 9284309,
+    "path": "/tmp/oxibrain-longmemeval-s-public-v4/input.jsonl",
+    "rows": 18,
+    "sha256": "d2e37016fe91d2133b8d8a6cdf90228d5bcc7b9291219fe7398abc03600acaef"
+  },
+  "license": "MIT (pinned Hugging Face card metadata; upstream repository LICENSE retained verbatim)",
+  "license_sha256": "d3c4b9aa54759df6ded337978a6f3b55b75615e5e4525c3b82d7e2627d4b9732",
+  "license_source": "https://raw.githubusercontent.com/xiaowu0162/LongMemEval/9e0b455f4ef0e2ab8f2e582289761153549043fc/LICENSE",
+  "official_dataset": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned",
+  "official_repo": "https://github.com/xiaowu0162/LongMemEval",
+  "paper": "https://arxiv.org/abs/2410.10813v2",
+  "preparation_script": {
+    "path": "freeze_subset.py",
+    "sha256": "e604e651ef884c784f6a2bf7238c90854a75192d38b074b6cbae8e4c3129d585"
+  },
+  "prior_selected_id_set_sha256": "df8ccaa120d16d27ae275b4095329831cb8f857a1fe8179d3ac91121698d2ba0",
+  "prior_selected_occurrences": 60,
+  "prior_selected_occurrences_sha256": "3f48a2d1e99caa3dd1869676bb97a01efeed5ffd0129a85713c228df7b6907f0",
+  "prior_unique_source_question_ids": 60,
+  "prior_validation": {
+    "v1": {
+      "gold_sha256": "a2e0f50dd2cc530454b24155d8da0701d54d4c15880400d1147f1268c1dfcf49",
+      "input_sha256": "3d098e4e4aa0f0c2a9a6f279921b23d25ab7c81d94432e57983975a69a0d06ca",
+      "occurrences": 20,
+      "selected_id_set_sha256": "38a861cb70d53c7cff9a63642b8ba3901f43f404cd0d6e7e8d0d8079b180366c"
+    },
+    "v2": {
+      "gold_sha256": "d4fac57d5b98ab672e05e5ebfbf789e110e4cc480ce031135463fb7160c124d3",
+      "input_sha256": "2ed7811b885afaaf04752248c8e3a9a7a4823f6eefb971ab67ab37cc085345a3",
+      "occurrences": 20,
+      "selected_id_set_sha256": "2c7767c1d4819679e97445bb193e661acf5d0b10fd492993a7447cd5f362b1b0"
+    },
+    "v3": {
+      "gold_sha256": "65bc6612cd104cc7a05dbf5d02c2a773c16e53f0d71940ad6efbdc73f910b4fd",
+      "input_sha256": "66b0f492c3315a31dba5e6c78fe06311e09ed76f9e981406fdbfb10b6cfde06d",
+      "occurrences": 20,
+      "selected_id_set_sha256": "e643b1bfcffd6322eb43ffda3cd4beb9d3ee789d473b9b32be699fd4a3426cc2"
+    }
+  },
+  "question_type_counts": {
+    "knowledge-update": 78,
+    "multi-session": 133,
+    "single-session-assistant": 56,
+    "single-session-preference": 30,
+    "single-session-user": 70,
+    "temporal-reasoning": 133
+  },
+  "retrieval_caveat": "The S track keeps distractor histories; answer markers are present only in gold.jsonl. Requires a separate ingestion/evaluation adapter. Does not test cross-writing-system parity.",
+  "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+  "schema": "oxibrain-external-memory-qa/1",
+  "selected_count": 18,
+  "selected_coverage": {
+    "knowledge-update": {
+      "abstention": 0,
+      "answer_turn_annotations": 4,
+      "answerable": 2,
+      "sessions": 97,
+      "turns": 983
+    },
+    "multi-session": {
+      "abstention": 6,
+      "answer_turn_annotations": 10,
+      "answerable": 2,
+      "sessions": 394,
+      "turns": 4062
+    },
+    "single-session-assistant": {
+      "abstention": 0,
+      "answer_turn_annotations": 2,
+      "answerable": 2,
+      "sessions": 98,
+      "turns": 1009
+    },
+    "single-session-preference": {
+      "abstention": 0,
+      "answer_turn_annotations": 3,
+      "answerable": 2,
+      "sessions": 95,
+      "turns": 994
+    },
+    "single-session-user": {
+      "abstention": 0,
+      "answer_turn_annotations": 2,
+      "answerable": 2,
+      "sessions": 94,
+      "turns": 973
+    },
+    "temporal-reasoning": {
+      "abstention": 0,
+      "answer_turn_annotations": 4,
+      "answerable": 2,
+      "sessions": 117,
+      "turns": 1094
+    }
+  },
+  "selected_profile": {
+    "abstention": 6,
+    "answer_turn_annotations": 25,
+    "answerable": 12,
+    "cases": 18,
+    "selected_duplicate_id_occurrences": 0,
+    "selected_unique_source_question_ids": 18,
+    "sessions": 895,
+    "turns": 9115
+  },
+  "selected_source_occurrences_sha256": "c42c6ddbc57f353cb176d7706da816b71bf20f668856879608e2b713173ac01e",
+  "selected_source_question_ids_multiset_sha256": "94ce1d20aae31266f6936240a6a3283d6dbc3a4044f37de4e1ba6c23e3b88996",
+  "selected_source_question_ids_set_sha256": "94ce1d20aae31266f6936240a6a3283d6dbc3a4044f37de4e1ba6c23e3b88996",
+  "selection": "V1, v2, and v3 are reconstructed from the pinned source order and their frozen input, gold, and selected-ID hashes are verified before use. Every source record whose question ID matches any of the 60 prior selected IDs is excluded. Among remaining occurrences, v4 selects the two lowest SHA256(seed + source_question_id) ranks for answerable questions in each of six types. All six remaining eligible abstentions are included; they are all multi-session. Duplicate source occurrences are preserved as separate candidates and rank ties use pinned source occurrence order. Output is sorted by type, status, rank, source ID, then occurrence index. Session IDs and dates remain zipped by index with sessions. Input excludes answer and evidence markers, source question IDs, and gold labels; gold is evaluator-only.",
+  "selection_seed": "oxibrain-release-0.21.0-unseen-v4",
+  "source_category_coverage": {
+    "knowledge-update": {
+      "eligible_abstention": 0,
+      "eligible_answerable": 66,
+      "selected_abstention": 0,
+      "selected_answerable": 2,
+      "source_abstention": 6,
+      "source_answerable": 72
+    },
+    "multi-session": {
+      "eligible_abstention": 6,
+      "eligible_answerable": 115,
+      "selected_abstention": 6,
+      "selected_answerable": 2,
+      "source_abstention": 12,
+      "source_answerable": 121
+    },
+    "single-session-assistant": {
+      "eligible_abstention": 0,
+      "eligible_answerable": 50,
+      "selected_abstention": 0,
+      "selected_answerable": 2,
+      "source_abstention": 0,
+      "source_answerable": 56
+    },
+    "single-session-preference": {
+      "eligible_abstention": 0,
+      "eligible_answerable": 24,
+      "selected_abstention": 0,
+      "selected_answerable": 2,
+      "source_abstention": 0,
+      "source_answerable": 30
+    },
+    "single-session-user": {
+      "eligible_abstention": 0,
+      "eligible_answerable": 58,
+      "selected_abstention": 0,
+      "selected_answerable": 2,
+      "source_abstention": 6,
+      "source_answerable": 64
+    },
+    "temporal-reasoning": {
+      "eligible_abstention": 0,
+      "eligible_answerable": 121,
+      "selected_abstention": 0,
+      "selected_answerable": 2,
+      "source_abstention": 6,
+      "source_answerable": 127
+    }
+  },
+  "source_duplicate_id_occurrences": 0,
+  "source_rows_scanned_per_pass": 500,
+  "stratification_deviation": "Strict exclusion of all v1/v2/v3 selected question IDs leaves six eligible abstentions, all in multi-session, and none in the other five categories. V4 therefore contains 12 answerable cases (two in each category) and all six eligible multi-session abstentions, for 18 cases total. No replacement answerables or prior IDs are used.",
+  "upstream_file": "longmemeval_s_cleaned.json",
+  "upstream_file_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "upstream_file_url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json"
+}

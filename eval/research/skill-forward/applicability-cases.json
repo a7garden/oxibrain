@@ -1,0 +1,211 @@
+{
+  "fixture": "synthetic skill-forward/2, no real store requests",
+  "cases": [
+    {
+      "id": "unspecified",
+      "user": "Nori 작업자 수를 지금 몇으로 정할까?",
+      "response": {
+        "api": "1",
+        "ok": true,
+        "op": "recall",
+        "space": "release-lab",
+        "data": {
+          "data": {
+            "evidence": [
+              {
+                "citation_id": "E1",
+                "unit_id": "fea439978dc9e26ea0842fd017ebedf6a96b4051235977f3fca1cba22d967472",
+                "layer_index": 0,
+                "rendered_start": 0,
+                "rendered_end": 121,
+                "rendered_text_start": 48,
+                "rendered_text_end": 121,
+                "role": "untrusted_observation",
+                "shortened": false,
+                "omitted_ranges": [],
+                "support": [],
+                "source": {
+                  "reference": "doc://lab/nori-build8.md",
+                  "revision": "1aa61b55dee3b431869f18bfe0b2d48dd7443fd7df4cf35b85300387dfccbf57",
+                  "view": "decoded-utf8/1",
+                  "start": 0,
+                  "end": 73,
+                  "view_digest": "1aa61b55dee3b431869f18bfe0b2d48dd7443fd7df4cf35b85300387dfccbf57",
+                  "document_uuid": null,
+                  "decoder": "mock"
+                }
+              },
+              {
+                "citation_id": "E2",
+                "unit_id": "800b7c2c68c6d3d48ed14acb3c30bedec1db4f3f3d7a424744c32cd4217f3b24",
+                "layer_index": 0,
+                "rendered_start": 122,
+                "rendered_end": 217,
+                "rendered_text_start": 170,
+                "rendered_text_end": 217,
+                "role": "untrusted_observation",
+                "shortened": false,
+                "omitted_ranges": [],
+                "support": [],
+                "source": {
+                  "reference": "doc://lab/nori-build7.md",
+                  "revision": "ed51ab25c1e07361ce81337e050a235d353d6a48c49bc4d28e37be36a6adbf0e",
+                  "view": "decoded-utf8/1",
+                  "start": 0,
+                  "end": 47,
+                  "view_digest": "ed51ab25c1e07361ce81337e050a235d353d6a48c49bc4d28e37be36a6adbf0e",
+                  "document_uuid": null,
+                  "decoder": "mock"
+                }
+              }
+            ],
+            "layers": [
+              {
+                "kind": "documents",
+                "text": "[E1; role=untrusted_observation; excerpt=false] For Nori build 8, in production, with strict mode enabled, use workers=6.\n[E2; role=untrusted_observation; excerpt=false] For Nori build 7, in production, use workers=2.",
+                "provenance": [
+                  "doc://lab/nori-build8.md",
+                  "doc://lab/nori-build7.md"
+                ]
+              }
+            ],
+            "total_tokens": 0,
+            "truncated": false,
+            "budget": {
+              "max_tokens": 3000
+            }
+          },
+          "meta": {
+            "channels": [
+              {
+                "plane": "documents",
+                "channel": "word",
+                "eligible": true,
+                "executed": true,
+                "capped": false,
+                "considered": 2
+              }
+            ],
+            "dropped": {},
+            "execution": {
+              "answerability": "not_evaluated",
+              "partial": false,
+              "loss_scope": "bounded candidate set"
+            },
+            "index_coverage": {
+              "complete": true,
+              "pending_sources": 0
+            },
+            "freshness": {
+              "skipped_roots": []
+            }
+          }
+        },
+        "meta": {}
+      }
+    },
+    {
+      "id": "specified",
+      "user": "Nori build 8이고 production이며 strict mode가 켜져 있어. 작업자 수를 알려줘.",
+      "response": {
+        "api": "1",
+        "ok": true,
+        "op": "recall",
+        "space": "release-lab",
+        "data": {
+          "data": {
+            "evidence": [
+              {
+                "citation_id": "E1",
+                "unit_id": "fea439978dc9e26ea0842fd017ebedf6a96b4051235977f3fca1cba22d967472",
+                "layer_index": 0,
+                "rendered_start": 0,
+                "rendered_end": 121,
+                "rendered_text_start": 48,
+                "rendered_text_end": 121,
+                "role": "untrusted_observation",
+                "shortened": false,
+                "omitted_ranges": [],
+                "support": [],
+                "source": {
+                  "reference": "doc://lab/nori-build8.md",
+                  "revision": "1aa61b55dee3b431869f18bfe0b2d48dd7443fd7df4cf35b85300387dfccbf57",
+                  "view": "decoded-utf8/1",
+                  "start": 0,
+                  "end": 73,
+                  "view_digest": "1aa61b55dee3b431869f18bfe0b2d48dd7443fd7df4cf35b85300387dfccbf57",
+                  "document_uuid": null,
+                  "decoder": "mock"
+                }
+              },
+              {
+                "citation_id": "E2",
+                "unit_id": "800b7c2c68c6d3d48ed14acb3c30bedec1db4f3f3d7a424744c32cd4217f3b24",
+                "layer_index": 0,
+                "rendered_start": 122,
+                "rendered_end": 217,
+                "rendered_text_start": 170,
+                "rendered_text_end": 217,
+                "role": "untrusted_observation",
+                "shortened": false,
+                "omitted_ranges": [],
+                "support": [],
+                "source": {
+                  "reference": "doc://lab/nori-build7.md",
+                  "revision": "ed51ab25c1e07361ce81337e050a235d353d6a48c49bc4d28e37be36a6adbf0e",
+                  "view": "decoded-utf8/1",
+                  "start": 0,
+                  "end": 47,
+                  "view_digest": "ed51ab25c1e07361ce81337e050a235d353d6a48c49bc4d28e37be36a6adbf0e",
+                  "document_uuid": null,
+                  "decoder": "mock"
+                }
+              }
+            ],
+            "layers": [
+              {
+                "kind": "documents",
+                "text": "[E1; role=untrusted_observation; excerpt=false] For Nori build 8, in production, with strict mode enabled, use workers=6.\n[E2; role=untrusted_observation; excerpt=false] For Nori build 7, in production, use workers=2.",
+                "provenance": [
+                  "doc://lab/nori-build8.md",
+                  "doc://lab/nori-build7.md"
+                ]
+              }
+            ],
+            "total_tokens": 0,
+            "truncated": false,
+            "budget": {
+              "max_tokens": 3000
+            }
+          },
+          "meta": {
+            "channels": [
+              {
+                "plane": "documents",
+                "channel": "word",
+                "eligible": true,
+                "executed": true,
+                "capped": false,
+                "considered": 2
+              }
+            ],
+            "dropped": {},
+            "execution": {
+              "answerability": "not_evaluated",
+              "partial": false,
+              "loss_scope": "bounded candidate set"
+            },
+            "index_coverage": {
+              "complete": true,
+              "pending_sources": 0
+            },
+            "freshness": {
+              "skipped_roots": []
+            }
+          }
+        },
+        "meta": {}
+      }
+    }
+  ]
+}

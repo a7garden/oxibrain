@@ -318,3 +318,10 @@ pub fn scoped_names(
     }
     names
 }
+
+/// Bounded streaming top-k; scores never become fold inputs.
+pub fn retain_dense_candidates(rows: &mut Vec<(String, f64)>, maximum: usize) {
+    rows.retain(|(_, s)| s.is_finite());
+    rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    rows.truncate(maximum);
+}

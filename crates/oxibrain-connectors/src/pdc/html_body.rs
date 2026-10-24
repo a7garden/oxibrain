@@ -42,6 +42,8 @@ struct HtmlScan<'a> {
     /// script/style/comment content excluded, block tags separating words.
     /// Collapsed to single spaces once, at the end.
     text: String,
+    headings: Vec<oxibrain_core::documents::DocumentHeading>,
+    open_heading: Option<(u8, usize)>,
     block_ids: Vec<String>,
     document_links: Vec<PdcLink>,
     asset_refs: Vec<String>,
@@ -64,6 +66,8 @@ impl<'a> HtmlScan<'a> {
         Self {
             src,
             text: String::with_capacity(src.len() / 2 + 16),
+            headings: Vec::new(),
+            open_heading: None,
             block_ids: Vec::new(),
             document_links: Vec::new(),
             asset_refs: Vec::new(),
@@ -128,8 +132,17 @@ impl<'a> HtmlScan<'a> {
                 }
             }
         }
+        if let Some((level, start)) = self.open_heading.take() {
+            self.headings
+                .push(oxibrain_core::documents::DocumentHeading {
+                    start,
+                    end: self.text.len(),
+                    level,
+                });
+        }
         let HtmlScan {
             text,
+            mut headings,
             block_ids,
             document_links,
             asset_refs,
@@ -147,8 +160,10 @@ impl<'a> HtmlScan<'a> {
             Some(h1) if !h1.is_empty() => Some(h1),
             _ => title_text.filter(|t| !t.is_empty()),
         };
+        let text = collapse_heading_coordinates(&text, &mut headings);
         PdcBody {
-            text: collapse_spaces(&text),
+            text,
+            headings,
             block_ids,
             document_links,
             wiki_links: Vec::new(),
@@ -345,6 +360,17 @@ impl<'a> HtmlScan<'a> {
                 });
             }
         }
+        if let Some(level) = heading_level(&name) {
+            if let Some((old_level, start)) = self.open_heading.take() {
+                self.headings
+                    .push(oxibrain_core::documents::DocumentHeading {
+                        start,
+                        end: self.text.len(),
+                        level: old_level,
+                    });
+            }
+            self.open_heading = Some((level, self.text.len()));
+        }
         if name == "h1" && self.h1_start.is_none() && self.h1_text.is_none() {
             self.h1_start = Some(self.text.len());
         }
@@ -371,6 +397,16 @@ impl<'a> HtmlScan<'a> {
         }
         let next = (i + 1).min(bytes.len());
 
+        if heading_level(&name).is_some()
+            && let Some((level, start)) = self.open_heading.take()
+        {
+            self.headings
+                .push(oxibrain_core::documents::DocumentHeading {
+                    start,
+                    end: self.text.len(),
+                    level,
+                });
+        }
         if is_block_tag(&name) {
             self.text.push(' ');
         }
@@ -673,9 +709,72 @@ fn strip_task_glyph(label: &str) -> &str {
     }
 }
 
+fn heading_level(name: &str) -> Option<u8> {
+    match name.as_bytes() {
+        [b'h', level @ b'1'..=b'6'] => Some(level - b'0'),
+        _ => None,
+    }
+}
+
+/// Translate structural offsets during the same whitespace collapse used by
+/// the decoded view. Neither entity spelling nor raw HTML offsets reach callers.
+fn collapse_heading_coordinates(
+    text: &str,
+    headings: &mut [oxibrain_core::documents::DocumentHeading],
+) -> String {
+    let mut boundaries: Vec<_> = headings.iter().flat_map(|h| [h.start, h.end]).collect();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let mut positions = std::collections::BTreeMap::new();
+    let mut next = boundaries.into_iter().peekable();
+    let mut out = String::new();
+    let mut whitespace = false;
+    for (i, ch) in text.char_indices() {
+        if !ch.is_whitespace() && whitespace && !out.is_empty() {
+            out.push(' ');
+        }
+        while next.peek().is_some_and(|at| *at <= i) {
+            positions.insert(next.next().expect("boundary is present"), out.len());
+        }
+        if ch.is_whitespace() {
+            whitespace = true;
+        } else {
+            out.push(ch);
+            whitespace = false;
+        }
+    }
+    for at in next {
+        positions.insert(at, out.len());
+    }
+    for heading in headings {
+        heading.start = positions[&heading.start];
+        heading.end = positions[&heading.end];
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heading_coordinates_share_the_unchanged_decoded_view() {
+        let src = "<h1>한글 &amp; <em>Orion</em></h1><p>Only after failure.</p><script><h1>decoy</h1></script><h2>Check &#x1f680;</h2><p>Keep the condition.</p><h1>Other</h1>";
+        let body = parse_html_body(src);
+        assert_eq!(
+            body.text,
+            "한글 & Orion Only after failure. Check 🚀 Keep the condition. Other"
+        );
+        let headings: Vec<_> = body
+            .headings
+            .iter()
+            .map(|h| (&body.text[h.start..h.end], h.level))
+            .collect();
+        assert_eq!(
+            headings,
+            [("한글 & Orion", 1), ("Check 🚀", 2), ("Other", 1)]
+        );
+    }
 
     #[test]
     fn semantics_fixture_artifacts() {

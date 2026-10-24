@@ -1,0 +1,243 @@
+{
+  "schema": "reader-semantic-review/1",
+  "provenance": "Root persisted summary of a fresh independent read-only AI reviewer's returned per-record judgments, not a verbatim transcript.",
+  "capture_sha256": "15b3af079052d750fbe15dbc7c9b6a3eec46fcfc65a39848340d9a07cb85b2a2",
+  "blind_input_sha256": "39fd9f6d45780a42a269266518e8aa9ee5901dcbc97520248036a384ac9ab42d",
+  "arm_mapping": {
+    "A": "retrieved",
+    "B": "gold"
+  },
+  "budget": 2000,
+  "records": [
+    {
+      "record": "R01",
+      "arm": "A",
+      "verdict": "inadequate",
+      "note": "Unsupported cross-project command join."
+    },
+    {
+      "record": "R02",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R03",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R04",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R05",
+      "arm": "A",
+      "verdict": "inadequate",
+      "note": "Missing mandatory health-check guard."
+    },
+    {
+      "record": "R06",
+      "arm": "B",
+      "verdict": "inadequate",
+      "note": "Missing mandatory health-check guard."
+    },
+    {
+      "record": "R07",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R08",
+      "arm": "B",
+      "verdict": "inadequate",
+      "note": "Missing mandatory health-check guard."
+    },
+    {
+      "record": "R09",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R10",
+      "arm": "B",
+      "verdict": "inadequate",
+      "note": "Unwarranted abstention despite explicit correction."
+    },
+    {
+      "record": "R11",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R12",
+      "arm": "B",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R13",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R14",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R15",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R16",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R17",
+      "arm": "A",
+      "verdict": "gray",
+      "note": "Safe but evasive abstention; mapping and focused clarification omitted."
+    },
+    {
+      "record": "R18",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R19",
+      "arm": "A",
+      "verdict": "gray",
+      "note": "Safe but evasive abstention; mapping and focused clarification omitted."
+    },
+    {
+      "record": "R20",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R21",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R22",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R23",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R24",
+      "arm": "B",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R25",
+      "arm": "A",
+      "verdict": "inadequate",
+      "note": "Unsupported entity equivalence and unrelated checkpoint."
+    },
+    {
+      "record": "R26",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R27",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R28",
+      "arm": "B",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R29",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R30",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R31",
+      "arm": "A",
+      "verdict": "inadequate",
+      "note": "Drops snapshot prerequisite and cites unrelated project."
+    },
+    {
+      "record": "R32",
+      "arm": "B",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R33",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R34",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R35",
+      "arm": "A",
+      "verdict": "delivery_failure"
+    },
+    {
+      "record": "R36",
+      "arm": "B",
+      "verdict": "inadequate",
+      "note": "Unwarranted abstention despite historical interval."
+    },
+    {
+      "record": "R37",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R38",
+      "arm": "B",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R39",
+      "arm": "A",
+      "verdict": "adequate"
+    },
+    {
+      "record": "R40",
+      "arm": "B",
+      "verdict": "adequate"
+    }
+  ],
+  "arm_totals": {
+    "A": {
+      "adequate": 10,
+      "inadequate": 4,
+      "delivery_failure": 4,
+      "gray": 2
+    },
+    "B": {
+      "adequate": 12,
+      "inadequate": 4,
+      "delivery_failure": 4,
+      "gray": 0
+    }
+  },
+  "limitations": [
+    "Reviewer read only blind questions, delivered evidence, replies and delivery errors plus the shared semantic rubric; no expected labels or model identity.",
+    "All40records inspected; delivery failure cannot be rescued by plausible raw text.",
+    "Known synthetic diagnostic20case sample with correlated trajectories, not human labels or an untouched benchmark.",
+    "Containment proves delivery, not semantic entailment."
+  ]
+}

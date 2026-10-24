@@ -86,7 +86,13 @@ pub use stats::SpaceStats;
 pub mod evidence;
 pub mod evidence_pack;
 
+pub mod query_candidates;
 pub mod read_scope;
+pub mod source_context;
 pub mod visible_memory;
 
 pub mod eval_recall;
+pub mod read_channels;
+pub mod truth_selection;
+
+pub mod evidence_reader;

@@ -4,6 +4,14 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (for example v0.21.0)
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
@@ -15,8 +23,53 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - name: Validate tagged source and manifest version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            TAG="$INPUT_TAG"
+            if [[ -z "$TAG" ]]; then
+              echo "workflow_dispatch requires an existing vX.Y.Z tag"
+              exit 1
+            fi
+          else
+            case "$GITHUB_REF" in
+              refs/tags/v*) TAG="${GITHUB_REF#refs/tags/}" ;;
+              *) echo "publish runs require a version tag; got $GITHUB_REF"; exit 1 ;;
+            esac
+          fi
+          case "$TAG" in
+            v*) ;;
+            *) echo "release tag must start with v: $TAG"; exit 1 ;;
+          esac
+          TAG_REF="refs/tags/$TAG"
+          git show-ref --verify --quiet "$TAG_REF" || {
+            echo "release tag does not exist in the checked out repository: $TAG"
+            exit 1
+          }
+          if [[ "$(git rev-parse "$TAG_REF^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+            echo "checked out commit is not the requested release tag $TAG"
+            exit 1
+          fi
+          TAG_VERSION="${TAG#v}"
+          VERSIONS="$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].version' | sort -u)"
+          if [[ "$VERSIONS" != "$TAG_VERSION" ]]; then
+            echo "tag $TAG does not match workspace version(s): $VERSIONS"
+            exit 1
+          fi
+
+      - name: Test release artifact verifier
+        run: bash scripts/test-verify-release-assets.sh
+
+      - name: Test publishing order and deterministic archive helpers
+        run: python3 scripts/test-package-release-archive.py
 
       - name: Install llama.cpp build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential libcurl4-openssl-dev
@@ -34,16 +87,6 @@ jobs:
         with:
           arguments: --all-features
 
-      - name: Assert tag matches manifest version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
-          V=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].version' | sort -u)
-          if [ "$TAG" != "$V" ]; then
-            echo "tag v$TAG does not match workspace version $V — a full-skip false green would follow"
-            exit 1
-          fi
-
       - name: Verify workspace builds
         run: cargo build --workspace --release
 
@@ -52,6 +95,21 @@ jobs:
 
       - name: Fresh consumer preflight (before package publication)
         run: bash scripts/check-consumer.sh
+
+      - name: Refuse published releases and create draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if existing_draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null); then
+            if [[ "$existing_draft" != "true" ]]; then
+              echo "release $RELEASE_TAG is already published; refusing to replace its assets"
+              exit 1
+            fi
+            echo "reusing draft release $RELEASE_TAG"
+          else
+            gh release create "$RELEASE_TAG" --draft --title "$RELEASE_TAG" --generate-notes
+          fi
 
       - name: Publish crates in dependency order
         env:
@@ -64,27 +122,20 @@ jobs:
       # which also catches versions the pinned CI toolchain has not seen.
       - name: Consumer smoke (published crates resolve from the registry)
         run: |
+          VERSION="${RELEASE_TAG#v}"
           rustup toolchain install stable --profile minimal
           dir=$(mktemp -d)
           cargo +stable new --lib "$dir/consumer" --name oxibrain_consumer
           cd "$dir/consumer"
           # oxibrain-cli ships the actual `oxibrain` binary users install — the
           # facade/mcp/client libs alone would not catch a broken CLI publish.
-          cargo +stable add --quiet oxibrain oxibrain-client oxibrain-mcp oxibrain-cli
+          cargo +stable add --quiet \
+            "oxibrain@=$VERSION" \
+            "oxibrain-client@=$VERSION" \
+            "oxibrain-mcp@=$VERSION" \
+            "oxibrain-cli@=$VERSION"
           cargo +stable check --quiet
-          echo "consumer smoke ok: latest published oxibrain stack (incl. cli) resolves and compiles"
-
-      - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists"
-          else
-            gh release create "$TAG" --title "$TAG" --generate-notes
-          fi
+          echo "consumer smoke ok: oxibrain $VERSION stack (incl. cli) resolves and compiles"
 
   # oxios's BrainInstaller downloads `releases/latest` and expects exactly
   # `oxibrain-aarch64-apple-darwin.tar.gz` (+ `.sha256`, BSD `digest  file`
@@ -92,56 +143,158 @@ jobs:
   # with oxios-kernel brain/installer.rs ASSET_TAR.
   release-binary:
     name: Release binary (aarch64-apple-darwin)
-    if: startsWith(github.ref, 'refs/tags/')
     needs: publish
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - name: Verify ARM64 runner and install Rust target
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "arm64" ]] || {
+            echo "release binaries must be built on ARM64; uname -m returned $(uname -m)"
+            exit 1
+          }
+          rust_host="$(rustc -vV | awk '/^host: / { print $2 }')"
+          [[ "$rust_host" == "aarch64-apple-darwin" ]] || {
+            echo "expected aarch64-apple-darwin Rust host; found $rust_host"
+            exit 1
+          }
+          rustup target add aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
       # mlx-sys compiles MLX's Metal kernels, which need recent Metal
-      # shader headers (metal::remove_addrspace_t); the macos-14 default
-      # Xcode is older than that.
+      # shader headers (metal::remove_addrspace_t); select the latest
+      # Xcode installed on the ARM64 macOS runner.
       - name: Select latest Xcode
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
 
       - name: Build release binary
         run: |
-          cargo build --release -p oxibrain-cli
+          cargo build --release --target aarch64-apple-darwin -p oxibrain-cli
           mkdir -p release-binaries
-          cp target/release/oxibrain release-binaries/oxibrain
+          cp target/aarch64-apple-darwin/release/oxibrain release-binaries/oxibrain
 
       - name: Build MLX release binary
         run: |
-          cargo build --release -p oxibrain-cli --features mlx
-          cp target/release/oxibrain release-binaries/oxibrain-mlx
+          cargo build --release --target aarch64-apple-darwin -p oxibrain-cli --features mlx
+          cp target/aarch64-apple-darwin/release/oxibrain release-binaries/oxibrain-mlx
 
       - name: Package tarballs and checksums
         run: |
-          dir=$(mktemp -d)
-          cp release-binaries/oxibrain "$dir/oxibrain"
-          tar -czf "oxibrain-aarch64-apple-darwin.tar.gz" -C "$dir" oxibrain
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${RELEASE_TAG}^{commit}")"
+          [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]
+          python3 scripts/package-release-archive.py \
+            --source release-binaries/oxibrain \
+            --member oxibrain \
+            --output oxibrain-aarch64-apple-darwin.tar.gz
           shasum -a 256 "oxibrain-aarch64-apple-darwin.tar.gz" \
             > "oxibrain-aarch64-apple-darwin.tar.gz.sha256"
           # MLX engine build: same binary plus the in-process MLX engine
           # (ADR-017). The GGUF embedder is unavailable in this build.
-          cp release-binaries/oxibrain-mlx "$dir/oxibrain-mlx"
-          tar -czf "oxibrain-mlx-aarch64-apple-darwin.tar.gz" -C "$dir" oxibrain-mlx
+          python3 scripts/package-release-archive.py \
+            --source release-binaries/oxibrain-mlx \
+            --member oxibrain-mlx \
+            --output oxibrain-mlx-aarch64-apple-darwin.tar.gz
           shasum -a 256 "oxibrain-mlx-aarch64-apple-darwin.tar.gz" \
             > "oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256"
 
-      - name: Upload release assets
+      - name: Verify local release artifacts
+        run: bash scripts/verify-release-assets.sh .
+
+      - name: Upload without replacing release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          gh release upload "$TAG" \
-            "oxibrain-aarch64-apple-darwin.tar.gz" \
-            "oxibrain-aarch64-apple-darwin.tar.gz.sha256" \
-            "oxibrain-mlx-aarch64-apple-darwin.tar.gz" \
-            "oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256" \
+          set -euo pipefail
+          assets=(
+            oxibrain-aarch64-apple-darwin.tar.gz
+            oxibrain-aarch64-apple-darwin.tar.gz.sha256
+            oxibrain-mlx-aarch64-apple-darwin.tar.gz
+            oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256
+          )
+          remote_dir="$(mktemp -d)"
+          trap 'rm -rf "$remote_dir"' EXIT
+          remote_names="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+          for asset in "${assets[@]}"; do
+            if grep -Fxq -- "$asset" <<<"$remote_names"; then
+              gh release download "$RELEASE_TAG" --pattern "$asset" --dir "$remote_dir"
+              if ! cmp -s "$asset" "$remote_dir/$asset"; then
+                echo "release asset $asset already exists with different bytes; refusing to replace it"
+                exit 1
+              fi
+              echo "verified existing draft asset $asset"
+            else
+              gh release upload "$RELEASE_TAG" "$asset"
+            fi
+          done
+          gh release download "$RELEASE_TAG" \
+            --pattern 'oxibrain-aarch64-apple-darwin.tar.gz' \
+            --pattern 'oxibrain-aarch64-apple-darwin.tar.gz.sha256' \
+            --pattern 'oxibrain-mlx-aarch64-apple-darwin.tar.gz' \
+            --pattern 'oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256' \
+            --dir "$remote_dir" \
             --clobber
+          bash scripts/verify-release-assets.sh "$remote_dir"
+          for asset in "${assets[@]}"; do
+            cmp "$asset" "$remote_dir/$asset"
+          done
+          expected_names="$(printf '%s\n' "${assets[@]}" | LC_ALL=C sort)"
+          actual_names="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+          if [[ "$actual_names" != "$expected_names" ]]; then
+            echo "draft release asset set differs from the verified binary assets"
+            diff -u <(printf '%s\n' "$expected_names") <(printf '%s\n' "$actual_names") || true
+            exit 1
+          fi
+
+      - name: Verify downloaded binaries before promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          validation_dir="$(mktemp -d)"
+          trap 'rm -rf "$validation_dir"' EXIT
+          gh release download "$RELEASE_TAG" \
+            --pattern 'oxibrain-aarch64-apple-darwin.tar.gz' \
+            --pattern 'oxibrain-aarch64-apple-darwin.tar.gz.sha256' \
+            --pattern 'oxibrain-mlx-aarch64-apple-darwin.tar.gz' \
+            --pattern 'oxibrain-mlx-aarch64-apple-darwin.tar.gz.sha256' \
+            --dir "$validation_dir"
+          bash scripts/verify-release-assets.sh "$validation_dir"
+          mkdir "$validation_dir/standard" "$validation_dir/mlx"
+          tar -xzf "$validation_dir/oxibrain-aarch64-apple-darwin.tar.gz" \
+            -C "$validation_dir/standard"
+          tar -xzf "$validation_dir/oxibrain-mlx-aarch64-apple-darwin.tar.gz" \
+            -C "$validation_dir/mlx"
+          for binary in "$validation_dir/standard/oxibrain" "$validation_dir/mlx/oxibrain-mlx"; do
+            architectures="$(lipo -archs "$binary")"
+            if [[ "$architectures" != "arm64" ]]; then
+              echo "$binary must contain only arm64; found: $architectures"
+              exit 1
+            fi
+            actual_version="$("$binary" --version)"
+            if [[ "$actual_version" != "oxibrain $VERSION" ]]; then
+              echo "$binary reports '$actual_version'; expected 'oxibrain $VERSION'"
+              exit 1
+            fi
+          done
+
+      - name: Publish verified GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+          if [[ "$draft" != "true" ]]; then
+            echo "release $RELEASE_TAG is no longer a draft; refusing to mutate it"
+            exit 1
+          fi
+          gh release edit "$RELEASE_TAG" --draft=false

@@ -1,0 +1,32 @@
+{
+  "schema": "reader-candidate-freeze/1",
+  "git_base": "852f80b350ffc2dc53ea83185490c64ea85b742e",
+  "worktree_source_sha256": {
+    "crates/oxibrain-cli/src/cmd/reference_reader.rs": "05f555b044d247c85e18660c211e38215214d7457fbc88fd7d026a921acac895",
+    "crates/oxibrain/src/models.rs": "24152425d80cc801de7863b9fab1419ef89793733276ea051e9800aa06770453"
+  },
+  "binary_sha256": "d43231aa05f608b5a7efa21b61bdbfd4f7f56abae28c6a74492c0252beb927de",
+  "configuration": {
+    "tokenizer": "/private/tmp/oxibrain-m12-qwen3-tokenizer.json",
+    "embed_model": "/Users/garden/.oxi/brain/bge-m3-Q4_K_M.gguf",
+    "budgets": [
+      3000
+    ],
+    "reader_tokens": 768,
+    "corpus": "/Users/garden/Workspace/Projects/oxibrain/eval/reliable-recall/followup-reader.jsonl",
+    "output": "/Users/garden/Workspace/Projects/oxibrain/eval/reliable-recall/results/v021-reader5-native.json",
+    "live_reader": true,
+    "evidence_reader": true,
+    "compact_evidence": true,
+    "reader_revision": "evidence-reader/5; local qwen3-4b-instruct-2507-q4_k_m.gguf"
+  },
+  "configuration_sha256": "2504203cb33ad2fe4a22af1c65a0cf4fcf558b7b61ae8bdba7a8e648936f0c0f",
+  "reader_prompt_version": "evidence-reader/5",
+  "provider": "local",
+  "model_blake3": "8712872ae483c8d3d4c51c15e44663bd05cbbc08dfefe56a9c6feec38b9f0c78",
+  "budgets": [
+    3000
+  ],
+  "selection_note": "Previous20diagnosticcases; only3k rerun because prior2k/3k first request pairs were identical. No label enters prompts. This is development evidence, not a new untouched acceptance sample.",
+  "owner_decision": "Use local4B; do not use Dyno35B. Completed35B comparison retained as historical evidence only."
+}

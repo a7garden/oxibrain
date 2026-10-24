@@ -77,6 +77,7 @@ pub struct Brain {
     read_policy: oxibrain_core::read_scope::ReadPolicy,
     /// Optional dense embedder for QueryMode::Dense / hybrid dense channel.
     embedder: Option<Arc<dyn EmbeddingPort>>,
+    embedding_identity: Option<String>,
     /// Extractor identity (§9.5) used by inline capture and backlog drains.
     /// Defaults to the facade default; callers that resolve a concrete
     /// provider (model id, mechanism, weights digest) bind it here so a
@@ -127,6 +128,7 @@ impl Brain {
             tokenizer: Arc::new(CharTokenizer),
             read_policy: Default::default(),
             embedder: None,
+            embedding_identity: None,
             extractor_config: crate::extraction::default_extractor_config(),
         }
     }
@@ -189,6 +191,13 @@ impl Brain {
     /// Attach a dense embedder for QueryMode::Dense / hybrid dense channel
     /// (§7.6) and the documents-plane vector channel.
     pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingPort>) -> Self {
+        use std::hash::BuildHasher;
+        self.embedding_identity = Some(embedder.identity().unwrap_or_else(|| {
+            format!(
+                "runtime:{:016x}",
+                std::collections::hash_map::RandomState::new().hash_one(embedder.dim())
+            )
+        }));
         self.embedder = Some(embedder);
         self
     }
@@ -354,6 +363,9 @@ impl Brain {
                 })
                 .await?;
             }
+        }
+        if self.embedder.is_some() {
+            self.embed_pending_memory(usize::MAX).await?;
         }
         Ok(report)
     }
@@ -806,6 +818,7 @@ impl Brain {
 
 mod read_counter;
 pub mod recall;
+mod semantic_sources;
 /// Ledger schema shipped by this engine, exposed without adapter dependencies.
 pub const STORE_FORMAT_VERSION: u32 = oxibrain_store::schema::LEDGER_SCHEMA_VERSION as u32;
 

@@ -1,0 +1,12 @@
+{
+  "schema": "native-4b-smoke-freeze/1",
+  "candidate_commit": "eb6c5212d1e712a4837f0d5a005f1ac19c9b8613",
+  "binary_sha256": "6e792ea39cc1a55df5430ae0bb3a236e2c1ced286dfa31e7cac3382c79767ae9",
+  "config_sha256": "6956f480f9e2609af20393a5086a0b21be0e7b248d2d88c0548e5e334bab1af6",
+  "reader_version": "evidence-reader/4",
+  "model_blake3": "8712872ae483c8d3d4c51c15e44663bd05cbbc08dfefe56a9c6feec38b9f0c78",
+  "model_provider": "local",
+  "reader_max_cases": 1,
+  "extraction_fixtures": 3,
+  "note": "Integration smoke only. Repeated known cases do not increase independent quality-sample size."
+}

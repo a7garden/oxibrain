@@ -7,7 +7,7 @@
 //!     `OXIBRAIN_LLM_BASE_URL` / `OXIBRAIN_LLM_API_KEY`) — a loopback
 //!     OpenAI-compatible server: the MLX path (LM Studio's MLX engine,
 //!     `mlx_lm.server`) or a llama.cpp `server`. Aliases: `lmstudio`, `mlx`.
-//!   - `OXIBRAIN_LLM_PROVIDER=local`      (GGUF from `oxibrain model pull`, §8.4)
+//!   - `OXIBRAIN_LLM_PROVIDER=local`      (GGUF from `oxibrain admin model pull`, §8.4)
 //!
 //! Resolution order for [`from_env_for_role`], the role-aware entry point
 //! (Oxi Foundation v1, Task 3 §3):
@@ -922,10 +922,10 @@ mod tests {
         };
         let entries = vec![
             mk(ModelRole::Embed, "bge-m3"),
-            mk(ModelRole::Extract, "qwen2.5-1.5b-instruct"),
+            mk(ModelRole::Extract, "qwen3-4b-instruct-2507"),
         ];
         let got = extract_entry(&entries).expect("extract entry");
-        assert_eq!(got.name, "qwen2.5-1.5b-instruct");
-        assert_eq!(got.digest, "d-qwen2.5-1.5b-instruct");
+        assert_eq!(got.name, "qwen3-4b-instruct-2507");
+        assert_eq!(got.digest, "d-qwen3-4b-instruct-2507");
     }
 }

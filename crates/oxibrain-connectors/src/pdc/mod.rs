@@ -146,6 +146,8 @@ pub struct PdcBody {
     /// Markdown scan, so every construct (wiki syntax, math, raw HTML) stays
     /// indexed as inert text.
     pub text: String,
+    /// Transient retrieval structure in decoded-text coordinates.
+    pub headings: Vec<oxibrain_core::documents::DocumentHeading>,
     /// Stable block targets in source order: `b-<uuid>` for djot/html, the
     /// caret ID charset `[A-Za-z0-9-]+` for markdown (PDC 2 §7.2).
     pub block_ids: Vec<String>,

@@ -1,4 +1,4 @@
-//! `oxibrain index` — reconcile the documents cache (spec §7.3).
+//! `oxibrain admin index` — reconcile document or memory source indexes.
 //!
 //! Walks the configured roots from `documents.toml`, applies the pure
 //! reconcile plan to `documents.db` in one atomic pass, and reports the
@@ -6,8 +6,8 @@
 //! (dense coverage); lexical reconciliation itself never calls a model.
 //!
 //! The `--documents` flag is the spec's canonical spelling (`index
-//! --documents`); documents indexing is this command's one behavior with or
-//! without it.
+//! --documents`); documents are the default when `--memory` is absent.
+//! `--memory --embed` builds source-window vectors without extraction.
 
 use oxibrain::document_plane::format_diagnostic_lines;
 use oxibrain::{Brain, BrainConfig, IndexOptions};
@@ -23,7 +23,13 @@ pub async fn run(dir: &Path, documents: bool, memory: bool, embed: bool) -> anyh
     if memory {
         let count = brain.index_memory().await?;
         println!("memory episodes indexed: {count}");
-        if !documents && !embed {
+        if embed {
+            println!(
+                "memory windows embedded: {}",
+                brain.embed_pending_memory(usize::MAX).await?
+            );
+        }
+        if !documents {
             return Ok(());
         }
     }

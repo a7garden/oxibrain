@@ -21,8 +21,8 @@
 //!   the `pdc-query/1` safe-YAML rules, preserved as content, never
 //!   executed (§9.2, `pdc-query/1` §3.2).
 //!
-//! One deterministic pass, line-based like the djot/html scanners; no full
-//! CommonMark parse is needed for projection-level fidelity.
+//! The source-preserving scanner collects document metadata. A CommonMark
+//! parser supplies heading ranges, without rendering or rewriting the body.
 
 use super::{PdcBody, PdcLink, PdcTask, WikiLink};
 
@@ -36,6 +36,7 @@ pub fn parse_markdown_body(src: &str) -> PdcBody {
     let mut scan = Scan {
         body: PdcBody {
             text: src.to_string(),
+            headings: markdown_headings(src),
             block_ids: Vec::new(),
             document_links: Vec::new(),
             wiki_links: Vec::new(),
@@ -51,6 +52,30 @@ pub fn parse_markdown_body(src: &str) -> PdcBody {
     };
     scan.run();
     scan.body
+}
+
+/// CommonMark source ranges distinguish headings from fenced/indented code,
+/// comments, raw HTML blocks, thematic breaks, and setext-like table rows.
+fn markdown_headings(src: &str) -> Vec<oxibrain_core::documents::DocumentHeading> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_GFM;
+    Parser::new_ext(src, options)
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            if let Event::Start(Tag::Heading { level, .. }) = event {
+                Some(oxibrain_core::documents::DocumentHeading {
+                    start: range.start,
+                    end: range.end,
+                    level: level as u8,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 struct Scan {
@@ -543,6 +568,22 @@ fn autolink_target(inner: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heading_ranges_follow_commonmark_and_preserve_source_bytes() {
+        let source = "# OrionRecovery\r\n\r\n```md\r\n# fenced decoy\r\n```\r\n\r\n<!--\r\n# comment decoy\r\n-->\r\n\r\n    # indented decoy\r\n\r\n실행 조건\r\n---------\r\n\r\nDo not run unless checks fail.\r\n\r\n# Other\r\n";
+        let body = parse_markdown_body(source);
+        assert_eq!(body.text, source);
+        assert_eq!(body.headings.len(), 3);
+        assert_eq!(
+            body.headings.iter().map(|h| h.level).collect::<Vec<_>>(),
+            [1, 2, 1]
+        );
+        assert!(source[body.headings[1].start..body.headings[1].end].contains("실행 조건"));
+        for heading in &body.headings {
+            assert!(source.get(heading.start..heading.end).is_some());
+        }
+    }
 
     fn body(src: &str) -> PdcBody {
         parse_markdown_body(src)

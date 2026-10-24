@@ -57,6 +57,9 @@ tempfile.workspace = true
 toml = "0.8"
 keyring = { version = "3", optional = true }
 
+[dev-dependencies]
+sha2 = "0.10"
+
 # Apple-only optional engine dependency; the `mlx` feature is inert on other
 # targets (the code gates on `all(feature = "mlx", target_vendor = "apple")`).
 [target.'cfg(target_vendor = "apple")'.dependencies]

@@ -2841,7 +2841,7 @@ mod tests {
         let vault = tempfile::tempdir().unwrap();
         let uuid = "018f47c6-4a77-7c52-9db8-0e5f9bcb1705";
         let source = format!(
-            "---\nformat: pdc-document/2\nbody: pdc-markdown/1\nid: {uuid}\ncreated: 2026-09-14T12:34:56.789Z\nupdated: 2026-09-14T12:34:56.789Z\ntitle: Release\n---\nAuroraRecovery uses release-checkpoint-73.\n"
+            "---\nformat: pdc-document/2\nbody: pdc-markdown/1\nid: {uuid}\ncreated: 2026-09-14T12:34:56.789Z\nupdated: 2026-09-14T12:34:56.789Z\ntitle: Release\n---\n# AuroraRecovery\n\nUse release-checkpoint-73.\n\nDo not restore unless the health check fails.\n\n# OtherRecovery\n\nUNRELATED-SECTION\n"
         );
         let path = vault.path().join("release.md");
         std::fs::write(&path, &source).unwrap();
@@ -2859,10 +2859,27 @@ mod tests {
         let response=server.handle(msg(1,"tools/call",Some(json!({"name":"recall","arguments":{"space":"personal","query":"AuroraRecovery","planes":["documents"],"token_budget":2000}})))).await.unwrap();
         let text = response["result"]["content"][0]["text"].as_str().unwrap();
         assert!(
-            text.contains("release-checkpoint-73") && text.contains(uuid),
+            text.contains("release-checkpoint-73")
+                && text.contains(uuid)
+                && text.contains("Do not restore unless the health check fails."),
             "{response}"
         );
         let data: Value = serde_json::from_str(text).unwrap();
+        // Preserve weaker peer evidence separately: lexical dominance cannot
+        // prove that a condition or veto is irrelevant (P10).
+        let target = &data["data"]["evidence"][0];
+        let layer = target["layer_index"].as_u64().unwrap() as usize;
+        let layer_text = data["data"]["layers"][layer]["text"].as_str().unwrap();
+        let start = target["rendered_text_start"].as_u64().unwrap() as usize;
+        let end = target["rendered_text_end"].as_u64().unwrap() as usize;
+        let passage = &layer_text[start..end];
+        assert!(passage.contains("release-checkpoint-73"));
+        assert!(passage.contains("Do not restore unless the health check fails."));
+        assert!(!passage.contains("UNRELATED-SECTION"));
+        let body = source.split_once("\n---\n").unwrap().1;
+        let source_start = target["source"]["start"].as_u64().unwrap() as usize;
+        let source_end = target["source"]["end"].as_u64().unwrap() as usize;
+        assert_eq!(passage, &body[source_start..source_end]);
         assert!(
             data["data"]["evidence"][0]["source"]["revision"]
                 .as_str()

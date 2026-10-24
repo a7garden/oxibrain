@@ -1,0 +1,13 @@
+{
+  "status": "native_abort_before_gold_loading",
+  "exit_code": 134,
+  "case_started": 1,
+  "retrieval_reports_written": 0,
+  "gold_loaded_for_scoring": false,
+  "reason": "Pinned llama.cpp encoder requires n_ubatch >= complete input sequence token count; default physical micro-batch was insufficient.",
+  "binary_sha256": "fdedc124d63f75ff653b375c4fc8c1ff235af137cc0c30b0fb7f485ceef93398",
+  "wall_seconds": 29.98,
+  "max_rss_bytes": 1418412032,
+  "corrective_action": "Tokenize and validate complete sequences before context creation; size physical batch and ubatch for longest sequence, bounded by configured/model context limits.",
+  "scope": "No answer annotations or questions inspected to tune retrieval. New attempt retains the frozen memory candidate policy."
+}

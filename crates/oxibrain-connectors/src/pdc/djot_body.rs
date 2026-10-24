@@ -32,6 +32,7 @@ const RAW_HTML_BLOCK: &str = "raw html block";
 pub fn parse_djot_body(src: &str) -> PdcBody {
     let mut body = PdcBody {
         text: String::new(),
+        headings: Vec::new(),
         wiki_links: Vec::new(),
         query_blocks: 0,
         query_errors: Vec::new(),
@@ -93,7 +94,14 @@ pub fn parse_djot_body(src: &str) -> PdcBody {
             if level == 1 && body.fallback_title.is_none() && !title.is_empty() {
                 body.fallback_title = Some(title.to_string());
             }
+            let start = body.text.len();
             body.text.push_str(&rendered);
+            body.headings
+                .push(oxibrain_core::documents::DocumentHeading {
+                    start,
+                    end: body.text.len(),
+                    level,
+                });
             body.text.push('\n');
             continue;
         }

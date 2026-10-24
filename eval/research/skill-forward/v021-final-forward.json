@@ -1,0 +1,37 @@
+{
+  "schema": "skill-forward-evidence/1",
+  "candidate_commit": "8549de97b49fd6f10dc670048e3a3e393c716b48",
+  "binary_sha256": "7b7653720a9992cb57df63898710e9bd44167f12c31cb07a007d63d2b49c2dbe",
+  "generated_files_sha256": {
+    "CONTEXT.md": "6b2e0644304669a968921c010d8254f9ac583d80341713f8c0cc5a560167c3e3",
+    "SKILL.md": "233c2e2241b5f34ca2fb3f0985d013721a0a258d9851087761d56adbe787753f"
+  },
+  "quick_validate": "passed using skill-creator quick_validate.py",
+  "mode": "Independent fresh agent, offline supplied observations only; no MCP transport or live retrieval exercised. No expected answers given.",
+  "cases_sha256": "890900a7a0c7b77546b4bbd44d879f9f8c2ba56985ff3ebb6d3a553a0facfe99",
+  "consumer": {
+    "skill_files_read": [
+      "/tmp/oxibrain-v021-reader4-skill/skills/oxibrain/SKILL.md",
+      "/tmp/oxibrain-v021-reader4-skill/skills/oxibrain/CONTEXT.md",
+      "/Users/garden/Workspace/Projects/oxibrain/eval/research/skill-forward/release-applicability-cases.json"
+    ],
+    "answers": [
+      {
+        "id": "rollout_scope",
+        "answer_ko": "아직 Cedar Inventory는 롤아웃할 수 없습니다. E1은 감사 승인과 테넌트 격리 테스트 통과를 모두 요구하며, 감사는 승인됐지만 테스트는 보류 중이라고 합니다. Cedar Inventory Mobile의 승인(E2)은 별도 프로젝트이고, Cedar Inventory Archive의 인용된 과거 메모(E3)도 이 프로젝트의 조건을 바꾸지 않습니다. 남은 조치는 Cedar Inventory의 테넌트 격리 테스트 통과입니다."
+      },
+      {
+        "id": "identity_bridge",
+        "answer_ko": "제공된 증거만으로 Rowan Analytics가 Rowan Operations의 이름 변경인지 확인할 수 없습니다. E1은 밋업에서 한 고객이 팀을 ‘Rowan Analytics’라고 불렀다는 내용이며, 두 이름이 같은 엔터티라는 명시적 연결은 없습니다. E2의 배포 정책은 Rowan Operations에 대해 서명된 빌드와 오너 승인을 모두 요구합니다. 이 정책을 Rowan Analytics에 적용할 수 있는지는 확인할 수 없으며, 명시적인 이름 변경/동일성 연결이나 Analytics에도 정책이 적용된다는 근거가 필요합니다."
+      }
+    ],
+    "skill_ambiguity": "스킬 지침 자체에서 답변을 막는 모호성은 없었습니다. identity_bridge의 한계는 제공된 관찰에 이름 변경 또는 엔터티 동일성을 입증하는 연결이 없다는 점입니다."
+  },
+  "root_assessment": [
+    "rollout_scope: retains the AND prerequisite, pending test, and project boundaries.",
+    "identity_bridge: does not infer a rename from an incidental nickname; retains both Operations prerequisites."
+  ],
+  "limitations": [
+    "Two fresh synthetic cases, not universal skill compliance or independent retrieval quality."
+  ]
+}

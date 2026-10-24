@@ -11,6 +11,7 @@ keywords = ["gguf", "llama", "local-inference", "grammar-constrained"]
 categories = ["science"]
 
 [dependencies]
+oxibrain-llama-runtime.workspace = true
 oxibrain-ports.workspace = true
 llama-cpp-2.workspace = true
 # Constrain the transitive FFI alongside the wrapper for registry consumers.

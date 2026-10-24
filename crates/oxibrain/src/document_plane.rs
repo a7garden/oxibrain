@@ -57,11 +57,18 @@ use oxibrain_core::documents::{
     CachedFile, CachedRootMeta, FileAction as CoreFileAction, FileObservation, PdcLinkMeta,
     PdcProjectionMeta, RootAction, RootFingerprint,
 };
+use oxibrain_core::evidence::{
+    DocumentRecallCandidate, EvidenceUnit, SourceCoordinate, select_document_recall_units,
+};
+use oxibrain_core::query_candidates::{
+    LEXICAL_QUERY_PLAN_VERSION, LexicalCandidateChannel, LexicalCandidateKind, LexicalQueryPlan,
+    fuse_lexical_candidates,
+};
 use oxibrain_core::retrieval::{Query as CoreQuery, QueryMode as CoreQueryMode, SearchPlane};
-use oxibrain_ports::{BrainError, EmbeddingPort, Timestamp};
+use oxibrain_ports::{BrainError, Timestamp};
 use oxibrain_store::documents::{
-    ApplyPlan, CachedChunk, ChunkUpsert as StoreChunkUpsert, DocumentCache, DocumentUpsert,
-    DocumentsLock, FtsTable, PdcProjectionUpsert, RootApply as StoreRootApply,
+    ApplyPlan, ChunkUpsert as StoreChunkUpsert, DocumentCache, DocumentUpsert, DocumentsLock,
+    FtsTable, PdcProjectionUpsert, RootApply as StoreRootApply,
 };
 use oxibrain_store::ledger;
 
@@ -164,6 +171,8 @@ pub struct DocumentFreshness {
     /// Considered document hits omitted by the bounded materializer or source races.
     #[serde(default)]
     pub unavailable_hits: usize,
+    #[serde(default)]
+    pub channels: Vec<oxibrain_core::read_channels::ChannelReceipt>,
 }
 
 /// Render diagnostic reports as grouped operator-facing lines (`oxibrain
@@ -268,11 +277,16 @@ impl Brain {
     /// plane keeps its existing behavior: legacy `document` /
     /// `document_revision` episodes are excluded at the FTS fetch so they
     /// don't pollute `/ask`.
-    pub(crate) async fn search_unscoped(&self, q: CoreQuery) -> Result<SearchResponse, BrainError> {
+    pub(crate) async fn search_unscoped(
+        &self,
+        q: CoreQuery,
+        for_recall: bool,
+    ) -> Result<(SearchResponse, Vec<EvidenceUnit>), BrainError> {
         // Step 1: documents plane (reconcile + search + materialize).
         let mut freshness = DocumentFreshness::default();
         let mut documents: Vec<DocumentHit> = Vec::new();
-        let dense_channel_ran;
+        let mut units = Vec::new();
+
         if q.planes.contains(&SearchPlane::Documents) {
             freshness = self.index_documents_for_read().await?;
             // The documents cache is scoped by the root's `space` NAME from
@@ -282,10 +296,16 @@ impl Brain {
             // that already pass names keep working.
             let mut doc_q = q.clone();
             doc_q.space = self.resolve_space_name(&q.space).await?;
-            (documents, freshness.unavailable_hits) = self.search_documents(&doc_q).await?;
-            dense_channel_ran = self.embedder.is_some()
-                && matches!(q.mode, CoreQueryMode::Hybrid | CoreQueryMode::Dense);
-            if dense_channel_ran {
+            let candidates = self.search_documents(&doc_q, for_recall).await?;
+            documents = candidates.hits;
+            units = candidates.units;
+            freshness.channels = candidates.channels;
+            freshness.unavailable_hits = candidates.unavailable;
+            if freshness
+                .channels
+                .iter()
+                .any(|c| c.channel == "dense" && c.executed)
+            {
                 freshness.dense_coverage = self.dense_coverage(&doc_q.space).await.unwrap_or(None);
             }
         }
@@ -296,11 +316,14 @@ impl Brain {
             memory = self.search_memory(&q).await?;
         }
 
-        Ok(SearchResponse {
-            memory,
-            documents,
-            freshness,
-        })
+        Ok((
+            SearchResponse {
+                memory,
+                documents,
+                freshness,
+            },
+            units,
+        ))
     }
 
     /// Resolve a space identifier to the NAME the documents plane stores.
@@ -371,7 +394,10 @@ impl Brain {
             .as_ref()
             .ok_or_else(|| BrainError::Config("no embedding port configured".into()))?
             .clone();
-        let identity = embedder_identity(&*embedder);
+        let identity = self
+            .embedding_identity
+            .clone()
+            .expect("configured embedder identity");
         let dir = self.config.dir.clone();
 
         // Spaces come from the configured roots — `pending_vector_chunks`
@@ -409,23 +435,33 @@ impl Brain {
 
         // Phase 2: embed outside any DB transaction (P9 / invariant §3).
         let texts: Vec<String> = pending.iter().map(|(_, t)| t.clone()).collect();
-        let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        let vectors = embedder
-            .embed(&refs)
-            .map_err(|e| BrainError::Config(format!("embedding failed: {e}")))?;
+        let vectors = crate::semantic_sources::checked_embeddings(embedder, texts).await?;
         let rows: Vec<(String, Vec<f32>)> = pending
             .into_iter()
             .zip(vectors)
             .map(|((id, _), v)| (id, v))
             .collect();
-        let count = rows.len();
 
         // Phase 3 [locked open]: upsert + identity record.
-        blocking(move || {
+        let count = blocking(move || {
             let cache = open_cache_rw_with_retry(&dir)?;
+            if cache.meta_get("doc_embed_model_id")? != Some(identity.clone()) {
+                return Err(BrainError::Busy(
+                    "document embedding model changed during indexing".into(),
+                ));
+            }
+            let ids = rows.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+            let live: std::collections::BTreeSet<_> = cache
+                .chunks(&ids)?
+                .into_iter()
+                .map(|c| c.chunk_id)
+                .collect();
+            let rows = rows
+                .into_iter()
+                .filter(|(id, _)| live.contains(id))
+                .collect::<Vec<_>>();
             cache.upsert_vectors(&rows)?;
-            cache.meta_set("doc_embed_model_id", &identity)?;
-            Ok(())
+            Ok(rows.len())
         })
         .await?;
 
@@ -706,6 +742,7 @@ impl Brain {
             query_definitions,
             dense_coverage: None,
             unavailable_hits: 0,
+            channels: Vec::new(),
         })
     }
 
@@ -1091,68 +1128,230 @@ impl Brain {
     async fn search_documents(
         &self,
         q: &CoreQuery,
-    ) -> Result<(Vec<DocumentHit>, usize), BrainError> {
+        for_recall: bool,
+    ) -> Result<DocumentCandidates, BrainError> {
         let dir = self.config.dir.clone();
         // Never indexed (or first run before any index op): zero state.
         if !dir.join("documents.db").exists() {
-            return Ok((Vec::new(), 0));
+            return Ok(DocumentCandidates::default());
         }
         let space = q.space.clone();
         let text = q.text.clone();
         let limit = q.limit;
 
-        // Channel 1+2: FTS word + ngram (space-scoped in the store).
-        let word = {
-            let dir = dir.clone();
-            let space = space.clone();
-            let text = text.clone();
-            blocking(move || {
-                let cache = DocumentCache::open_ro(&dir)?;
-                cache.search_fts(&space, FtsTable::Word, &text, limit)
-            })
-            .await?
-        };
-        let ngram = {
-            let dir = dir.clone();
-            let space = space.clone();
-            let text = text.clone();
-            blocking(move || {
-                let cache = DocumentCache::open_ro(&dir)?;
-                cache.search_fts(&space, FtsTable::Ngram, &text, limit)
-            })
-            .await?
-        };
-
-        // Channel 3: dense — only when the mode wants it and an embedder
-        let knn = match (
-            matches!(q.mode, CoreQueryMode::Hybrid | CoreQueryMode::Dense),
-            self.embedder.clone(),
-        ) {
-            (true, Some(embedder)) => {
-                let dir = dir.clone();
-                let text = text.clone();
-                let out = blocking(move || {
-                    let vectors = embedder
-                        .embed(&[text.as_str()])
-                        .map_err(|e| BrainError::Config(format!("embed: {e}")))?;
-                    let v = vectors.into_iter().next().ok_or_else(|| {
-                        BrainError::Config("embedding returned empty vector".into())
-                    })?;
-                    let cache = DocumentCache::open_ro(&dir)?;
-                    cache.knn(&v, limit)
-                })
-                .await?;
-                Some(out)
-            }
-            _ => None,
-        };
-
-        // RRF fusion (k=60) within the documents plane.
-        let fused = rrf_fuse(&[&word, &ngram, knn.as_deref().unwrap_or(&[])], 60);
-        if fused.is_empty() {
-            return Ok((Vec::new(), 0));
+        // Keep the strict complete query and add bounded per-term/per-trigram
+        // channels. The core plan is language-neutral; the store only fetches
+        // scoped candidates and reports each channel's pre-limit match occurrences.
+        let query_plan = LexicalQueryPlan::new(&text);
+        let wants_lexical = !matches!(q.mode, CoreQueryMode::Dense);
+        let mut word_queries = Vec::new();
+        if wants_lexical && !query_plan.exact.trim().is_empty() {
+            word_queries.push((query_plan.exact.clone(), LexicalCandidateKind::ExactQuery));
         }
-        let ids: Vec<String> = fused.iter().take(limit).map(|(id, _)| id.clone()).collect();
+        if wants_lexical {
+            for term in &query_plan.terms {
+                if !word_queries.iter().any(|(query, _)| query == term) {
+                    word_queries.push((term.clone(), LexicalCandidateKind::Term));
+                }
+            }
+        }
+        let word_query_texts: Vec<_> = word_queries
+            .iter()
+            .map(|(query, _)| query.clone())
+            .collect();
+        let word = if wants_lexical {
+            let dir = dir.clone();
+            let space = space.clone();
+            blocking(move || {
+                let cache = DocumentCache::open_ro(&dir)?;
+                cache.search_fts_many(&space, FtsTable::Word, &word_query_texts, limit)
+            })
+            .await?
+        } else {
+            Vec::new()
+        };
+        let ngram_query_texts = if wants_lexical {
+            query_plan.trigrams.clone()
+        } else {
+            Vec::new()
+        };
+        let ngram = if wants_lexical {
+            let dir = dir.clone();
+            let space = space.clone();
+            blocking(move || {
+                let cache = DocumentCache::open_ro(&dir)?;
+                cache.search_fts_many(&space, FtsTable::Ngram, &ngram_query_texts, limit)
+            })
+            .await?
+        } else {
+            Vec::new()
+        };
+        let mut candidate_channels = Vec::new();
+        for (kind, result) in word_queries.iter().map(|(_, kind)| *kind).zip(&word) {
+            candidate_channels.push(LexicalCandidateChannel {
+                kind,
+                ids: result.hits.iter().map(|(id, _)| id.clone()).collect(),
+                breadth: result.breadth,
+            });
+        }
+        candidate_channels.extend(ngram.iter().map(|result| LexicalCandidateChannel {
+            kind: LexicalCandidateKind::Trigram,
+            ids: result.hits.iter().map(|(id, _)| id.clone()).collect(),
+            breadth: result.breadth,
+        }));
+        let mut channels = Vec::new();
+        let word_considered: usize = word
+            .iter()
+            .flat_map(|result| result.hits.iter().map(|(id, _)| id.clone()))
+            .collect::<BTreeSet<_>>()
+            .len();
+        let word_occurrences: usize = word.iter().map(|result| result.breadth).sum();
+        let word_limit_reached = word
+            .iter()
+            .any(|result| result.hits.len() >= limit && result.breadth > result.hits.len());
+        channels.push(oxibrain_core::read_channels::ChannelReceipt {
+            plane: "documents".into(),
+            channel: "word".into(),
+            eligible: wants_lexical,
+            executed: wants_lexical && !word.is_empty(),
+            considered: word_considered,
+            capped: wants_lexical && (query_plan.terms_capped || word_limit_reached),
+            limit_reached: wants_lexical && word_limit_reached,
+            match_occurrences: wants_lexical.then_some(word_occurrences),
+            algorithm_version: wants_lexical.then(|| LEXICAL_QUERY_PLAN_VERSION.into()),
+            query_limit: wants_lexical.then_some(query_plan.term_limit + 1),
+            plan_candidates_examined: if wants_lexical {
+                query_plan.terms_examined
+            } else {
+                0
+            },
+            plan_candidates_selected: if wants_lexical {
+                query_plan.terms.len()
+            } else {
+                0
+            },
+            queries_run: word.len(),
+            ..Default::default()
+        });
+        let ngram_considered: usize = ngram
+            .iter()
+            .flat_map(|result| result.hits.iter().map(|(id, _)| id.clone()))
+            .collect::<BTreeSet<_>>()
+            .len();
+        let ngram_occurrences: usize = ngram.iter().map(|result| result.breadth).sum();
+        let ngram_limit_reached = ngram
+            .iter()
+            .any(|result| result.hits.len() >= limit && result.breadth > result.hits.len());
+        channels.push(oxibrain_core::read_channels::ChannelReceipt {
+            plane: "documents".into(),
+            channel: "ngram".into(),
+            eligible: wants_lexical,
+            executed: wants_lexical && !ngram.is_empty(),
+            considered: ngram_considered,
+            capped: wants_lexical && (query_plan.trigrams_capped || ngram_limit_reached),
+            limit_reached: wants_lexical && ngram_limit_reached,
+            match_occurrences: wants_lexical.then_some(ngram_occurrences),
+            algorithm_version: wants_lexical.then(|| LEXICAL_QUERY_PLAN_VERSION.into()),
+            query_limit: wants_lexical.then_some(query_plan.trigram_limit),
+            plan_candidates_examined: if wants_lexical {
+                query_plan.trigrams_examined
+            } else {
+                0
+            },
+            plan_candidates_selected: if wants_lexical {
+                query_plan.trigrams.len()
+            } else {
+                0
+            },
+            queries_run: ngram.len(),
+            ..Default::default()
+        });
+        let wants_dense = matches!(q.mode, CoreQueryMode::Hybrid | CoreQueryMode::Dense);
+        let mut receipt = oxibrain_core::read_channels::ChannelReceipt {
+            plane: "documents".into(),
+            channel: "dense".into(),
+            eligible: wants_dense && self.embedder.is_some(),
+            model_identity: self.embedding_identity.clone(),
+            ..Default::default()
+        };
+        let mut knn = Vec::new();
+        if let Some(embedder) = self.embedder.clone().filter(|_| wants_dense) {
+            let identity = self
+                .embedding_identity
+                .clone()
+                .expect("configured embedding identity");
+            let (stored, total, indexed) = {
+                let (dir, space) = (dir.clone(), space.clone());
+                blocking(move || {
+                    let cache = DocumentCache::open_ro(&dir)?;
+                    let (indexed, total) = cache.retrieval_vector_coverage(&space)?;
+                    Ok((cache.meta_get("doc_embed_model_id")?, total, indexed))
+                })
+                .await?
+            };
+            receipt.total = Some(total);
+            receipt.indexed = Some(if stored.as_deref() == Some(identity.as_str()) {
+                indexed
+            } else {
+                0
+            });
+            if stored.as_deref() != Some(identity.as_str()) || indexed == 0 {
+                if total > 0 {
+                    receipt.fallback=Some("document vectors unavailable for this model; run admin index --documents --embed".into());
+                }
+            } else {
+                match crate::semantic_sources::checked_embeddings(embedder, vec![text.clone()])
+                    .await
+                {
+                    Err(e) => receipt.fallback = Some(e.to_string()),
+                    Ok(vectors) => {
+                        let (dir, space) = (dir.clone(), space.clone());
+                        let result = blocking(move || {
+                            let cache = DocumentCache::open_ro(&dir)?;
+                            if cache.meta_get("doc_embed_model_id")?.as_deref()
+                                != Some(identity.as_str())
+                            {
+                                return Err(BrainError::Busy(
+                                    "document vector model changed during query".into(),
+                                ));
+                            }
+                            cache.knn(&space, &vectors[0], limit)
+                        })
+                        .await;
+                        match result {
+                            Ok(hits) => {
+                                receipt.executed = true;
+                                receipt.considered = indexed;
+                                knn = hits;
+                            }
+                            Err(e) => receipt.fallback = Some(e.to_string()),
+                        }
+                    }
+                }
+            }
+        }
+        let dense_breadth = receipt.indexed.unwrap_or(knn.len());
+        channels.push(receipt);
+        if !knn.is_empty() {
+            candidate_channels.push(LexicalCandidateChannel {
+                kind: LexicalCandidateKind::Dense,
+                ids: knn.iter().map(|(id, _)| id.clone()).collect(),
+                breadth: dense_breadth,
+            });
+        }
+        let (fused, dropped) = fuse_lexical_candidates(&candidate_channels, limit);
+        if !dropped.is_empty() {
+            for channel in channels.iter_mut().filter(|channel| channel.executed) {
+                channel.capped = true;
+            }
+        }
+        if fused.is_empty() {
+            return Ok(DocumentCandidates {
+                channels,
+                ..Default::default()
+            });
+        }
+        let ids: Vec<String> = fused.iter().map(|(id, _)| id.clone()).collect();
         let snapshot = {
             let dir = dir.clone();
             blocking(move || {
@@ -1163,9 +1362,11 @@ impl Brain {
             .await?
         };
 
-        // Materialize per hit; knn is cross-space so enforce the space here.
+        // Recheck scope after the candidate snapshot as a defensive boundary.
         let fused_score: std::collections::HashMap<String, f64> = fused.into_iter().collect();
         let mut out: Vec<DocumentHit> = Vec::with_capacity(snapshot.chunks.len());
+        let mut recall_candidates = Vec::new();
+        let mut decoded = std::collections::BTreeMap::new();
         let mut remaining = self.read_policy.materialization_bytes;
         let mut unavailable = 0;
         for ch in snapshot.chunks {
@@ -1173,17 +1374,31 @@ impl Brain {
                 continue;
             }
             let score = fused_score.get(&ch.chunk_id).copied().unwrap_or(0.0);
-            let text = match self.materialize_hit(&ch, &mut remaining).await {
-                Ok(Some(t)) => t,
-                _ => {
-                    unavailable += 1;
-                    continue;
-                } // stale, capped or vanished
+            let key = (ch.document_id.clone(), ch.revision.clone());
+            if let std::collections::btree_map::Entry::Vacant(entry) = decoded.entry(key.clone()) {
+                entry.insert(
+                    self.materialize_view(
+                        &ch.root_alias,
+                        &ch.locator,
+                        &ch.revision,
+                        &ch.media_type,
+                        &mut remaining,
+                    )
+                    .await?,
+                );
+            }
+            let Some(text) = decoded[&key].as_ref() else {
+                unavailable += 1;
+                continue;
+            };
+            let Some(slice) = text.text.get(ch.span_start..ch.span_end) else {
+                unavailable += 1;
+                continue;
             };
             let reference = build_doc_uri(&ch.root_alias, &ch.locator, &ch.revision);
-            out.push(DocumentHit {
-                document_id: text.document_id,
-                view_digest: text.view_digest,
+            let hit = DocumentHit {
+                document_id: ch.document_id.clone(),
+                view_digest: text.view_digest.clone(),
                 decoder: format!("{}:{}", DECODER_VERSION, ch.media_type),
                 root: ch.root_alias.clone(),
                 locator: ch.locator,
@@ -1199,7 +1414,7 @@ impl Brain {
                 document_uuid: snapshot.uuids.get(&ch.document_id).cloned().flatten(),
                 text: UntrustedContent {
                     kind: "untrusted_content".to_string(),
-                    text: text.text,
+                    text: slice.to_string(),
                     provenance: ContentProvenance {
                         reference,
                         trust: "unverified".to_string(),
@@ -1207,14 +1422,60 @@ impl Brain {
                 },
                 modified_at: Timestamp::from_millis(ch.modified_at * 1000),
                 score,
-            });
+            };
+            if for_recall {
+                let source = SourceCoordinate {
+                    reference: hit.text.provenance.reference.clone(),
+                    revision: hit.revision.clone(),
+                    view: "decoded-utf8/1".into(),
+                    view_digest: Some(hit.view_digest.clone()),
+                    decoder: Some(hit.decoder.clone()),
+                    start: hit.span_start,
+                    end: hit.span_end,
+                    document_uuid: hit.document_uuid.clone(),
+                };
+                let section_units = oxibrain_core::evidence::document_recall_units(
+                    &text.text,
+                    text.headings.as_deref(),
+                    source,
+                    &q.text,
+                    ChunkPolicy::default().max_chunk_bytes,
+                );
+                if let Some(section_units) = section_units {
+                    recall_candidates.extend(section_units.into_iter().map(|unit| {
+                        DocumentRecallCandidate {
+                            unit,
+                            retrieval_score: score,
+                        }
+                    }));
+                } else {
+                    unavailable += 1;
+                }
+            }
+            out.push(hit);
         }
         out.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        Ok((out, unavailable))
+        let selection = select_document_recall_units(&q.text, recall_candidates);
+        let mut units = Vec::new();
+        let mut candidate_bytes = self.read_policy.materialization_bytes;
+        for unit in selection {
+            if unit.text.len() <= candidate_bytes {
+                candidate_bytes -= unit.text.len();
+                units.push(unit);
+            } else {
+                unavailable += 1;
+            }
+        }
+        Ok(DocumentCandidates {
+            hits: out,
+            units,
+            unavailable,
+            channels,
+        })
     }
 
     pub(crate) async fn document_hits_live(
@@ -1251,20 +1512,21 @@ impl Brain {
         Ok(true)
     }
 
-    /// Resolve one cached chunk to a materialized slice. Returns `Ok(None)`
-    /// when the file no longer matches the cached revision (stale, alias
-    /// gone, unreadable, or span out of bounds) — the caller drops the hit
-    /// (spec §12 invariant 12: never return mismatched text).
-    async fn materialize_hit(
+    /// Re-read one document and verify its revision before decoding. The full
+    /// decoded view and transient heading coordinates share exactly those bytes.
+    async fn materialize_view(
         &self,
-        ch: &CachedChunk,
+        root_alias: &str,
+        locator: &str,
+        revision: &str,
+        stored_media_type: &str,
         remaining: &mut usize,
     ) -> Result<Option<HitMaterialized>, BrainError> {
-        let canonical = match self.locator_to_root_path(&ch.root_alias) {
+        let canonical = match self.locator_to_root_path(root_alias) {
             Some(p) => p,
             None => return Ok(None),
         };
-        let path = canonical.join(&ch.locator);
+        let path = canonical.join(locator);
         let bytes = match read_document_bounded(&path, remaining) {
             Ok(b) => b,
             Err(_) => return Ok(None),
@@ -1274,19 +1536,19 @@ impl Brain {
         // `GitDocumentReader::current_revision` against the bytes just read;
         // blake3 revisions via a direct hash compare. Any verification
         // failure drops the hit.
-        let verified = if ch.revision.starts_with("git:") {
+        let verified = if revision.starts_with("git:") {
             match GitDocumentReader::open(&canonical) {
                 Ok(Some(reader)) => match reader.snapshot() {
                     Ok(snap) => reader
-                        .current_revision(&snap, &ch.locator, &bytes)
-                        .map(|rev| rev == ch.revision)
+                        .current_revision(&snap, locator, &bytes)
+                        .map(|rev| rev == revision)
                         .unwrap_or(false),
                     Err(_) => false,
                 },
                 _ => false,
             }
         } else {
-            format!("blake3:{}", blake3_hex(&bytes)) == ch.revision
+            format!("blake3:{}", blake3_hex(&bytes)) == revision
         };
         if !verified {
             return Ok(None);
@@ -1297,10 +1559,10 @@ impl Brain {
         // the PDC connector (envelope never enters the cached text); legacy
         // media types keep the legacy decoders. Unknown stored values fall
         // back to the locator extension.
-        let media_type = MediaType::from_stored_str(&ch.media_type);
-        let decoded_text: String = match ch.media_type.as_str() {
+        let media_type = MediaType::from_stored_str(stored_media_type);
+        let (decoded_text, headings) = match stored_media_type {
             s if s == BodyProfile::Djot.media_type() => match parse_djot_document("", &bytes) {
-                Ok(doc) => doc.body.text,
+                Ok(doc) => (doc.body.text, Some(doc.body.headings)),
                 Err(_) => return Ok(None),
             },
             // Canonical PDC documents re-decode through the parser so the
@@ -1311,36 +1573,39 @@ impl Brain {
                 || s == "application/vnd.pdc.document+html;version=2" =>
             {
                 match parse_html_document("", &bytes) {
-                    Ok(doc) => doc.body.text,
+                    Ok(doc) => (doc.body.text, Some(doc.body.headings)),
                     Err(_) => return Ok(None),
                 }
             }
             s if s == BodyProfile::Markdown.media_type() => {
                 match parse_markdown_document("", &bytes) {
-                    Ok(doc) => doc.body.text,
+                    Ok(doc) => (doc.body.text, Some(doc.body.headings)),
                     Err(_) => return Ok(None),
                 }
             }
             _ => match decode(media_type.unwrap_or_else(|| media_type_of(&path)), &bytes) {
-                Ok(d) => d.text,
+                Ok(d) => {
+                    let headings = match media_type {
+                        Some(MediaType::Markdown) => {
+                            Some(oxibrain_connectors::pdc::parse_markdown_body(&d.text).headings)
+                        }
+                        Some(MediaType::Html) => {
+                            let projected = oxibrain_connectors::pdc::parse_html_body(
+                                &String::from_utf8_lossy(&bytes),
+                            );
+                            (projected.text == d.text).then_some(projected.headings)
+                        }
+                        _ => Some(Vec::new()),
+                    };
+                    (d.text, headings)
+                }
                 Err(_) => return Ok(None),
             },
         };
-        // Span must stay inside the decoded text and align with UTF-8
-        // boundaries; otherwise the cached row is not this file's shape.
-        let span_start = ch.span_start;
-        let span_end = ch.span_end;
-        if span_end > decoded_text.len()
-            || span_start > span_end
-            || !decoded_text.is_char_boundary(span_start)
-            || !decoded_text.is_char_boundary(span_end)
-        {
-            return Ok(None);
-        }
         Ok(Some(HitMaterialized {
-            document_id: ch.document_id.clone(),
             view_digest: blake3_hex(decoded_text.as_bytes()),
-            text: decoded_text[span_start..span_end].to_string(),
+            text: decoded_text,
+            headings,
         }))
     }
 
@@ -1502,8 +1767,16 @@ enum MaterializeError {
     Io(BrainError),
 }
 
+#[derive(Default)]
+struct DocumentCandidates {
+    hits: Vec<DocumentHit>,
+    units: Vec<EvidenceUnit>,
+    unavailable: usize,
+    channels: Vec<oxibrain_core::read_channels::ChannelReceipt>,
+}
+
 struct HitMaterialized {
-    document_id: String,
+    headings: Option<Vec<oxibrain_core::documents::DocumentHeading>>,
     text: String,
     view_digest: String,
 }
@@ -1528,7 +1801,7 @@ fn build_upsert(obs: &FileObservation, bytes: &[u8], source: DecodedSource) -> D
     };
 
     // Revision: gix-derived hint when present, else blake3 of the bytes
-    // actually read (the same form materialize_hit verifies).
+    // actually read (the same form materialize_view verifies).
     let revision = obs
         .revision_hint
         .clone()
@@ -1884,34 +2157,6 @@ fn media_type_of(path: &Path) -> MediaType {
         .unwrap_or(MediaType::PlainText)
 }
 
-/// Embedder identity for the documents-plane vector cache. `EmbeddingPort`
-/// exposes only `dim()`/`embed()`, so the dimension is the identity — a
-/// model swap that changes the dimension invalidates every cached vector;
-/// same-dimension swaps keep vectors (accepted: stale-but-shaped beats
-/// wiped indexes, and the manifest revision still gates hits).
-fn embedder_identity(embedder: &dyn EmbeddingPort) -> String {
-    format!("emb:dim:{}", embedder.dim())
-}
-
-/// Reciprocal Rank Fusion (k=60). Input rank lists are score-desc; lower
-/// rank position ⇒ more weight. Returns the merged list sorted by fused
-/// score desc; ties broken by stable ids.
-fn rrf_fuse(lists: &[&[(String, f64)]], k: usize) -> Vec<(String, f64)> {
-    let mut score: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-    for list in lists {
-        for (rank, (id, _)) in list.iter().enumerate() {
-            *score.entry(id.clone()).or_insert(0.0) += 1.0 / (k as f64 + rank as f64 + 1.0);
-        }
-    }
-    let mut out: Vec<(String, f64)> = score.into_iter().collect();
-    out.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.cmp(&b.0))
-    });
-    out
-}
-
 /// Build a `doc://` URI for one hit. The locator path is percent-encoded
 /// per the spec §6.7 (`doc://alias/<pct-locator>?rev=<revision>`).
 fn build_doc_uri(alias: &str, locator: &str, revision: &str) -> String {
@@ -1966,6 +2211,71 @@ fn read_document_bounded(
 mod tests {
     #![cfg_attr(test, allow(clippy::unwrap_used))]
     use super::*;
+
+    #[tokio::test]
+    async fn recall_expansion_drops_a_revision_changed_after_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let path = vault.path().join("note.md");
+        std::fs::write(
+            &path,
+            "# OrionRecovery\n\nOld command.\n\nOnly after failure.",
+        )
+        .unwrap();
+        let brain = Brain::open(crate::BrainConfig::at(dir.path()))
+            .await
+            .unwrap();
+        let space = brain.ensure_space("fixture").await.unwrap();
+        brain
+            .register_document_root(DocumentRootSpec {
+                alias: "vault".into(),
+                path: vault.path().into(),
+                space: "fixture".into(),
+                include: None,
+                exclude: None,
+                max_file_bytes: None,
+            })
+            .await
+            .unwrap();
+        let response = brain
+            .search(CoreQuery {
+                text: "OrionRecovery".into(),
+                space: space.clone(),
+                mode: CoreQueryMode::Lexical,
+                as_of: None,
+                limit: 1,
+                min_confidence: 0.0,
+                planes: [SearchPlane::Documents].into_iter().collect(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.documents.len(), 1);
+        std::fs::write(
+            &path,
+            "# OrionRecovery\n\nNew command.\n\nNever run before approval.",
+        )
+        .unwrap();
+        let hit = &response.documents[0];
+        let mut remaining = usize::MAX;
+        let view = brain
+            .materialize_view(
+                &hit.root,
+                &hit.locator,
+                &hit.revision,
+                "text/markdown",
+                &mut remaining,
+            )
+            .await
+            .unwrap();
+        assert!(view.is_none());
+        assert!(!brain.document_hits_live(&response.documents).await.unwrap());
+        let mut req = crate::RecallRequest::new(space, "OrionRecovery", 2000);
+        req.planes = [SearchPlane::Documents].into_iter().collect();
+        let result = brain.recall_with_request(req).await.unwrap();
+        let text = oxibrain_core::context::render_context(&result.data.context);
+        assert!(text.contains("New command.") && text.contains("Never run before approval."));
+        assert!(!text.contains("Old command."));
+    }
 
     fn pdc_upsert(locator: &str, uuid: &str) -> DocumentUpsert {
         DocumentUpsert {

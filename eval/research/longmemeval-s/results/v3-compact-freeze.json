@@ -1,0 +1,41 @@
+{
+  "schema": "external-recall-candidate-freeze/1",
+  "candidate_commit": "8549de97b49fd6f10dc670048e3a3e393c716b48",
+  "binary_sha256": "580ac99bc449665aad3bdfa421b5af7e1f2f800c823fa274fbdafc26e5785a38",
+  "binary_features": [
+    "default"
+  ],
+  "dataset_profile": "v3",
+  "input_sha256": "66b0f492c3315a31dba5e6c78fe06311e09ed76f9e981406fdbfb10b6cfde06d",
+  "gold_sha256": "65bc6612cd104cc7a05dbf5d02c2a773c16e53f0d71940ad6efbdc73f910b4fd",
+  "embedder_blake3": "b7f56ba6ceb9fce993f0b1ea2810257ecceb23b5fa2e9787ed679c8174f96ec4",
+  "tokenizer_blake3": "b0cb923fc505fdf0a53f0287654fa26577d3f333d4134350da0a97664b228739",
+  "budgets": [
+    2000,
+    3000
+  ],
+  "read_policy": {
+    "candidate_cap": 256,
+    "channel_depth": 64,
+    "compact_evidence": true,
+    "dense_scan_vectors": 16384,
+    "explanation_bytes": 16384,
+    "materialization_bytes": 8388608,
+    "metadata_bytes": 65536,
+    "profile_tokens": 300,
+    "query_terms": 32,
+    "recency_tokens": 200,
+    "reconcile_entries": 4096,
+    "semantic_sources": true,
+    "truth_bytes": 8388608,
+    "truth_group_cap": 256
+  },
+  "source_window_policy": "source-paragraph-window/2",
+  "fusion": "fuse_query_source_families; lexical and dense final equal-family RRF",
+  "reader": "not run",
+  "timing_note": "Other CPU builds/tests may overlap; timings are descriptive, not a production latency acceptance test.",
+  "gold_access": "Gold parsed only after all retrieval requests complete; root has not inspected v3 questions, answers, or case labels.",
+  "metadata_preparation_note": "Pinned manifest, freezer and license already copied beside input and gold before launch.",
+  "read_policy_version": "read-policy/4",
+  "render_mode": "compact"
+}

@@ -1,0 +1,584 @@
+{
+  "source": "/tmp/oxibrain-v021-reader3-blind-review.json",
+  "method": "Independent manual blind assessment of supplied question, complete delivered evidence, validated reply, and raw response only. No expected actions, labels, scored reports, external sources, or repository code read. Exact question and full applicability required; no quote-containment-as-entailment. Delivery-invalid outputs never accepted. Safe abstention accepted for missing answers and unresolved equal-authority conflicts; scope abstention without focused question counted incomplete when a concrete selector is known. Conditional answer with explicit branch mapping accepted. Cosmetic mixed-script typos not semantic failures.",
+  "limitations": [
+    "20 synthetic paired cases per arm; not broad deployment-quality estimate or code audit.",
+    "Provided delivery_error trusted; validator not rerun.",
+    "Gold correction-2 raw wording is awkward but interpreted as capturing explicit subsequent withdrawal; still rejected delivery.",
+    "Scope-1 gold considered incomplete under focused-clarification/explicit-mapping criterion; a more permissive safety-only rubric could count it safe.",
+    "Rename answers supported by full evidence despite citations omitting identity bridge; citation completeness is residual weakness."
+  ],
+  "aggregates": {
+    "retrieved": {
+      "total": 20,
+      "delivery_failures": 6,
+      "accepted_semantically_adequate": 10,
+      "valid_but_semantically_inadequate": 4,
+      "valid_semantic_categories": {
+        "unsupported_or_omitted": 3,
+        "adequate_answer": 8,
+        "adequate_abstention": 2,
+        "missing_focused_clarification": 1
+      },
+      "raw_semantic_categories_including_invalid": {
+        "unsupported_or_omitted": 6,
+        "adequate_answer": 11,
+        "adequate_abstention": 2,
+        "missing_focused_clarification": 1
+      },
+      "unnecessary_clarification": 0
+    },
+    "gold": {
+      "total": 20,
+      "delivery_failures": 5,
+      "accepted_semantically_adequate": 11,
+      "valid_but_semantically_inadequate": 4,
+      "valid_semantic_categories": {
+        "adequate_abstention": 4,
+        "unsupported_or_omitted": 1,
+        "unnecessary_abstention": 2,
+        "missing_focused_clarification": 1,
+        "adequate_clarification": 1,
+        "adequate_answer": 6
+      },
+      "raw_semantic_categories_including_invalid": {
+        "adequate_abstention": 4,
+        "unsupported_or_omitted": 1,
+        "adequate_answer": 11,
+        "unnecessary_abstention": 2,
+        "missing_focused_clarification": 1,
+        "adequate_clarification": 1
+      },
+      "unnecessary_clarification": 0
+    }
+  },
+  "cases": [
+    {
+      "case": "conflict-1",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "unsupported_or_omitted",
+      "severity": "P1",
+      "accepted": false,
+      "explanation": "E1/E21 establish restore-11 versus restore-12 for LyraRelease. Reply invents restore-22 and imports unrelated Narae evidence E24; calling both approved does not resolve the conflict. State both actual competing claims and ask which authority controls, or abstain."
+    },
+    {
+      "case": "conflict-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_abstention",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Conflicting equal-authority instructions with no supersession support abstaining; a focused authority question would be more useful."
+    },
+    {
+      "case": "conflict-2",
+      "arm": "retrieved",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "condition_not_cited",
+              "index": 0
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "unsupported_or_omitted",
+      "severity": "P1",
+      "accepted": false,
+      "explanation": "Raw reply selects 복구-22 while omitting the equally authorized 복구-21 claim in E2. A vague priority caveat does not preserve both competing commands. Also rejected for condition_not_cited."
+    },
+    {
+      "case": "conflict-2",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_abstention",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Unresolved competing instructions support abstention; focused clarification would improve usefulness."
+    },
+    {
+      "case": "condition-1",
+      "arm": "retrieved",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "condition_not_cited",
+              "index": 0
+            },
+            {
+              "code": "condition_not_cited",
+              "index": 1
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "unsupported_or_omitted",
+      "severity": "P1",
+      "accepted": false,
+      "explanation": "Raw answer preserves Orion health-check guard but invents a conflict with LyraRelease restore-71; restore-71 belongs to 한울복구. Also conditions are absent from cited excerpts."
+    },
+    {
+      "case": "condition-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "unsupported_or_omitted",
+      "severity": "P1",
+      "accepted": false,
+      "explanation": "Answer says run restore-release-53 without the explicit do-not-run-unless-health-check-failed guard present in E1. Include this guard in answer and citation."
+    },
+    {
+      "case": "condition-2",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Correct command and mandatory failed-health-check condition retained."
+    },
+    {
+      "case": "condition-2",
+      "arm": "gold",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "condition_not_cited",
+              "index": 0
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": false,
+      "explanation": "Raw meaning retains correct command and guard, but guard was not quoted; delivery failure remains disqualifying."
+    },
+    {
+      "case": "correction-1",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Uses release-32 and explicit October 20 withdrawal of prior target."
+    },
+    {
+      "case": "correction-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "unnecessary_abstention",
+      "severity": "P2",
+      "accepted": false,
+      "explanation": "E2 expressly withdraws previous target and supplies release-32; abstention discards an answerable correction."
+    },
+    {
+      "case": "correction-2",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Uses version-42 with October 20 applicability; mixed-script date does not alter meaning."
+    },
+    {
+      "case": "correction-2",
+      "arm": "gold",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "quote_not_delivered",
+              "id": "E2",
+              "index": 1
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": false,
+      "explanation": "Raw wording awkwardly starts with former target but explicitly says later withdrawn and changed to version-42. Meaning captures update; altered entity text in quote causes delivery rejection."
+    },
+    {
+      "case": "missing-1",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_abstention",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Answer action nevertheless communicates no access code recorded, supported by E1; no code invented."
+    },
+    {
+      "case": "missing-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_abstention",
+      "severity": null,
+      "accepted": true,
+      "explanation": "No evidence supplied; abstention appropriate."
+    },
+    {
+      "case": "missing-2",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_abstention",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Evidence expressly says access code unrecorded; abstention appropriate."
+    },
+    {
+      "case": "missing-2",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_abstention",
+      "severity": null,
+      "accepted": true,
+      "explanation": "No evidence supplied; abstention appropriate."
+    },
+    {
+      "case": "scope-1",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "missing_focused_clarification",
+      "severity": "P2",
+      "accepted": false,
+      "explanation": "Known production/staging mapping and unspecified environment call for a focused environment question. Empty abstention is safe but does not resolve this answerable ambiguity."
+    },
+    {
+      "case": "scope-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "missing_focused_clarification",
+      "severity": "P2",
+      "accepted": false,
+      "explanation": "Recognizes missing environment but neither asks which environment nor maps production to restart-prod and staging to restart-stage in answer. Quote contains mapping, but quote containment alone is not answer adequacy. Ask production or staging, or state explicit conditional mapping."
+    },
+    {
+      "case": "scope-2",
+      "arm": "retrieved",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "quote_not_delivered",
+              "id": "E2",
+              "index": 0
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": false,
+      "explanation": "Raw reply gives correct environment-command mapping and states missing environment prevents selection. Direct question preferable, but conditional branches preserve all applicability. Quote typo causes delivery failure."
+    },
+    {
+      "case": "scope-2",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_clarification",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Focused production versus test environment question resolves actual missing selector."
+    },
+    {
+      "case": "version-1",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Correct command for explicitly requested v2."
+    },
+    {
+      "case": "version-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Correct command and v2 scope."
+    },
+    {
+      "case": "version-2",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Correct v2 command; question supplies scope."
+    },
+    {
+      "case": "version-2",
+      "arm": "gold",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "quote_not_delivered",
+              "id": "E1",
+              "index": 0
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": false,
+      "explanation": "Raw command correct for v2; quote added entity prefix not present in source, so rejected."
+    },
+    {
+      "case": "rename-1",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "unsupported_or_omitted",
+      "severity": "P1",
+      "accepted": false,
+      "explanation": "Correct checkpoint-81 is followed by fabricated equivalence of 바람엔진 and AmberEngine and unrelated checkpoint-91. E1/E21 support only Lycoris/Amber identity. Cite identity bridge and omit unrelated entity."
+    },
+    {
+      "case": "rename-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Correct checkpoint-81 supported by E1 identity bridge and E2 value. Citation alone omits bridge, a traceability weakness rather than unsupported answer against full evidence."
+    },
+    {
+      "case": "rename-2",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Correct checkpoint-91 via explicit rename bridge; minor entity transliteration typo does not obscure referent. Citation omits bridge but full evidence supports it."
+    },
+    {
+      "case": "rename-2",
+      "arm": "gold",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "condition_not_cited",
+              "index": 0
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": false,
+      "explanation": "Raw checkpoint-91 correct, but paraphrased condition fails exact citation check; not accepted."
+    },
+    {
+      "case": "multisource-1",
+      "arm": "retrieved",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "condition_not_cited",
+              "index": 0
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": false,
+      "explanation": "Raw answer has both mandatory prerequisites and full delivered E1/E21 support them. Citation erroneously uses unrelated 은하전환 E23 instead of Perseus E21; condition_not_cited rejects delivery. Correct answer text does not repair attribution."
+    },
+    {
+      "case": "multisource-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Both snapshot completion and old-worker stop required; both sources cited."
+    },
+    {
+      "case": "multisource-2",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "unsupported_or_omitted",
+      "severity": "P1",
+      "accepted": false,
+      "explanation": "Asked for two prerequisites but answer only supplies old-worker stop; snapshot completion in E1 is absent. Repeating both required and citing unrelated Perseus does not supply missing conjunct. Include snapshot plus stop and cite E1/E21."
+    },
+    {
+      "case": "multisource-2",
+      "arm": "gold",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "quote_not_delivered",
+              "id": "E2",
+              "index": 1
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": false,
+      "explanation": "Raw answer retains both mandatory prerequisites. Quote typo still makes delivery invalid."
+    },
+    {
+      "case": "temporal-1",
+      "arm": "retrieved",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "quote_not_delivered",
+              "id": "E26",
+              "index": 1
+            },
+            {
+              "code": "condition_not_cited",
+              "index": 1
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "unsupported_or_omitted",
+      "severity": "P2",
+      "accepted": false,
+      "explanation": "Raw answer gets requested October 5 archive-61 but adds false claim Solstice changed to archive-72, importing unrelated Korean plan; actual E21 says archive-62. Quote and condition failures also reject delivery."
+    },
+    {
+      "case": "temporal-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "October 5 falls in stated October 1-10 archive-61 interval."
+    },
+    {
+      "case": "temporal-2",
+      "arm": "retrieved",
+      "delivery_valid": false,
+      "delivery_error": {
+        "detail": {
+          "errors": [
+            {
+              "code": "condition_not_cited",
+              "index": 0
+            },
+            {
+              "code": "condition_not_cited",
+              "index": 1
+            }
+          ]
+        },
+        "kind": "delivery_contract"
+      },
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": false,
+      "explanation": "Raw answer correctly preserves archive-71 for October 1-10 and archive-72 beginning October 11, but English condition strings not in Korean cited excerpts cause rejection."
+    },
+    {
+      "case": "temporal-2",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "unnecessary_abstention",
+      "severity": "P2",
+      "accepted": false,
+      "explanation": "E1 directly covers October 5 with archive-71; later update does not invalidate historical answer. Answer date-selected value."
+    },
+    {
+      "case": "identifier-1",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Exact identifier 00b7-FQ9 preserved and correct entity selected."
+    },
+    {
+      "case": "identifier-1",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Exact identifier and distinction from report entity preserved."
+    },
+    {
+      "case": "identifier-2",
+      "arm": "retrieved",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Exact identifier 00c8-GR9 preserved and correct entity selected."
+    },
+    {
+      "case": "identifier-2",
+      "arm": "gold",
+      "delivery_valid": true,
+      "delivery_error": null,
+      "semantic_category": "adequate_answer",
+      "severity": null,
+      "accepted": true,
+      "explanation": "Exact identifier and distinction from report entity preserved."
+    }
+  ]
+}

@@ -117,8 +117,10 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.execute_batch(sql).map_err(sql_err)?;
         for (entity_id, blob) in &old {
             let floats: Vec<f32> = blob
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect();
             let q = oxibrain_index::quantize_i8_unit(&floats);
             conn.execute(
@@ -163,6 +165,24 @@ pub fn run(conn: &Connection) -> Result<i64, BrainError> {
         conn.pragma_update(None, "user_version", 15i64)
             .map_err(sql_err)?;
     }
+    if current < 16 {
+        conn.execute_batch(include_str!("migrations/v16.sql"))
+            .map_err(sql_err)?;
+        conn.pragma_update(None, "user_version", 16i64)
+            .map_err(sql_err)?;
+    }
+    if current < 17 {
+        conn.execute_batch(include_str!("migrations/v17.sql"))
+            .map_err(sql_err)?;
+        conn.pragma_update(None, "user_version", 17i64)
+            .map_err(sql_err)?;
+    }
+    if current < 18 {
+        conn.execute_batch(include_str!("migrations/v18.sql"))
+            .map_err(sql_err)?;
+        conn.pragma_update(None, "user_version", 18i64)
+            .map_err(sql_err)?;
+    }
     let now: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sql_err)?;
@@ -204,6 +224,27 @@ mod tests {
             )
             .expect("pragma query");
         assert_eq!(has_col, 1, "uncertainty_json column should exist after v9");
+    }
+
+    #[test]
+    fn v16_resumes_after_table_creation_before_version_update() {
+        ensure_vec_extension();
+        let conn = Connection::open_in_memory().expect("open");
+        run(&conn).expect("migrate");
+        conn.execute_batch("DROP TRIGGER memory_source_vector_delete;")
+            .expect("simulate partial migration");
+        conn.pragma_update(None, "user_version", 15i64)
+            .expect("set");
+        assert_eq!(run(&conn).expect("resume"), LEDGER_SCHEMA_VERSION);
+        let triggers: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='memory_source_vector_delete'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("trigger");
+        assert_eq!(triggers, 1);
+        assert_eq!(run(&conn).expect("reopen"), LEDGER_SCHEMA_VERSION);
     }
 
     #[test]

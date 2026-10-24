@@ -1,0 +1,14 @@
+{
+  "schema": "recall-followup/1",
+  "date": "2026-10-24",
+  "questions": 20,
+  "sha256": "80bd70c48e107d89f179078d5c73d1a2a57c9f1092870b3b9d02b86616a77a67",
+  "annotation": "Authored diagnostic cases, frozen before evaluation; not independently annotated or an external benchmark. Full source ranges deliberately include competing evidence.",
+  "actions": [
+    "answer",
+    "conditional",
+    "clarify",
+    "abstain"
+  ],
+  "tuning": "Do not tune prompts or ranking against these frozen results."
+}
