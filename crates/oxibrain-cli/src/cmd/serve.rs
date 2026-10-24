@@ -1,4 +1,4 @@
-//! `oxibrain serve` — start an MCP session (DESIGN §12.4).
+//! `oxibrain admin serve` — start an MCP session (DESIGN §12.4).
 //!
 //! Daemonless transports only (two-plane design):
 //!

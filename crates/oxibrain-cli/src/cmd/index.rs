@@ -1,4 +1,4 @@
-//! `oxibrain index` — reconcile document or memory source indexes.
+//! `oxibrain admin index` — reconcile document or memory source indexes.
 //!
 //! Walks the configured roots from `documents.toml`, applies the pure
 //! reconcile plan to `documents.db` in one atomic pass, and reports the

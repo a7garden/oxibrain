@@ -1,6 +1,6 @@
 //! Model artifact management (§8.4).
 //!
-//! Manifest at `~/.oxi/brain/models/manifest.toml` declares the model set:
+//! Manifest at `~/.oxi/brain/manifest.toml` declares the model set:
 //! role, name, url, blake3 digest, size, license. `oxibrain model` commands
 //! list / pull / verify / use it. The digest feeds `ExtractorId` (§9.5):
 //! changing weights must change the extractor id, or a silent quality
@@ -91,7 +91,7 @@ pub fn default_manifest() -> Vec<ModelEntry> {
 }
 
 /// The models directory: `$OXIBRAIN_MODELS_DIR` if set, else
-/// `~/.oxi/brain/models/`.
+/// `~/.oxi/brain/`.
 ///
 /// The env override is the air-gapped escape hatch (§8.4): point it at a
 /// pre-pulled directory and the lazy pull becomes a verify-only no-op.
@@ -103,7 +103,7 @@ pub fn model_dir() -> PathBuf {
 }
 
 /// Pure resolution behind [`model_dir`]: prefer the canonical
-/// `<brain>/models`; when it is absent and the legacy `<oxi-home>/models`
+/// `<brain>`; when it is absent and the legacy `<oxi-home>/models`
 /// exists, read the legacy location until `oxibrain migrate` has moved it
 /// (read-only compatibility window — never written through this path).
 fn model_dir_from(canonical: PathBuf, legacy_home: &Path) -> PathBuf {
@@ -115,7 +115,7 @@ fn model_dir_from(canonical: PathBuf, legacy_home: &Path) -> PathBuf {
     }
 }
 
-/// The manifest path: `~/.oxi/brain/models/manifest.toml`.
+/// The manifest path: `~/.oxi/brain/manifest.toml`.
 pub fn manifest_path() -> PathBuf {
     model_dir().join("manifest.toml")
 }

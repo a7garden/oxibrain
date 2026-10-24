@@ -30,6 +30,7 @@ squash-merged.
 - Balance lexical and dense source rankings as two families so query expansion does not multiply one family's voting power.
 - Prefer complete paragraph/line boundaries in raw-source chunks; schema 17 invalidates old disposable source chunks, vectors and index cursors for a ledger-based rebuild.
 - Deliver reference-reader evidence as explicit JSON fields and report typed, exact-quotation/action validation failures.
+- Reject over-context local LLM prompts before native decode and retain bounded output capacity; correct CLI recovery commands to use the `admin` namespace.
 - Stage new release assets in a draft, verify checksum/archive contents/ARM64 architecture/version after download, and reject replacement of published assets.
 
 ### Compatibility

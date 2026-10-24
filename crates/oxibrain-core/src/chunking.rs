@@ -70,6 +70,7 @@ pub fn split_into_chunks(content: &str, policy: &ChunkPolicy) -> Vec<Chunk> {
 pub fn source_windows(content: &str, maximum: usize, overlap: usize) -> Vec<Chunk> {
     let mut out = Vec::new();
     let mut start = 0;
+    let mut covered_end = 0;
     let maximum = maximum.max(1);
     while start < content.len() {
         let mut end = start.saturating_add(maximum).min(content.len());
@@ -84,11 +85,16 @@ pub fn source_windows(content: &str, maximum: usize, overlap: usize) -> Vec<Chun
                     .expect("nonempty tail")
                     .len_utf8();
         }
+        if end <= covered_end {
+            start = covered_end;
+            continue;
+        }
         out.push(Chunk {
             ordinal: out.len() as u32,
             span_start: start,
             span_end: end,
         });
+        covered_end = end;
         if end == content.len() {
             break;
         }
@@ -347,6 +353,25 @@ mod tests {
             assert!(pair[1].span_start <= pair[0].span_end);
             assert!(pair[1].span_end > pair[0].span_end);
         }
+    }
+
+    #[test]
+    fn source_windows_skip_redundant_utf8_boundary_windows() {
+        let content = "A0aਵ";
+        let chunks = source_windows(content, 2, 1);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| (c.span_start, c.span_end))
+                .collect::<Vec<_>>(),
+            vec![(0, 2), (1, 3), (3, 6)]
+        );
+        assert!(chunks.windows(2).all(|pair| {
+            pair[1].span_start <= pair[0].span_end && pair[1].span_end > pair[0].span_end
+        }));
+        assert_eq!(&content[chunks[0].span_start..chunks[0].span_end], "A0");
+        assert_eq!(&content[chunks[1].span_start..chunks[1].span_end], "0a");
+        assert_eq!(&content[chunks[2].span_start..chunks[2].span_end], "ਵ");
     }
 
     proptest::proptest! {

@@ -59,7 +59,7 @@ pub fn require_local_embedder(brain: Brain) -> anyhow::Result<Brain> {
     match open_embedder() {
         Some(emb) => Ok(brain.with_embedder(Arc::new(emb))),
         None => Err(anyhow::anyhow!(
-            "no embedding model pulled — run: oxibrain model pull"
+            "no embedding model pulled — run: oxibrain admin model pull"
         )),
     }
 }

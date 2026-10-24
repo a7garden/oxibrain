@@ -39,7 +39,7 @@ pub async fn run(
 
     // ADR-005: init stays offline; say so instead of surprising the user later.
     println!(
-        "model weights pull automatically on first extract — pre-fetch with `oxibrain model pull`"
+        "model weights pull automatically on first extract — pre-fetch with `oxibrain admin model pull`"
     );
     Ok(())
 }

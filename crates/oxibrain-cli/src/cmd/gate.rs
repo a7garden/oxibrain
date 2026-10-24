@@ -1,4 +1,4 @@
-//! `oxibrain eval --suite gate` — three-arm comparison runner
+//! `oxibrain admin eval --suite gate` — three-arm comparison runner
 //! (ARCHITECTURE.md §17.2).
 //!
 //! Loads `eval/golden/` (manifest + episodes + questions), ingests the
@@ -672,7 +672,7 @@ async fn experiential_arm(
     ))
 }
 
-/// `oxibrain eval --suite experiential` — the §13.2 exit comparison (M10):
+/// `oxibrain admin eval --suite experiential` — the §13.2 exit comparison (M10):
 /// summary-only vs sources-only vs hybrid recall, against a no-memory
 /// baseline. Runs the REAL pipeline deterministically: trajectories are
 /// ingested through the M11 path, extraction and runbook consolidation run

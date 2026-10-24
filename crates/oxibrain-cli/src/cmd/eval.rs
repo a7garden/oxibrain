@@ -1,4 +1,4 @@
-//! `oxibrain eval` — extraction evaluation suite (DESIGN §14.2).
+//! `oxibrain admin eval` — extraction evaluation suite (DESIGN §14.2).
 //!
 //! `fast` replays fixture responses through FakeLlmPort — no network, deterministic.
 //! `full` requires a live provider (nightly only).
