@@ -34,6 +34,31 @@ fn unit(n: usize, text: String, layer: LayerKind) -> EvidenceUnit {
         "untrusted_observation",
     )
 }
+
+fn source_coordinate(start: usize, end: usize) -> SourceCoordinate {
+    SourceCoordinate {
+        reference: "episode://overlap".into(),
+        revision: "r1".into(),
+        view: "episode-utf8/1".into(),
+        view_digest: None,
+        decoder: None,
+        start,
+        end,
+        document_uuid: None,
+    }
+}
+
+fn source_window(full_text: &str, source: SourceCoordinate, role: &str) -> EvidenceUnit {
+    EvidenceUnit::new(
+        LayerKind::RecentEpisodes,
+        full_text
+            .get(source.start..source.end)
+            .expect("window must be a UTF-8 range")
+            .to_string(),
+        source,
+        role,
+    )
+}
 #[test]
 fn rendered_support_and_utf8_citation_bytes_remain_stable() {
     let mut u = unit(1, "근거".into(), LayerKind::RecentEpisodes);
@@ -71,6 +96,139 @@ fn sourceless_summary_is_not_published() {
     assert!(r.context.layers.is_empty());
     assert_eq!(r.decisions[0].reason, "missing_support");
 }
+
+#[test]
+fn partial_source_overlap_keeps_unique_tail_and_its_condition() {
+    let marker = "required condition at byte 3000";
+    let mut bytes = vec![b'x'; 3840];
+    bytes[3000..3000 + marker.len()].copy_from_slice(marker.as_bytes());
+    let full_text = String::from_utf8(bytes).expect("ASCII source fixture");
+    let units = vec![
+        source_window(
+            &full_text,
+            source_coordinate(0, 2048),
+            "untrusted_observation",
+        ),
+        source_window(
+            &full_text,
+            source_coordinate(1792, 3840),
+            "untrusted_observation",
+        ),
+    ];
+
+    let result = pack_evidence(&units, 6000, &Framed);
+
+    assert_eq!(result.evidence.len(), 2);
+    assert_eq!(
+        result
+            .decisions
+            .iter()
+            .map(|decision| decision.reason.as_str())
+            .collect::<Vec<_>>(),
+        vec!["selected", "selected"]
+    );
+    let tail = &result.evidence[1];
+    assert_eq!((tail.source.start, tail.source.end), (1792, 3840));
+    let rendered = &result.context.layers[tail.layer_index].text;
+    let tail_text = &rendered[tail.rendered_text_start..tail.rendered_text_end];
+    assert_eq!(tail_text, &full_text[1792..3840]);
+    assert!(tail_text.contains(marker));
+}
+
+#[test]
+fn nested_and_full_duplicate_source_ranges_remain_deduplicated() {
+    let full_text = "x".repeat(3000);
+    let units = vec![
+        source_window(
+            &full_text,
+            source_coordinate(0, 3000),
+            "untrusted_observation",
+        ),
+        source_window(
+            &full_text,
+            source_coordinate(500, 1000),
+            "untrusted_observation",
+        ),
+        // A different role gives the equal interval a distinct unit ID, so this
+        // verifies source-range suppression rather than ID suppression.
+        source_window(&full_text, source_coordinate(0, 3000), "quoted_excerpt"),
+    ];
+
+    let result = pack_evidence(&units, 8000, &Framed);
+
+    assert_eq!(result.evidence.len(), 1);
+    assert_eq!(result.decisions[0].reason, "selected");
+    assert_eq!(result.decisions[1].reason, "duplicate_source_range");
+    assert_eq!(result.decisions[2].reason, "duplicate_source_range");
+}
+
+#[test]
+fn source_superset_is_retained_after_a_nested_range() {
+    let full_text = "x".repeat(1500);
+    let units = vec![
+        source_window(
+            &full_text,
+            source_coordinate(500, 1000),
+            "untrusted_observation",
+        ),
+        source_window(
+            &full_text,
+            source_coordinate(0, 1500),
+            "untrusted_observation",
+        ),
+    ];
+
+    let result = pack_evidence(&units, 5000, &Framed);
+
+    assert_eq!(result.evidence.len(), 2);
+    assert_eq!(result.decisions[0].reason, "selected");
+    assert_eq!(result.decisions[1].reason, "selected");
+    assert_eq!(
+        (
+            result.evidence[1].source.start,
+            result.evidence[1].source.end
+        ),
+        (0, 1500)
+    );
+}
+
+#[test]
+fn distinct_source_revisions_views_and_digests_are_not_deduplicated() {
+    let full_text = "x".repeat(1000);
+    let base = source_coordinate(0, 1000);
+    let mut distinct = Vec::new();
+
+    let mut changed = base.clone();
+    changed.revision = "r2".into();
+    distinct.push(changed);
+    let mut changed = base.clone();
+    changed.view = "episode-utf8/2".into();
+    distinct.push(changed);
+    let mut changed = base.clone();
+    changed.view_digest = Some("digest-v2".into());
+    distinct.push(changed);
+    let mut changed = base.clone();
+    changed.decoder = Some("decoder-v2".into());
+    distinct.push(changed);
+    let mut changed = base;
+    changed.document_uuid = Some("document-v2".into());
+    distinct.push(changed);
+
+    for other_source in distinct {
+        let units = vec![
+            source_window(
+                &full_text,
+                source_coordinate(0, 1000),
+                "untrusted_observation",
+            ),
+            source_window(&full_text, other_source, "untrusted_observation"),
+        ];
+        let result = pack_evidence(&units, 5000, &Framed);
+        assert_eq!(result.evidence.len(), 2);
+        assert_eq!(result.decisions[1].reason, "selected");
+    }
+}
+
 proptest! {
     #[test]
     fn budget_conservation_coordinates_and_determinism(texts in prop::collection::vec(".{0,120}",0..20),budget in 0usize..4000) {

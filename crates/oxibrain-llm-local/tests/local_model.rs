@@ -3,12 +3,16 @@
 //! Ignored by default — requires a model at `~/.oxi/brain/models/`. Run with:
 //!   cargo test -p oxibrain-llm-local --test local_model -- --ignored
 //! The Qwen2.5-1.5B-Instruct-Q4_K_M model validates generation + tokenizer.
+//! Set `OXIBRAIN_LLM_TEST_MODEL` to use an explicit local GGUF artifact instead.
 
 use oxibrain_llm_local::{LocalLlm, LocalLlmOptions};
-use oxibrain_ports::{LlmPort, LlmRequest, TokenizerPort};
+use oxibrain_ports::{BrainError, LlmPort, LlmRequest, TokenizerPort};
 use std::path::PathBuf;
 
 fn model_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("OXIBRAIN_LLM_TEST_MODEL") {
+        return PathBuf::from(path);
+    }
     let mut p = home_dir();
     p.push(".oxi/brain/models/qwen2.5-1.5b-instruct-q4_k_m.gguf");
     p
@@ -84,6 +88,34 @@ fn model_generates_with_and_without_grammar() {
         resp.text.trim_start().starts_with('{'),
         "grammar-constrained output should start with '{{', got: {}",
         resp.text.chars().take(30).collect::<String>()
+    );
+}
+
+#[test]
+#[ignore = "requires GGUF model download; validates over-context input preflight"]
+fn overlong_prompt_returns_typed_error_before_native_decode() {
+    let path = model_path();
+    assert!(path.exists(), "model not found at {path:?}");
+    let llm = LocalLlm::open(
+        &path,
+        LocalLlmOptions {
+            n_ctx: 32,
+            ..LocalLlmOptions::default()
+        },
+    )
+    .expect("open model with small context cap");
+
+    let req = LlmRequest {
+        model: llm.model_id().to_string(),
+        system: None,
+        prompt: "long input ".repeat(256),
+        json_schema: None,
+        max_tokens: 8,
+    };
+    let err = tokio_test_block_on(llm.complete(req)).expect_err("prompt exceeds context cap");
+    assert!(
+        matches!(&err, BrainError::Invalid(_)),
+        "unexpected error: {err}"
     );
 }
 

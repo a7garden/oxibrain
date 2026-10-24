@@ -1,5 +1,12 @@
 # oxibrain — Architecture
-> **Version:** v2.27 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.28 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.28 — Source granularity and family fusion.** Raw sources prefer complete
+> paragraph/line boundaries with UTF-8 windows for oversized lines. Schema 17
+> discards only derived raw chunks, indexes, vectors and cursors so explicit
+> indexing rebuilds them from the unchanged ledger under `source-paragraph-window/2`.
+> Lexical expansion votes within one retrieval family before equal-family fusion
+> with dense candidates; query length cannot multiply lexical family weight.
+> Evidence packing drops fully contained ranges only, preserving partial overlaps.
 > **v2.27 — Recall delivery and release readiness.** Signed int8 distance
 > remains in the integer domain; lexical candidates include bounded query
 > components in both indexes. Selected heading/body hits expand to their complete

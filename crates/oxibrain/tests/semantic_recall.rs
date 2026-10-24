@@ -4,7 +4,7 @@ use oxibrain::{
 };
 use oxibrain_core::context::render_context;
 use oxibrain_core::retrieval::SearchPlane;
-use oxibrain_ports::{EmbeddingPort, FakeClock};
+use oxibrain_ports::{CharTokenizer, EmbeddingPort, FakeClock};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -183,6 +183,98 @@ async fn indexed_documents_and_old_sessions_have_independent_dense_paths_and_fal
             .iter()
             .any(|c| c.plane == "memory_sources" && c.indexed == Some(0))
     );
+}
+
+#[tokio::test]
+async fn raw_source_query_terms_deduplicate_and_channel_caps_are_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(FakeClock::new(Timestamp(100)));
+    let brain = Brain::with_clock(BrainConfig::at(dir.path()), clock)
+        .await
+        .unwrap()
+        .with_tokenizer(Arc::new(CharTokenizer))
+        .with_read_policy(oxibrain::ReadPolicy {
+            channel_depth: 1,
+            query_terms: 2,
+            semantic_sources: false,
+            ..Default::default()
+        })
+        .unwrap();
+    let space = brain.ensure_space("fixture").await.unwrap();
+    brain
+        .record_session(
+            &space,
+            "needle-source",
+            "Needle marker from first source".into(),
+            Timestamp(10),
+        )
+        .await
+        .unwrap();
+    brain
+        .record_session(
+            &space,
+            "tail-source",
+            "Tail marker from second source".into(),
+            Timestamp(20),
+        )
+        .await
+        .unwrap();
+
+    let query = format!("{}tail", "Needle needle ".repeat(32));
+    let response = brain
+        .recall_with_request(request(&space, &query, SearchPlane::Memory))
+        .await
+        .unwrap();
+    let rendered = render_context(&response.data.context);
+    assert!(rendered.contains("Needle marker from first source"));
+    assert!(rendered.contains("Tail marker from second source"));
+
+    for name in ["word", "ngram"] {
+        let receipt = response
+            .meta
+            .channels
+            .iter()
+            .find(|channel| channel.plane == "memory_sources" && channel.channel == name)
+            .unwrap();
+        assert_eq!(
+            receipt.algorithm_version.as_deref(),
+            Some("raw-source-terms/1")
+        );
+        assert_eq!(receipt.query_limit, Some(2));
+        assert_eq!(receipt.plan_candidates_examined, 2);
+        assert_eq!(receipt.plan_candidates_selected, 2);
+        assert_eq!(receipt.queries_run, 2);
+        assert_eq!(receipt.considered, 2);
+        assert!(receipt.limit_reached);
+        assert!(!receipt.capped);
+        assert!(receipt.partial());
+    }
+    assert_eq!(response.meta.execution["partial"], true);
+
+    let capped = brain
+        .clone()
+        .with_read_policy(oxibrain::ReadPolicy {
+            channel_depth: 64,
+            query_terms: 1,
+            semantic_sources: false,
+            ..Default::default()
+        })
+        .unwrap()
+        .recall_with_request(request(&space, "Needle tail", SearchPlane::Memory))
+        .await
+        .unwrap();
+    let receipt = capped
+        .meta
+        .channels
+        .iter()
+        .find(|channel| channel.plane == "memory_sources" && channel.channel == "word")
+        .unwrap();
+    assert_eq!(receipt.plan_candidates_examined, 2);
+    assert_eq!(receipt.plan_candidates_selected, 1);
+    assert_eq!(receipt.queries_run, 1);
+    assert!(receipt.capped);
+    assert!(!receipt.limit_reached);
+    assert_eq!(capped.meta.execution["partial"], true);
 }
 
 #[tokio::test]

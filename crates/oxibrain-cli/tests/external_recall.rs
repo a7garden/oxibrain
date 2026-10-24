@@ -23,14 +23,45 @@ const SCHEMA: &str = "oxibrain-external-memory-qa/1";
 const DATASET_REVISION: &str = "98d7416c24c778c2fee6e6f3006e7a073259d48f";
 const UPSTREAM_DATA_SHA256: &str =
     "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442";
-const INPUT_SHA256: &str = "3d098e4e4aa0f0c2a9a6f279921b23d25ab7c81d94432e57983975a69a0d06ca";
-const GOLD_SHA256: &str = "a2e0f50dd2cc530454b24155d8da0701d54d4c15880400d1147f1268c1dfcf49";
-const MANIFEST_SHA256: &str = "f489c4b5a3b7c4088cfbccbe8cb11181ec1a485babe0c115d5a46cc2e35b670d";
-const FREEZER_SHA256: &str = "9c88e7b4de701ec2e9fbb05d04289311edf0df788de018ac8b852a5660a92cac";
 const LICENSE_SHA256: &str = "d3c4b9aa54759df6ded337978a6f3b55b75615e5e4525c3b82d7e2627d4b9732";
-const EXPECTED_CASES: usize = 20;
-const EXPECTED_SESSIONS: usize = 943;
 const BUDGETS: [usize; 2] = [2_000, 3_000];
+
+#[derive(Debug, Clone, Copy)]
+struct DatasetProfile {
+    name: &'static str,
+    input_sha256: &'static str,
+    gold_sha256: &'static str,
+    manifest_sha256: &'static str,
+    freezer_sha256: &'static str,
+    cases: usize,
+    full_history_sessions: usize,
+    manifest_input_path: &'static str,
+    manifest_gold_path: &'static str,
+}
+
+const V1_PROFILE: DatasetProfile = DatasetProfile {
+    name: "v1",
+    input_sha256: "3d098e4e4aa0f0c2a9a6f279921b23d25ab7c81d94432e57975a69a0d06ca",
+    gold_sha256: "a2e0f50dd2cc530454b24155d8da0701d54d4c15880400d1147f1268c1dfcf49",
+    manifest_sha256: "f489c4b5a3b7c4088cfbccbe8cb11181ec1a485babe0c115d5a46cc2e35b670d",
+    freezer_sha256: "9c88e7b4de701ec2e9fbb05d04289311edf0df788de018ac8b852a5660a92cac",
+    cases: 20,
+    full_history_sessions: 943,
+    manifest_input_path: "input.jsonl",
+    manifest_gold_path: "gold.jsonl",
+};
+
+const V2_PROFILE: DatasetProfile = DatasetProfile {
+    name: "v2",
+    input_sha256: "2ed7811b885afaaf04752248c8e3a9a7a4823f6eefb971ab67ab37cc085345a3",
+    gold_sha256: "d4fac57d5b98ab672e05e5ebfbf789e110e4cc480ce031135463fb7160c124d3",
+    manifest_sha256: "b0b3b18296fe78f3f1774d32c4a2c240aa63f642a54e76582e1d1c6d9bc5285f",
+    freezer_sha256: "fdc7d4351fbf09e73564c14c6804a5564746711f4ac259f629cefc93a7d6fd0c",
+    cases: 20,
+    full_history_sessions: 980,
+    manifest_input_path: "/tmp/oxibrain-longmemeval-s-public-v2/input.jsonl",
+    manifest_gold_path: "/tmp/oxibrain-longmemeval-s-public-v2/gold.jsonl",
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -107,6 +138,7 @@ struct ReleaseReport {
 #[derive(Debug, Serialize)]
 struct DatasetReport {
     dataset: &'static str,
+    profile: &'static str,
     upstream_revision: &'static str,
     upstream_file_sha256: &'static str,
     manifest_sha256: String,
@@ -263,6 +295,11 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
         std::env::var("OXIBRAIN_RUN_LONGMEMEVAL").ok().as_deref() == Some("1"),
         "set OXIBRAIN_RUN_LONGMEMEVAL=1 to opt into the external release run"
     );
+    let profile_choice = std::env::var_os("OXIBRAIN_LONGMEMEVAL_SUBSET")
+        .map(|value| value.into_string())
+        .transpose()
+        .map_err(|_| anyhow::anyhow!("OXIBRAIN_LONGMEMEVAL_SUBSET must be valid UTF-8"))?;
+    let profile = dataset_profile(profile_choice.as_deref())?;
     let dataset_dir = required_path("OXIBRAIN_LONGMEMEVAL_DIR")?;
     let tokenizer_path = required_path("OXIBRAIN_TOKENIZER_JSON")?;
     let embed_model_path = required_path("OXIBRAIN_EMBED_MODEL")?;
@@ -278,22 +315,22 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
 
     let manifest_bytes = std::fs::read(dataset_dir.join("manifest.json"))
         .context("read external dataset manifest")?;
-    ensure_eq_digest(&manifest_bytes, MANIFEST_SHA256, "manifest.json")?;
+    ensure_eq_digest(&manifest_bytes, profile.manifest_sha256, "manifest.json")?;
     let manifest: Value = serde_json::from_slice(&manifest_bytes)?;
-    validate_manifest(&manifest)?;
+    validate_manifest(&manifest, profile)?;
     let input_bytes =
         std::fs::read(dataset_dir.join("input.jsonl")).context("read external input corpus")?;
-    ensure_eq_digest(&input_bytes, INPUT_SHA256, "input.jsonl")?;
+    ensure_eq_digest(&input_bytes, profile.input_sha256, "input.jsonl")?;
     let freezer_bytes = std::fs::read(dataset_dir.join("freeze_subset.py"))
         .context("read external subset freezer")?;
-    ensure_eq_digest(&freezer_bytes, FREEZER_SHA256, "freeze_subset.py")?;
+    ensure_eq_digest(&freezer_bytes, profile.freezer_sha256, "freeze_subset.py")?;
     let license_bytes =
         std::fs::read(dataset_dir.join("LICENSE.txt")).context("read upstream license")?;
     ensure_eq_digest(&license_bytes, LICENSE_SHA256, "LICENSE.txt")?;
 
     let input_cases = parse_jsonl::<InputCase>(&input_bytes, "input.jsonl")?;
     ensure!(
-        input_cases.len() == EXPECTED_CASES,
+        input_cases.len() == profile.cases,
         "unexpected input case count"
     );
     let session_count: usize = input_cases
@@ -301,7 +338,7 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
         .map(|case| case.history_sessions.len())
         .sum();
     ensure!(
-        session_count == EXPECTED_SESSIONS,
+        session_count == profile.full_history_sessions,
         "unexpected full-history session count"
     );
     validate_input_cases(&input_cases)?;
@@ -387,10 +424,10 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
     // Gold is evaluator-only and is loaded after retrieval, never placed in a prompt or store.
     let gold_bytes =
         std::fs::read(dataset_dir.join("gold.jsonl")).context("read evaluator-only gold file")?;
-    ensure_eq_digest(&gold_bytes, GOLD_SHA256, "gold.jsonl")?;
+    ensure_eq_digest(&gold_bytes, profile.gold_sha256, "gold.jsonl")?;
     let gold_cases = parse_jsonl::<GoldCase>(&gold_bytes, "gold.jsonl")?;
     ensure!(
-        gold_cases.len() == EXPECTED_CASES,
+        gold_cases.len() == profile.cases,
         "unexpected gold case count"
     );
     let gold_by_id: BTreeMap<_, _> = gold_cases
@@ -419,6 +456,7 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
         status: "complete",
         dataset: DatasetReport {
             dataset: "LongMemEval cleaned LongMemEval_S",
+            profile: profile.name,
             upstream_revision: DATASET_REVISION,
             upstream_file_sha256: UPSTREAM_DATA_SHA256,
             manifest_sha256: sha256_hex(&manifest_bytes),
@@ -426,8 +464,8 @@ async fn run_release_benchmark() -> anyhow::Result<()> {
             gold_sha256: sha256_hex(&gold_bytes),
             license: "MIT",
             license_sha256: sha256_hex(&license_bytes),
-            cases: EXPECTED_CASES,
-            full_history_sessions: EXPECTED_SESSIONS,
+            cases: profile.cases,
+            full_history_sessions: profile.full_history_sessions,
             source_rows_scanned: manifest["source_rows_scanned"]
                 .as_u64()
                 .context("manifest source_rows_scanned missing")?
@@ -1067,7 +1105,17 @@ fn aggregate_by_budget(cases: &[CaseReport]) -> BTreeMap<usize, BudgetAggregate>
         .collect()
 }
 
-fn validate_manifest(manifest: &Value) -> anyhow::Result<()> {
+fn dataset_profile(choice: Option<&str>) -> anyhow::Result<&'static DatasetProfile> {
+    match choice.unwrap_or("v1") {
+        "v1" => Ok(&V1_PROFILE),
+        "v2" => Ok(&V2_PROFILE),
+        other => {
+            anyhow::bail!("unsupported OXIBRAIN_LONGMEMEVAL_SUBSET {other:?}; choose v1 or v2")
+        }
+    }
+}
+
+fn validate_manifest(manifest: &Value, profile: &DatasetProfile) -> anyhow::Result<()> {
     ensure!(manifest["schema"] == SCHEMA, "unexpected dataset schema");
     ensure!(
         manifest["revision"] == DATASET_REVISION,
@@ -1078,19 +1126,19 @@ fn validate_manifest(manifest: &Value) -> anyhow::Result<()> {
         "unexpected upstream corpus hash"
     );
     ensure!(
-        manifest["selected_count"] == EXPECTED_CASES,
+        manifest["selected_count"] == profile.cases,
         "unexpected selected case count"
     );
     ensure!(
-        manifest["input"]["sha256"] == INPUT_SHA256,
+        manifest["input"]["sha256"] == profile.input_sha256,
         "manifest input hash mismatch"
     );
     ensure!(
-        manifest["gold"]["sha256"] == GOLD_SHA256,
+        manifest["gold"]["sha256"] == profile.gold_sha256,
         "manifest gold hash mismatch"
     );
     ensure!(
-        manifest["preparation_script"]["sha256"] == FREEZER_SHA256,
+        manifest["preparation_script"]["sha256"] == profile.freezer_sha256,
         "manifest preparation script hash mismatch"
     );
     ensure!(
@@ -1098,12 +1146,16 @@ fn validate_manifest(manifest: &Value) -> anyhow::Result<()> {
         "manifest license hash mismatch"
     );
     ensure!(
-        manifest["input"]["path"] == "input.jsonl",
+        manifest["input"]["path"] == profile.manifest_input_path,
         "unexpected input filename"
     );
     ensure!(
-        manifest["gold"]["path"] == "gold.jsonl",
+        manifest["gold"]["path"] == profile.manifest_gold_path,
         "unexpected gold filename"
+    );
+    ensure!(
+        manifest["input"]["rows"] == profile.cases && manifest["gold"]["rows"] == profile.cases,
+        "unexpected manifest row count"
     );
     ensure!(
         manifest["source_rows_scanned"] == 500,
@@ -1162,6 +1214,57 @@ fn check_optional_pin(name: &str, actual: &str) -> anyhow::Result<()> {
 
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1_000.0
+}
+
+fn manifest_fixture(profile: &DatasetProfile) -> Value {
+    serde_json::json!({
+        "schema": SCHEMA,
+        "revision": DATASET_REVISION,
+        "upstream_file_sha256": UPSTREAM_DATA_SHA256,
+        "selected_count": profile.cases,
+        "input": {
+            "sha256": profile.input_sha256,
+            "path": profile.manifest_input_path,
+            "rows": profile.cases,
+        },
+        "gold": {
+            "sha256": profile.gold_sha256,
+            "path": profile.manifest_gold_path,
+            "rows": profile.cases,
+        },
+        "preparation_script": { "sha256": profile.freezer_sha256 },
+        "license_sha256": LICENSE_SHA256,
+        "source_rows_scanned": 500,
+    })
+}
+
+#[test]
+fn dataset_profiles_default_to_v1_and_keep_distinct_pins() {
+    let default = dataset_profile(None).expect("default profile");
+    let explicit_v1 = dataset_profile(Some("v1")).expect("v1 profile");
+    let v2 = dataset_profile(Some("v2")).expect("v2 profile");
+
+    assert_eq!(default.name, "v1");
+    assert_eq!(explicit_v1.name, "v1");
+    assert_eq!(v2.name, "v2");
+    assert_eq!(default.cases, 20);
+    assert_eq!(default.full_history_sessions, 943);
+    assert_eq!(v2.cases, 20);
+    assert_eq!(v2.full_history_sessions, 980);
+    assert_ne!(default.input_sha256, v2.input_sha256);
+    assert_ne!(default.gold_sha256, v2.gold_sha256);
+    assert_ne!(default.manifest_sha256, v2.manifest_sha256);
+    assert!(dataset_profile(Some("v3")).is_err());
+}
+
+#[test]
+fn each_profile_accepts_only_its_manifest_paths_and_pins() {
+    let v1 = manifest_fixture(&V1_PROFILE);
+    let v2 = manifest_fixture(&V2_PROFILE);
+    validate_manifest(&v1, &V1_PROFILE).expect("v1 manifest fixture validates");
+    validate_manifest(&v2, &V2_PROFILE).expect("v2 manifest fixture validates");
+    assert!(validate_manifest(&v1, &V2_PROFILE).is_err());
+    assert!(validate_manifest(&v2, &V1_PROFILE).is_err());
 }
 
 #[test]

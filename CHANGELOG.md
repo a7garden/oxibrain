@@ -26,11 +26,15 @@ squash-merged.
 - Preserve signed int8 components in document/entity KNN distance instead of rounding most components to zero or comparing negative bytes as unsigned.
 - Expand bounded natural-question components through both lexical channels; preserve complete peer conditions, global retrieval order and stable FTS ties.
 - Preflight complete encoder sequences against configured/model context limits and size physical batches before native decode, preventing a process abort on inputs above the default micro-batch size.
+- Preserve partially overlapping source windows and their unique conditions; deduplicate query terms before caps and report channel limits as partial coverage.
+- Balance lexical and dense source rankings as two families so query expansion does not multiply one family's voting power.
+- Prefer complete paragraph/line boundaries in raw-source chunks; schema 17 invalidates old disposable source chunks, vectors and index cursors for a ledger-based rebuild.
+- Deliver reference-reader evidence as explicit JSON fields and report typed, exact-quotation/action validation failures.
 - Stage new release assets in a draft, verify checksum/archive contents/ARM64 architecture/version after download, and reject replacement of published assets.
 
 ### Compatibility
 
-- Memory stores migrate to schema 16; older binaries cannot reopen an upgraded store. Document formats and the sixteen-tool MCP surface are unchanged.
+- Memory stores migrate to schema 17; older binaries cannot reopen an upgraded store. Document formats and the sixteen-tool MCP surface are unchanged.
 - Read policy version 3 adds optional semantic-source, scan/group and compact-render settings; existing serialized policy fields retain their defaults.
 
 ### Changed

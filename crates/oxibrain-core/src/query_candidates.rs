@@ -8,8 +8,74 @@ const MAX_TERMS: usize = 8;
 const MAX_TERM_CHARS: usize = 64;
 const MAX_TRIGRAMS: usize = 12;
 const MAX_PLAN_CHARS: usize = 4096;
+const MAX_RAW_SOURCE_QUERY_CHARS: usize = 4096;
 
 pub const LEXICAL_QUERY_PLAN_VERSION: &str = "lexical-query-plan/1";
+pub const RAW_SOURCE_TERM_PLAN_VERSION: &str = "raw-source-terms/1";
+
+/// Stable, language-neutral word-boundary candidates for the raw-source plane.
+/// Deduplication happens before the configured query limit so repeated words
+/// cannot consume the allowance reserved for later distinct terms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawSourceTermPlan {
+    /// First original spelling of each selected case-insensitive term.
+    pub terms: Vec<String>,
+    /// Distinct case-folded terms examined in the bounded query prefix.
+    pub terms_examined: usize,
+    /// Selected terms issued to each raw-source lexical index.
+    pub terms_selected: usize,
+    /// Configured distinct-term bound for this query plan.
+    pub query_limit: usize,
+    /// True when the input character bound or distinct-term bound omitted terms.
+    pub capped: bool,
+}
+
+impl RawSourceTermPlan {
+    pub fn new(query: &str, query_limit: usize) -> Self {
+        let mut prefix: Vec<char> = query.chars().take(MAX_RAW_SOURCE_QUERY_CHARS + 1).collect();
+        let input_capped = prefix.len() > MAX_RAW_SOURCE_QUERY_CHARS;
+        let continues_partial_term = input_capped
+            && prefix
+                .get(MAX_RAW_SOURCE_QUERY_CHARS)
+                .is_some_and(|next| !next.is_whitespace());
+        prefix.truncate(MAX_RAW_SOURCE_QUERY_CHARS);
+        let mut bounded_query: String = prefix.iter().copied().collect();
+        if continues_partial_term {
+            let complete_prefix_end = bounded_query
+                .char_indices()
+                .filter_map(|(start, ch)| ch.is_whitespace().then_some(start + ch.len_utf8()))
+                .last()
+                .unwrap_or(0);
+            bounded_query.truncate(complete_prefix_end);
+        }
+
+        let mut terms = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut terms_examined = 0;
+        let mut capped = input_capped;
+        for term in bounded_query.split_whitespace() {
+            let key: String = term.chars().flat_map(char::to_lowercase).collect();
+            if !seen.insert(key) {
+                continue;
+            }
+            terms_examined += 1;
+            if terms.len() < query_limit {
+                terms.push(term.to_owned());
+            } else {
+                capped = true;
+            }
+        }
+
+        let terms_selected = terms.len();
+        Self {
+            terms,
+            terms_examined,
+            terms_selected,
+            query_limit,
+            capped,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexicalQueryPlan {
@@ -341,6 +407,31 @@ mod tests {
         assert_eq!(dropped, vec!["decoy".to_owned()]);
     }
 
+    #[test]
+    fn raw_source_terms_deduplicate_before_limit_and_preserve_first_spelling() {
+        let plan = RawSourceTermPlan::new("Restore restore ROUTE route UNIQUE", 2);
+        assert_eq!(plan.terms, vec!["Restore", "ROUTE"]);
+        assert_eq!(plan.terms_examined, 3);
+        assert_eq!(plan.terms_selected, 2);
+        assert_eq!(plan.query_limit, 2);
+        assert!(plan.capped);
+
+        let repeated = RawSourceTermPlan::new(&format!("{}ZXQ-81", "restore ".repeat(32)), 2);
+        assert_eq!(repeated.terms, vec!["restore", "ZXQ-81"]);
+        assert_eq!(repeated.terms_examined, 2);
+        assert!(!repeated.capped);
+    }
+
+    #[test]
+    fn raw_source_term_plan_caps_input_without_searching_a_partial_term() {
+        let query = format!("{}tail other", "x".repeat(MAX_RAW_SOURCE_QUERY_CHARS));
+        let plan = RawSourceTermPlan::new(&query, 4);
+        assert!(plan.terms.is_empty());
+        assert_eq!(plan.terms_examined, 0);
+        assert_eq!(plan.terms_selected, 0);
+        assert!(plan.capped);
+    }
+
     proptest! {
         #[test]
         fn keeps_all_distinct_trigrams_when_the_plan_is_under_its_limit(
@@ -363,6 +454,36 @@ mod tests {
                 expected,
             );
             prop_assert!(!plan.trigrams_capped);
+        }
+
+        #[test]
+        fn raw_source_term_limit_counts_stable_casefolded_distinct_terms(
+            symbols in prop::collection::vec(0u8..8, 1..96),
+            limit in 1usize..9,
+        ) {
+            let spellings = ["Alpha", "BETA", "gamma", "Delta", "epsilon", "ZETA", "eta", "Theta"];
+            let tokens: Vec<String> = symbols
+                .iter()
+                .enumerate()
+                .map(|(index, symbol)| {
+                    let word = spellings[usize::from(*symbol)];
+                    if index % 2 == 0 { word.to_lowercase() } else { word.to_owned() }
+                })
+                .collect();
+            let query = tokens.join(" ");
+            let mut expected = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for token in &tokens {
+                let key: String = token.chars().flat_map(char::to_lowercase).collect();
+                if seen.insert(key) {
+                    expected.push(token.clone());
+                }
+            }
+            let plan = RawSourceTermPlan::new(&query, limit);
+            prop_assert_eq!(plan.terms_examined, expected.len());
+            prop_assert_eq!(plan.terms_selected, limit.min(expected.len()));
+            prop_assert_eq!(plan.terms, expected.iter().take(limit).cloned().collect::<Vec<_>>());
+            prop_assert_eq!(plan.capped, expected.len() > limit);
         }
     }
 }

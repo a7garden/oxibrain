@@ -21,14 +21,14 @@ use llama_cpp_2::model::LlamaModel;
 pub struct LocalLlmOptions {
     /// GPU layer offload. `0` = CPU only (portability floor). Default: all layers.
     pub n_gpu_layers: u32,
-    /// Context size in tokens. Default: 16384 — the extraction prompt plus a
-    /// max_tokens=8192 response must both fit or llama.cpp truncates silently.
+    /// Maximum context size in tokens. The model's training context is also
+    /// enforced for each request. Default: 16384.
     pub n_ctx: u32,
     pub n_threads: i32,
-    /// Repetition penalty applied in the sampler chain. Default: 1.1. Reduces
+    /// Repetition penalty applied in the sampler chain. Default: 1.3. Reduces
     /// grammar-constrained greedy rambling on small local models.
     pub repetition_penalty: f32,
-    /// Sampling temperature. Default: 0.2. Breaks the loops that pure
+    /// Sampling temperature. Default: 0.4. Breaks the loops that pure
     /// greedy produces under a permissive GBNF grammar.
     pub temperature: f32,
 }
@@ -65,9 +65,11 @@ impl std::fmt::Debug for LocalLlm {
 }
 
 impl LocalLlm {
-    /// Load a GGUF model from `path`. Returns `BrainError::Model` on missing
-    /// or corrupt weights — never panics.
+    /// Load a GGUF model from `path`. Returns `BrainError::Invalid` for an
+    /// invalid context size and `BrainError::Model` on missing or corrupt
+    /// weights — never panics.
     pub fn open(path: &Path, opts: LocalLlmOptions) -> Result<Self, BrainError> {
+        validate_context_option(opts.n_ctx)?;
         let backend = llama_backend()?;
         let params = llama_cpp_2::model::params::LlamaModelParams::default()
             .with_n_gpu_layers(opts.n_gpu_layers);
@@ -273,8 +275,6 @@ fn generate_blocking(
     use llama_cpp_2::model::AddBos;
     use llama_cpp_2::sampling::LlamaSampler;
 
-    let backend = llama_backend()?;
-
     // Build the chat-formatted prompt. Qwen-style delimiters work for most
     // modern instruct models (Qwen, Llama 3, Mistral).
     let prompt = match &req.system {
@@ -290,28 +290,37 @@ fn generate_blocking(
         ),
     };
 
+    // Tokenize and validate the complete prompt before creating a context or
+    // asking llama.cpp to decode it. No truncation is allowed here: it would
+    // silently change the user's input and can split structured evidence.
+    let tokens = model
+        .str_to_token(&prompt, AddBos::Never)
+        .map_err(|e| BrainError::Model(format!("tokenization: {e}")))?;
+    let plan = plan_generation(
+        opts.n_ctx,
+        model.n_ctx_train(),
+        tokens.len(),
+        req.max_tokens,
+    )?;
+
+    let backend = llama_backend()?;
     let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(opts.n_ctx).expect("n_ctx > 0")))
-        // The whole prompt is decoded in one batch; llama.cpp asserts
-        // (aborts the process) when a decode exceeds the default n_batch
-        // of 2048 tokens — long non-ASCII notes tokenize past it easily.
-        .with_n_batch(opts.n_ctx)
+        .with_n_ctx(Some(
+            NonZeroU32::new(plan.context_tokens).expect("validated positive context"),
+        ))
+        // Decode the entire prompt as one batch. Set n_batch to the actual
+        // token count so a long prompt cannot exceed llama.cpp's batch limit.
+        .with_n_batch(plan.prompt_tokens as u32)
         .with_n_threads(opts.n_threads);
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| BrainError::Model(format!("context creation: {e}")))?;
 
-    let tokens = model
-        .str_to_token(&prompt, AddBos::Never)
-        .map_err(|e| BrainError::Model(format!("tokenization: {e}")))?;
-
     // Feed the prompt into a batch. The batch only ever holds the full prompt
     // (generation clears it to one token per step), so capacity follows the
-    // prompt — the old clamp(…, 8192) cap made prompts longer than 8K tokens
-    // impossible to feed at all.
-    let batch_cap = tokens.len().max(1024) + 64;
-    let mut batch = LlamaBatch::new(batch_cap, 1);
-    let last_index = (tokens.len() - 1) as i32;
+    // preflighted prompt length.
+    let mut batch = LlamaBatch::new(tokens.len(), 1);
+    let last_index = plan.prompt_tokens - 1;
     for (i, token) in (0_i32..).zip(tokens.iter().copied()) {
         let is_last = i == last_index;
         batch
@@ -348,8 +357,7 @@ fn generate_blocking(
     // budget below, a long prompt pushes decode past the context and llama.cpp
     // fails the batch silently ("failed to find a memory slot"), truncating
     // the JSON mid-string with no error surfaced.
-    let kv_budget = (opts.n_ctx as i32 - batch.n_tokens() - 8).max(0);
-    let max_out = (req.max_tokens as i32).min(kv_budget);
+    let max_out = plan.max_output_tokens;
     let mut n_cur = batch.n_tokens();
     let mut n_decode = 0;
     let mut decoder = encoding_rs::UTF_8.new_decoder();
@@ -381,4 +389,168 @@ fn generate_blocking(
             "local": true,
         }),
     })
+}
+
+const OUTPUT_CONTEXT_RESERVE: u32 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GenerationPlan {
+    context_tokens: u32,
+    prompt_tokens: i32,
+    max_output_tokens: i32,
+}
+
+fn validate_context_option(n_ctx: u32) -> Result<(), BrainError> {
+    if n_ctx == 0 {
+        return Err(BrainError::Invalid(
+            "local model n_ctx must be greater than zero".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate context and output limits without allocating a native context.
+/// A request's output is capped to the available room, matching the previous
+/// behavior, while an overlong prompt or a context with no output room is an
+/// explicit error rather than a native decode failure or silent empty result.
+fn plan_generation(
+    configured_context: u32,
+    model_context: u32,
+    prompt_tokens: usize,
+    requested_output_tokens: u32,
+) -> Result<GenerationPlan, BrainError> {
+    validate_context_option(configured_context)?;
+
+    if requested_output_tokens > i32::MAX as u32 {
+        return Err(BrainError::Invalid(format!(
+            "requested max_tokens {requested_output_tokens} exceeds the local decoder limit {}",
+            i32::MAX
+        )));
+    }
+
+    let context_tokens = if model_context == 0 {
+        configured_context
+    } else {
+        configured_context.min(model_context)
+    };
+    if context_tokens > i32::MAX as u32 {
+        return Err(BrainError::Invalid(format!(
+            "effective context {context_tokens} exceeds the local decoder position limit {}",
+            i32::MAX
+        )));
+    }
+
+    let prompt_tokens = u32::try_from(prompt_tokens).map_err(|_| {
+        BrainError::Invalid("tokenized prompt exceeds the local decoder limit".into())
+    })?;
+    if prompt_tokens == 0 {
+        return Err(BrainError::Invalid(
+            "tokenized prompt must contain at least one token".into(),
+        ));
+    }
+    let prompt_tokens_i32 = i32::try_from(prompt_tokens).map_err(|_| {
+        BrainError::Invalid("tokenized prompt exceeds the local decoder position limit".into())
+    })?;
+
+    let output_capacity = context_tokens
+        .saturating_sub(prompt_tokens)
+        .saturating_sub(OUTPUT_CONTEXT_RESERVE);
+    if output_capacity == 0 {
+        return Err(BrainError::Invalid(format!(
+            "prompt uses {prompt_tokens} tokens and leaves no output capacity in effective context {context_tokens} (configured {configured_context}, model training limit {model_context}, reserve {OUTPUT_CONTEXT_RESERVE})"
+        )));
+    }
+
+    let max_output_tokens = requested_output_tokens.min(output_capacity);
+    // Both inputs are bounded by i32::MAX above, so the selected output cap
+    // also fits the signed decoder loop counter.
+    let max_output_tokens = i32::try_from(max_output_tokens)
+        .expect("validated requested output and context fit local decoder limit");
+
+    Ok(GenerationPlan {
+        context_tokens,
+        prompt_tokens: prompt_tokens_i32,
+        max_output_tokens,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GenerationPlan, LocalLlm, LocalLlmOptions, plan_generation, validate_context_option,
+    };
+    use oxibrain_ports::BrainError;
+    use std::path::Path;
+
+    #[test]
+    fn generation_plan_uses_model_context_and_caps_requested_output() {
+        let plan = plan_generation(4096, 512, 400, 200).expect("usable capacity");
+
+        assert_eq!(
+            plan,
+            GenerationPlan {
+                context_tokens: 512,
+                prompt_tokens: 400,
+                max_output_tokens: 104,
+            }
+        );
+    }
+
+    #[test]
+    fn generation_plan_keeps_requested_output_when_it_fits() {
+        let plan = plan_generation(512, 1024, 100, 64).expect("usable capacity");
+        assert_eq!(plan.context_tokens, 512);
+        assert_eq!(plan.prompt_tokens, 100);
+        assert_eq!(plan.max_output_tokens, 64);
+    }
+
+    #[test]
+    fn generation_plan_accepts_a_complete_long_prompt_that_fits_context() {
+        let plan = plan_generation(4096, 8192, 3000, 128).expect("long prompt fits");
+        assert_eq!(plan.context_tokens, 4096);
+        assert_eq!(plan.prompt_tokens, 3000);
+        assert_eq!(plan.max_output_tokens, 128);
+    }
+
+    #[test]
+    fn generation_plan_rejects_zero_or_overlong_prompt_before_context_creation() {
+        assert!(matches!(
+            plan_generation(0, 1024, 1, 8),
+            Err(BrainError::Invalid(_))
+        ));
+        assert!(matches!(
+            plan_generation(512, 1024, 0, 8),
+            Err(BrainError::Invalid(_))
+        ));
+        assert!(matches!(
+            plan_generation(512, 256, 257, 8),
+            Err(BrainError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn generation_plan_rejects_missing_output_capacity_and_unsafe_request_size() {
+        assert!(matches!(
+            plan_generation(32, 32, 24, 1),
+            Err(BrainError::Invalid(_))
+        ));
+        assert!(matches!(
+            plan_generation(128, 128, 16, u32::MAX),
+            Err(BrainError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn zero_context_is_rejected_without_loading_a_model() {
+        let err = LocalLlm::open(
+            Path::new("/does/not/exist.gguf"),
+            LocalLlmOptions {
+                n_ctx: 0,
+                ..LocalLlmOptions::default()
+            },
+        )
+        .expect_err("zero context must be rejected before model loading");
+        assert!(matches!(err, BrainError::Invalid(_)));
+        assert!(validate_context_option(0).is_err());
+    }
 }

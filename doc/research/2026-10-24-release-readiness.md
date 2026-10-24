@@ -97,3 +97,64 @@ conditional runtime/tenant guidance, identical text with distinct source identit
 and a capped empty result. It preserved separate sources, asked for missing scope,
 ignored injected source instructions, and did not infer absence from an empty read.
 This verifies those exercised behaviors, not arbitrary consumer compliance.
+
+## First completed external run and further diagnostics
+
+After the native adapter repair, the first default-policy v1 run completed all
+20 cases. At 2,000 tokens it selected an answer session in 11/12 answerable cases;
+at 3,000 tokens in 12/12. All answer sessions were selected in 10/12 at both
+budgets. These are session-level observations, not supporting-turn coverage.
+The returned coordinates covered 5,855/11,229 annotated answer-turn bytes
+(52.14%) at both budgets, below the predefined 90% target. No reader or
+abstention score is inferred from this run. The original report remains in
+`eval/research/longmemeval-s/results/default-repaired.json`; v1 is now a
+development diagnostic because its aggregate result has been examined.
+
+A reviewer found that the generic packer suppressed every partially overlapping
+source window. For example, accepting `0..2048` rejected `1792..3840`, including
+a condition at byte 3000. It now suppresses only fully contained ranges with the
+same complete source identity. Partial overlaps and supersets remain eligible
+and pay their actual rendered token cost. The frozen old packer is retained as
+a baseline. Fifteen evidence-pack tests passed after this repair.
+
+The raw-term planner now deduplicates case-insensitively before applying the
+query-term cap, preserves first spelling, bounds input examination, and reports
+its plan. Channel result limits conservatively mark coverage partial. The new
+planner/property tests and three semantic recall integration tests passed.
+
+A separate review demonstrated a family-count bias: every term generated two
+lexical lists, while the dense full-question result had one vote. Sixteen broad
+lexical lists could overwhelm a narrow dense hit by nearly three to one. The
+next candidate balances lexical and dense rankings as retrieval families after
+within-lexical fusion. This is a structural correction with a tradeoff: an
+incorrect dense ranking also gets more influence. Benchmark improvement must
+be measured, not inferred.
+
+The initial `evidence-reader/2` run parsed JSON but validated 0/20 retrieved
+replies and 4/20 gold-only replies at each budget; the no-evidence controls
+abstained validly in 20/20. Failures included IDs copied together with role
+headers, paraphrased conditions, and conditional actions with an empty answer.
+This rejects malformed delivery safely but fails the stronger generation goal.
+`evidence-reader/3` separates IDs, roles, and source text as JSON fields, states
+all action invariants, and returns typed validation failures. It does not repair
+invented IDs or relax exact quotation checks. The revised model run is pending.
+The newer protocol also uses 768 output tokens versus 384 in the old baseline;
+these runs do not isolate a prompt-only effect.
+
+An independent subagent froze a disjoint 20-case v2 subset before root inspected
+any questions, answers, or case labels. Selection uses the fixed seed
+`oxibrain-release-0.21.0-unseen-v2`, excludes every v1 question ID, and preserves
+category quotas. It contains 980 sessions and 10,126 turns, with 12 answerable
+and 8 abstention annotations. The pinned helper, metadata and MIT license are
+in `eval/research/longmemeval-s/v2/`; raw input and evaluator-only gold remain
+outside the repository. The next final candidate will be frozen before running
+that subset.
+
+The next candidate also versions generic raw-source granularity as
+`source-paragraph-window/2`: consecutive complete paragraphs are grouped up to
+2,048 bytes; oversized paragraphs prefer complete lines; oversized lines use
+UTF-8-aligned windows with overlap. Exact source bytes and offsets remain
+unchanged. Schema 17 clears only derived raw chunks, FTS/vector rows and index
+cursors so explicit indexing rebuilds them from the ledger. The migration has
+a v16 up-test for truth preservation and cache invalidation. This does not
+recognize benchmark turn markers or add language-specific parsing.

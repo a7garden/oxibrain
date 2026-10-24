@@ -18,6 +18,18 @@ and could omit conditions while returning a valid action label.
 - Generate bounded query components in core; stores fetch independent lexical
   observations and counts, and core fuses them with stable identity ties. No
   stopword lists, stemming, script branches, or case-specific keys are added.
+- Balance raw-source lexical expansion and dense full-question retrieval as two
+  families. Apply candidate caps after family fusion, preserve lexical-only and
+  dense-only ordering, and partition every distinct candidate into kept/dropped.
+  Dense errors gain relative influence; external evaluation must measure quality.
+- Prefer generic paragraph and line boundaries in raw-source segmentation, with
+  UTF-8 windows for oversized lines and byte-for-byte complete source coverage.
+  Schema 17 invalidates only disposable raw chunks, FTS, vectors and cursors;
+  explicit indexing rebuilds from unchanged episodes. No connector marker or
+  language-specific parser defines segmentation.
+- Drop a source range as duplicate only when a delivered range fully contains it
+  with identical revision/view/decoder/UUID provenance. Partial overlaps retain
+  their unique tails and consume actual rendered tokens.
 - Expand a selected section's body/title hit using its structural section range,
   rather than requiring every word in a natural question in its title. Keep
   revision/view identity and complete applicability context.

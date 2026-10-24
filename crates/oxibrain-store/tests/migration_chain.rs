@@ -51,8 +51,7 @@ fn has_table(conn: &Connection, name: &str) -> bool {
 fn migrates_from_empty_to_current() {
     migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
-    // simulate a pre-migration db
-    conn.execute_batch("CREATE TABLE spaces(id TEXT);").unwrap();
+    // A genuinely empty store has no partial, foreign-key-invalid tables.
     let v = migration::run(&conn).unwrap();
     assert_eq!(v, LEDGER_SCHEMA_VERSION);
     let _n: i64 = conn
@@ -311,7 +310,7 @@ fn migrates_v14_to_v15_without_rewriting_truth_or_extracting() {
 }
 
 #[test]
-fn migrates_v15_to_v16_adds_only_rebuildable_source_vectors() {
+fn migrates_v15_to_current_adds_rebuildable_source_vectors() {
     migration::ensure_vec_extension();
     let conn = Connection::open_in_memory().unwrap();
     migration::run(&conn).unwrap();
@@ -319,7 +318,7 @@ fn migrates_v15_to_v16_adds_only_rebuildable_source_vectors() {
     registry::seed_core_v1(&conn).unwrap();
     insert_test_data(&conn);
     let before = oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap();
-    assert_eq!(migration::run(&conn).unwrap(), 16);
+    assert_eq!(migration::run(&conn).unwrap(), LEDGER_SCHEMA_VERSION);
     assert_eq!(
         before,
         oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap()
@@ -331,5 +330,81 @@ fn migrates_v15_to_v16_adds_only_rebuildable_source_vectors() {
             .unwrap(),
         0
     );
-    assert_eq!(migration::run(&conn).unwrap(), 16);
+    assert_eq!(migration::run(&conn).unwrap(), LEDGER_SCHEMA_VERSION);
+}
+
+#[test]
+fn migrates_v16_to_v17_clearing_only_rebuildable_raw_source_state() {
+    migration::ensure_vec_extension();
+    let conn = Connection::open_in_memory().unwrap();
+    migration::run(&conn).unwrap();
+    insert_test_data(&conn);
+
+    conn.execute(
+        "INSERT INTO memory_source_chunks(id,space_id,episode_id,ordinal,span_start,span_end)
+         VALUES('raw-old','sp1','ep1',0,0,12)",
+        [],
+    )
+    .unwrap();
+    let rowid = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO memory_chunk_fts_word(rowid,body) VALUES(?1,'needle')",
+        [rowid],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO memory_chunk_fts_ngram(rowid,body) VALUES(?1,'needle')",
+        [rowid],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO memory_source_vectors
+         (chunk_id,revision,window_policy,model_identity,dimensions,embedding)
+         VALUES('raw-old',hex((SELECT content_hash FROM episodes WHERE id='ep1')),
+                'source-window/1','test-model',1,x'00000000')",
+        [],
+    )
+    .unwrap();
+    oxibrain_store::meta::set(&conn, "raw-index/sp1/1", "old-complete-cursor").unwrap();
+    oxibrain_store::meta::set(&conn, "raw-index/sp1/2", "stale-cursor").unwrap();
+    let truth_before = oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap();
+    conn.pragma_update(None, "user_version", 16i64).unwrap();
+
+    assert_eq!(migration::run(&conn).unwrap(), LEDGER_SCHEMA_VERSION);
+    assert_eq!(
+        truth_before,
+        oxibrain_store::index_ops::snapshot_truth(&conn, "sp1").unwrap()
+    );
+    for table in ["memory_source_chunks", "memory_source_vectors"] {
+        assert_eq!(
+            conn.query_row::<usize, _, _>(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                .get(0))
+                .unwrap(),
+            0,
+            "{table} should be invalidated"
+        );
+    }
+    for table in ["memory_chunk_fts_word", "memory_chunk_fts_ngram"] {
+        assert_eq!(
+            conn.query_row::<usize, _, _>(
+                &format!("SELECT count(*) FROM {table} WHERE {table} MATCH 'needle'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap(),
+            0,
+            "{table} should be cleared by the chunk delete trigger"
+        );
+    }
+    assert!(
+        oxibrain_store::meta::get(&conn, "raw-index/sp1/1")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        oxibrain_store::meta::get(&conn, "raw-index/sp1/2")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(migration::run(&conn).unwrap(), LEDGER_SCHEMA_VERSION);
 }

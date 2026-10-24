@@ -51,9 +51,28 @@ impl ChannelReceipt {
         self.eligible
             && (self.fallback.is_some()
                 || self.capped
+                || self.limit_reached
                 || self
                     .indexed
                     .zip(self.total)
                     .is_some_and(|(n, total)| n < total))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reaching_a_channel_result_limit_marks_coverage_partial() {
+        let receipt = ChannelReceipt {
+            plane: "memory_sources".into(),
+            channel: "word".into(),
+            eligible: true,
+            executed: true,
+            limit_reached: true,
+            ..Default::default()
+        };
+        assert!(receipt.partial());
     }
 }

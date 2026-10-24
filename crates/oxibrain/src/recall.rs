@@ -198,7 +198,7 @@ impl Brain {
             loop {
                 let space = row.id.clone();
                 let (n,done)=self.write(move |c| {
-                    let key=format!("raw-index/{space}/1");
+                    let key=format!("raw-index/{space}/2");
                     let mut saved=oxibrain_store::meta::get(c,&key)?.and_then(|v|serde_json::from_str::<serde_json::Value>(&v).ok());
                     if saved.as_ref().is_some_and(|v|v["complete"]==true) && oxibrain_store::read_evidence::missing_source_count(c,&space)? > 0 {saved=None;}
                     let target=saved.as_ref().and_then(|v|v["target"].as_i64()).unwrap_or(oxibrain_store::read_evidence::frontier(c,&space)?);
@@ -208,7 +208,7 @@ impl Brain {
                     let n=batch.len();let next=batch.last().map_or(target,|r|r.0);
                     for (_,id,body) in batch {oxibrain_store::read_evidence::index_source(c,&space,&id,&body)?;}
                     let done=n==0;
-                    oxibrain_store::meta::set(c,&key,&serde_json::json!({"target":target,"after":next,"complete":done,"policy":"source-window/1"}).to_string())?;
+                    oxibrain_store::meta::set(c,&key,&serde_json::json!({"target":target,"after":next,"complete":done,"policy":oxibrain_store::source_vectors::WINDOW_POLICY}).to_string())?;
                     Ok((n,done))
                 }).await?;
                 indexed += n;
@@ -447,7 +447,7 @@ impl Brain {
                 let missing = self
                     .read(move |c| oxibrain_store::read_evidence::missing_source_count(c, &space))
                     .await?;
-                meta.index_coverage = serde_json::json!({"pending_sources":missing,"complete":missing==0,"policy":"source-window/1"});
+                meta.index_coverage = serde_json::json!({"pending_sources":missing,"complete":missing==0,"policy":oxibrain_store::source_vectors::WINDOW_POLICY});
                 if !req.hints.skip_summaries {
                     let space = req.scope.space.clone();
                     let known = req.scope.known_at.unwrap_or(now);
@@ -494,11 +494,11 @@ impl Brain {
                 }
                 let mut channels = Vec::new();
                 let channel_depth = self.read_policy.channel_depth;
-                for term in req
-                    .text
-                    .split_whitespace()
-                    .take(self.read_policy.query_terms)
-                {
+                let term_plan = oxibrain_core::query_candidates::RawSourceTermPlan::new(
+                    &req.text,
+                    self.read_policy.query_terms,
+                );
+                for term in &term_plan.terms {
                     for ngram in [false, true] {
                         let (space, term, exclude) = (
                             req.scope.space.clone(),
@@ -529,7 +529,12 @@ impl Brain {
                     }
                 }
                 for (offset, name) in [(0, "word"), (1, "ngram")] {
-                    let considered = channels.iter().skip(offset).step_by(2).map(Vec::len).sum();
+                    let channel_hits: Vec<_> = channels.iter().skip(offset).step_by(2).collect();
+                    let considered = channel_hits
+                        .iter()
+                        .flat_map(|hits| hits.iter().map(|hit| hit.id.clone()))
+                        .collect::<BTreeSet<_>>()
+                        .len();
                     let mut receipt = oxibrain_core::read_channels::ChannelReceipt::lexical(
                         "memory_sources",
                         name,
@@ -542,26 +547,32 @@ impl Brain {
                         .skip(offset)
                         .step_by(2)
                         .any(|c| c.len() >= channel_depth);
+                    receipt.capped = term_plan.capped;
+                    receipt.algorithm_version =
+                        Some(oxibrain_core::query_candidates::RAW_SOURCE_TERM_PLAN_VERSION.into());
+                    receipt.query_limit = Some(term_plan.query_limit);
+                    receipt.plan_candidates_examined = term_plan.terms_examined;
+                    receipt.plan_candidates_selected = term_plan.terms_selected;
+                    receipt.queries_run = term_plan.terms_selected;
                     meta.channels.push(receipt);
                 }
                 let (semantic, receipt) = self
                     .semantic_source_hits(&req.scope, &req.text, req.session_id.as_deref(), now)
                     .await?;
                 meta.channels.push(receipt);
-                if !semantic.is_empty() {
-                    channels.push(semantic);
-                }
                 let channel_ids: Vec<Vec<String>> = channels
                     .iter()
                     .map(|ch| ch.iter().map(|h| h.id.clone()).collect())
                     .collect();
-                let (selected, capped) = oxibrain_core::evidence::fuse_query_source_channels(
+                let dense_ids: Vec<String> = semantic.iter().map(|h| h.id.clone()).collect();
+                let (selected, capped) = oxibrain_core::evidence::fuse_query_source_families(
                     &channel_ids,
+                    &dense_ids,
                     self.read_policy.candidate_cap,
                 );
                 meta.dropped.insert("candidate_cap".into(), capped.len());
                 let mut rows = BTreeMap::new();
-                for h in channels.into_iter().flatten() {
+                for h in channels.into_iter().flatten().chain(semantic) {
                     rows.entry(h.id.clone()).or_insert(h);
                 }
                 let mut raw: Vec<_> = selected.iter().filter_map(|id| rows.remove(id)).collect();

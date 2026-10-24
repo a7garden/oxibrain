@@ -316,7 +316,9 @@ pub fn fuse_source_channels(
     channels: &[Vec<String>],
     maximum: usize,
 ) -> (Vec<String>, Vec<String>) {
-    fuse_with_weights(channels, maximum, &vec![1.0; channels.len()])
+    let mut ids = rank_with_weights(channels, &vec![1.0; channels.len()]);
+    let dropped = ids.split_off(maximum.min(ids.len()));
+    (ids, dropped)
 }
 
 /// Bounded query-term channels differ in specificity. Use observed breadth,
@@ -326,18 +328,41 @@ pub fn fuse_query_source_channels(
     channels: &[Vec<String>],
     maximum: usize,
 ) -> (Vec<String>, Vec<String>) {
+    let mut ids = rank_query_source_channels(channels);
+    let dropped = ids.split_off(maximum.min(ids.len()));
+    (ids, dropped)
+}
+
+/// Fuse lexical query channels as one family against dense results as a second
+/// family. Lexical breadth is weighted within its family; the family rankings
+/// then receive equal reciprocal-rank weight. The candidate limit is applied
+/// once, after both families have been fused.
+pub fn fuse_query_source_families(
+    lexical_channels: &[Vec<String>],
+    dense_ids: &[String],
+    maximum: usize,
+) -> (Vec<String>, Vec<String>) {
+    let lexical = rank_query_source_channels(lexical_channels);
+    let dense = deduplicate_ranked_ids(dense_ids);
+    let mut ids = match (lexical.is_empty(), dense.is_empty()) {
+        (true, true) => Vec::new(),
+        (false, true) => lexical,
+        (true, false) => dense,
+        (false, false) => rank_equal_families(&[lexical, dense]),
+    };
+    let dropped = ids.split_off(maximum.min(ids.len()));
+    (ids, dropped)
+}
+
+fn rank_query_source_channels(channels: &[Vec<String>]) -> Vec<String> {
     let weights: Vec<_> = channels
         .iter()
         .map(|c| 1.0 / ((1 + c.len()) as f64).sqrt())
         .collect();
-    fuse_with_weights(channels, maximum, &weights)
+    rank_with_weights(channels, &weights)
 }
 
-fn fuse_with_weights(
-    channels: &[Vec<String>],
-    maximum: usize,
-    weights: &[f64],
-) -> (Vec<String>, Vec<String>) {
+fn rank_with_weights(channels: &[Vec<String>], weights: &[f64]) -> Vec<String> {
     let mut scores = std::collections::BTreeMap::<String, f64>::new();
     for (channel, weight) in channels.iter().zip(weights) {
         let mut seen = std::collections::BTreeSet::new();
@@ -349,7 +374,28 @@ fn fuse_with_weights(
     }
     let mut rows: Vec<_> = scores.into_iter().collect();
     rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-    let mut ids: Vec<_> = rows.into_iter().map(|(id, _)| id).collect();
-    let dropped = ids.split_off(maximum.min(ids.len()));
-    (ids, dropped)
+    rows.into_iter().map(|(id, _)| id).collect()
+}
+
+fn deduplicate_ranked_ids(ids: &[String]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    ids.iter()
+        .filter(|id| seen.insert((*id).clone()))
+        .cloned()
+        .collect()
+}
+
+fn rank_equal_families(families: &[Vec<String>]) -> Vec<String> {
+    let mut scores = std::collections::BTreeMap::<String, f64>::new();
+    for family in families {
+        let mut seen = std::collections::BTreeSet::new();
+        for (rank, id) in family.iter().enumerate() {
+            if seen.insert(id) {
+                *scores.entry(id.clone()).or_default() += 1.0 / (61 + rank) as f64;
+            }
+        }
+    }
+    let mut rows: Vec<_> = scores.into_iter().collect();
+    rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    rows.into_iter().map(|(id, _)| id).collect()
 }

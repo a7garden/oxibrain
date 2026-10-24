@@ -101,6 +101,101 @@ pub fn source_windows(content: &str, maximum: usize, overlap: usize) -> Vec<Chun
     out
 }
 
+/// Split source text on complete paragraph blocks first, grouping adjacent
+/// blocks up to `maximum`. Oversized paragraphs prefer complete newline-ended
+/// lines; only a line larger than the limit falls back to overlapping UTF-8
+/// windows. Spans remain exact byte offsets into the original source.
+pub fn source_paragraph_windows(content: &str, maximum: usize, overlap: usize) -> Vec<Chunk> {
+    let maximum = maximum.max(1);
+    let mut out = Vec::new();
+    let mut grouped_start = None;
+    let mut grouped_end = 0;
+    let mut offset = 0;
+
+    for paragraph in content.split_inclusive("\n\n") {
+        let start = offset;
+        let end = start + paragraph.len();
+        offset = end;
+
+        if paragraph.len() <= maximum {
+            if let Some(group_start) = grouped_start {
+                if end - group_start <= maximum {
+                    grouped_end = end;
+                    continue;
+                }
+                push_chunk(&mut out, group_start, grouped_end);
+            }
+            grouped_start = Some(start);
+            grouped_end = end;
+            continue;
+        }
+
+        if let Some(group_start) = grouped_start.take() {
+            push_chunk(&mut out, group_start, grouped_end);
+        }
+        append_oversized_paragraph(paragraph, start, maximum, overlap, &mut out);
+    }
+
+    if let Some(group_start) = grouped_start {
+        push_chunk(&mut out, group_start, grouped_end);
+    }
+    out
+}
+
+fn append_oversized_paragraph(
+    paragraph: &str,
+    base: usize,
+    maximum: usize,
+    overlap: usize,
+    out: &mut Vec<Chunk>,
+) {
+    let mut group_start = None;
+    let mut group_end = 0;
+    let mut line_offset = 0;
+
+    for line in paragraph.split_inclusive('\n') {
+        let start = line_offset;
+        let end = start + line.len();
+        line_offset = end;
+
+        if line.len() > maximum {
+            if let Some(group_start) = group_start.take() {
+                push_chunk(out, base + group_start, base + group_end);
+            }
+            for window in source_windows(line, maximum, overlap) {
+                push_chunk(
+                    out,
+                    base + start + window.span_start,
+                    base + start + window.span_end,
+                );
+            }
+            continue;
+        }
+
+        if let Some(current_start) = group_start {
+            if end - current_start > maximum {
+                push_chunk(out, base + current_start, base + group_end);
+                group_start = Some(start);
+            }
+        } else {
+            group_start = Some(start);
+        }
+        group_end = end;
+    }
+
+    if let Some(group_start) = group_start {
+        push_chunk(out, base + group_start, base + group_end);
+    }
+}
+
+fn push_chunk(out: &mut Vec<Chunk>, start: usize, end: usize) {
+    out.push(Chunk {
+        ordinal: out.len() as u32,
+        span_start: start,
+        span_end: end,
+    });
+}
+
 /// Build a deterministic context prefix for a chunk. All fields come from
 /// projection rows; no model call is involved.
 ///
@@ -209,6 +304,86 @@ mod tests {
             "expected at least 2 chunks, got {}",
             chunks.len()
         );
+    }
+
+    #[test]
+    fn paragraph_windows_group_complete_blocks_and_prefer_line_boundaries() {
+        let first = "a".repeat(8);
+        let second = "b".repeat(8);
+        let third = "c".repeat(8);
+        let content = format!("{first}\n\n{second}\n\n{third}");
+        let chunks = source_paragraph_windows(&content, 20, 4);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| (c.span_start, c.span_end))
+                .collect::<Vec<_>>(),
+            vec![(0, 20), (20, content.len())]
+        );
+
+        let content = format!("{}\n{}", "x".repeat(1_200), "y".repeat(1_200));
+        let chunks = source_paragraph_windows(&content, 2_048, 256);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| (c.span_start, c.span_end))
+                .collect::<Vec<_>>(),
+            vec![(0, 1_201), (1_201, content.len())]
+        );
+    }
+
+    #[test]
+    fn paragraph_windows_fall_back_to_utf8_windows_for_long_lines() {
+        let content = "界".repeat(900);
+        let chunks = source_paragraph_windows(&content, 1_024, 128);
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.first().unwrap().span_start, 0);
+        assert_eq!(chunks.last().unwrap().span_end, content.len());
+        for chunk in &chunks {
+            assert!(content.is_char_boundary(chunk.span_start));
+            assert!(content.is_char_boundary(chunk.span_end));
+        }
+        for pair in chunks.windows(2) {
+            assert!(pair[1].span_start <= pair[0].span_end);
+            assert!(pair[1].span_end > pair[0].span_end);
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn paragraph_window_plan_covers_every_utf8_byte_and_keeps_fitting_paragraphs(
+            content in proptest::prelude::any::<String>(),
+            maximum in 1usize..128,
+            overlap in 0usize..128,
+        ) {
+            let chunks = source_paragraph_windows(&content, maximum, overlap);
+            if content.is_empty() {
+                proptest::prop_assert!(chunks.is_empty());
+            } else {
+                proptest::prop_assert_eq!(chunks.first().map(|c| c.span_start), Some(0));
+                proptest::prop_assert_eq!(chunks.last().map(|c| c.span_end), Some(content.len()));
+                let mut covered_end = 0;
+                for chunk in &chunks {
+                    proptest::prop_assert!(chunk.span_start <= covered_end);
+                    proptest::prop_assert!(chunk.span_end > covered_end);
+                    proptest::prop_assert!(content.is_char_boundary(chunk.span_start));
+                    proptest::prop_assert!(content.is_char_boundary(chunk.span_end));
+                    covered_end = chunk.span_end;
+                }
+                proptest::prop_assert_eq!(covered_end, content.len());
+            }
+
+            let mut paragraph_start = 0;
+            for paragraph in content.split_inclusive("\n\n") {
+                let paragraph_end = paragraph_start + paragraph.len();
+                if paragraph.len() <= maximum {
+                    proptest::prop_assert!(chunks.iter().any(|chunk| {
+                        chunk.span_start <= paragraph_start && chunk.span_end >= paragraph_end
+                    }), "a fitting paragraph must remain inside a complete chunk");
+                }
+                paragraph_start = paragraph_end;
+            }
+        }
     }
 
     #[test]

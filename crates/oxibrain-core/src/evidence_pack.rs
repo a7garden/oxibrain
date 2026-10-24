@@ -19,6 +19,17 @@ fn order(k: LayerKind) -> usize {
     }
 }
 
+fn already_delivered_contains(candidate: &SourceCoordinate, delivered: &SourceCoordinate) -> bool {
+    candidate.reference == delivered.reference
+        && candidate.revision == delivered.revision
+        && candidate.view == delivered.view
+        && candidate.view_digest == delivered.view_digest
+        && candidate.decoder == delivered.decoder
+        && candidate.document_uuid == delivered.document_uuid
+        && delivered.start <= candidate.start
+        && candidate.end <= delivered.end
+}
+
 fn render(
     selected: &[(&EvidenceUnit, &str, &SourceCoordinate)],
     budget: usize,
@@ -232,13 +243,8 @@ pub fn pack_evidence_with_policy(
                 .chain(u.variants.iter().map(|v| (&v.text, &v.source)))
             {
                 if selected.iter().any(
-                    |(old, _, old_source): &(&EvidenceUnit, &str, &SourceCoordinate)| {
-                        old.source.reference == source.reference
-                            && old_source.revision == source.revision
-                            && old_source.view == source.view
-                            && ((source.start < old_source.end && old_source.start < source.end)
-                                || (source.start == old_source.start
-                                    && source.end == old_source.end))
+                    |(_, _, delivered): &(&EvidenceUnit, &str, &SourceCoordinate)| {
+                        already_delivered_contains(source, delivered)
                     },
                 ) {
                     reason = "duplicate_source_range";
