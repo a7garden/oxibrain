@@ -7,13 +7,29 @@ squash-merged.
 
 ## [Unreleased]
 
-### Changed
+## [0.22.0] — 2026-10-25
 
-- Session-summary episodes (`source_kind = 'session'`, written by `session_record`) are exempt from the extraction backlog: `uncached_memory_episodes` and `Brain::pending_extraction_stats` skip them, so agent session narratives stop being mined into graph beliefs. Summaries keep flowing through `session_list` and recall's SessionSummaries layer verbatim; existing folded beliefs are untouched.
+### Added
+
+- Support ledger schema 19, including rebuildable source-view publication projections and scoped source provenance. Existing schema-19 stores can now use the installed release instead of requiring a development executable.
+- Expose build storage capabilities through `oxibrain schema` under `data.storage`, without opening a store or loading a model.
 
 ### Fixed
 
+- Classify newer-store rejection as the non-retryable CLI error `schema_version_mismatch`, enabling callers to select an explicitly configured compatible executable without replaying uncertain writes.
+- Preserve publication descendants in the redaction closure, including legacy deserialization compatibility.
+- Revalidate token lifecycle and resource scope for authenticated reads, exports, and source-view operations.
+- Preserve source dependencies in transactional ledger exports and repair space-purge closure traversal and foreign-key teardown order.
 - `create_space` rejects bare-hex names of 16+ chars on new creations. `ensure_space` lazily creates whatever an op passes, and agents reading `describe` have repeatedly passed a 32-hex space *id* back as a *name*, silently spawning a shadow space (observed in production). Legacy spaces already existing under id-shaped names keep working.
+
+### Compatibility
+
+- Memory stores migrate forward to schema 19. Older binaries cannot reopen them; update every executable that accesses a shared store. Never lower the database version counter to bypass a mismatch.
+- Canonical PDC document formats, raw source bytes, the sixteen-tool MCP surface, and the packaged evaluation fixtures from 0.21.1 are preserved. This minor release includes new Rust publication APIs and redaction-closure metadata.
+
+### Changed
+
+- Session-summary episodes (`source_kind = 'session'`, written by `session_record`) are exempt from the extraction backlog: `uncached_memory_episodes` and `Brain::pending_extraction_stats` skip them, so agent session narratives stop being mined into graph beliefs. Summaries keep flowing through `session_list` and recall's SessionSummaries layer verbatim; existing folded beliefs are untouched.
 
 
 ## [0.21.1] — 2026-10-24

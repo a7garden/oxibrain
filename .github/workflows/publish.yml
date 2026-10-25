@@ -298,6 +298,21 @@ jobs:
               echo "$binary reports '$actual_version'; expected 'oxibrain $VERSION'"
               exit 1
             fi
+            "$binary" schema > "$validation_dir/storage-capabilities.json"
+            python3 - crates/oxibrain-store/src/schema.rs "$validation_dir/storage-capabilities.json" <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          source = Path(sys.argv[1]).read_text()
+          expected = int(re.search(r"pub const LEDGER_SCHEMA_VERSION: i64 = ([0-9]+);", source)[1])
+          envelope = json.loads(Path(sys.argv[2]).read_text())
+          actual = envelope.get("data", {}).get("storage", {}).get("ledger_schema_version")
+          if envelope.get("ok") is not True or actual != expected:
+              raise SystemExit(f"release storage capability mismatch: found {actual}, expected {expected}")
+          print(f"release ledger schema verified: {expected}")
+          PY
           done
 
       - name: Publish verified GitHub release
