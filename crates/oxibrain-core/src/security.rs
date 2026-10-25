@@ -152,9 +152,13 @@ pub enum RedactTarget {
 }
 
 /// The set of objects that will be affected by a redaction.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedactionClosure {
     pub episodes: Vec<String>,
+    /// Engine-derived publication descendants included in `episodes`.
+    /// This is proof of copy closure, never caller-supplied source authority.
+    #[serde(default)]
+    pub publication_declarations: Vec<String>,
     pub assertions: Vec<String>,
     pub statements: Vec<String>,
     pub mentions: Vec<String>,
