@@ -7,6 +7,14 @@ squash-merged.
 
 ## [Unreleased]
 
+### Changed
+
+- Session-summary episodes (`source_kind = 'session'`, written by `session_record`) are exempt from the extraction backlog: `uncached_memory_episodes` and `Brain::pending_extraction_stats` skip them, so agent session narratives stop being mined into graph beliefs. Summaries keep flowing through `session_list` and recall's SessionSummaries layer verbatim; existing folded beliefs are untouched.
+
+### Fixed
+
+- `create_space` rejects bare-hex names of 16+ chars on new creations. `ensure_space` lazily creates whatever an op passes, and agents reading `describe` have repeatedly passed a 32-hex space *id* back as a *name*, silently spawning a shadow space (observed in production). Legacy spaces already existing under id-shaped names keep working.
+
 ## [0.21.0] — 2026-10-24
 
 ### Added

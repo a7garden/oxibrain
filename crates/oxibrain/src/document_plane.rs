@@ -551,7 +551,7 @@ impl Brain {
     /// schedulers see the retry schedule, not a number that never moves.
     pub async fn pending_extraction_stats(&self) -> Result<PendingStats, BrainError> {
         const FILTER: &str = "WHERE e.kind = 'primary'
-                         AND e.source_kind NOT IN ('document', 'document_revision')
+                         AND e.source_kind NOT IN ('document', 'document_revision', 'session')
                          AND e.redacted_at IS NULL
                          AND NOT EXISTS (SELECT 1 FROM extractions x
                                          WHERE x.episode_id = e.id
