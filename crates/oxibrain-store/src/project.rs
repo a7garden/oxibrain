@@ -131,6 +131,10 @@ pub enum DeclObject {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Declaration {
+    /// Reserved: admitted only by the checked source-view publication facade.
+    PublicationV1 {
+        event: oxibrain_core::publication::PublicationEventV1,
+    },
     AddStatement {
         subject: EntityRef,
         predicate: String,
@@ -546,7 +550,11 @@ pub fn project_declaration(
         ingested_at: now,
         redacted_at: None,
     };
-    ledger::insert_episode(conn, &mut episode)?;
+    if let Declaration::PublicationV1 { event } = decl {
+        crate::publication::insert_declaration_event(conn, &mut episode, event)?;
+    } else {
+        ledger::insert_episode(conn, &mut episode)?;
+    }
     let ep_id = episode.id.clone();
 
     // Entities whose keys this declaration creates or touches — their FTS
@@ -555,6 +563,9 @@ pub fn project_declaration(
 
     // 2. Process the declaration.
     match decl {
+        Declaration::PublicationV1 { event } => {
+            crate::publication::project_event(conn, &ep_id, space, event)?;
+        }
         Declaration::AddStatement {
             subject,
             predicate,

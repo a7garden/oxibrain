@@ -51,6 +51,7 @@ pub use documents::{
 pub mod uncertainty;
 pub use uncertainty::{Uncertainty, UncertaintyInput, compute as compute_uncertainty};
 pub mod pipeline;
+pub mod publication;
 pub use pipeline::{Outcome as PipelineOutcome, Stage as PipelineStage, step as pipeline_step};
 pub use rank::{
     Channel, ChannelRank, ChannelResult, DropReason, DroppedItem, Filters, Fusion, LexIndex,

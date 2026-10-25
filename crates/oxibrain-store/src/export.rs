@@ -13,7 +13,12 @@ use rusqlite::types::{Value as SqlValue, ValueRef};
 /// `ingest_jobs` was retired in schema v11 and is no longer exported.
 const EXPORT_TABLES: &[&str] = &[
     "spaces",
+    // Episodes carry a source_id foreign key. Include source registry rows
+    // before their immutable events so a fresh import remains FK-valid even
+    // when the facade executes it within its ordinary write transaction.
+    "sources",
     "episodes",
+    "source_policies",
     "extractions",
     "summaries",
     "episode_links",
@@ -326,6 +331,132 @@ mod tests {
         assert!(
             err.to_string().contains("nope"),
             "error should name the unknown table: {err}"
+        );
+    }
+
+    #[test]
+    fn event_source_policy_dependencies_round_trip_in_transaction_without_elevating_conflicts() {
+        let conn = fresh_db_with_data();
+        let space = crate::ledger::space_id("personal");
+        let mut cache = crate::project::ResolutionCache::new();
+        for declaration in [
+            Declaration::RegisterSource {
+                name: "fixture-source".into(),
+                kind: "conversation".into(),
+                mode: "push".into(),
+                claims_json: "{}".into(),
+            },
+            Declaration::SetSourcePolicy {
+                source_name: "fixture-source".into(),
+                trust: "untrusted".into(),
+                effective_from: 0,
+                effective_to: None,
+            },
+        ] {
+            crate::project::project_declaration(
+                &conn,
+                &space,
+                &declaration,
+                Timestamp(2),
+                &mut cache,
+            )
+            .unwrap();
+        }
+        let source_id = oxibrain_core::source_id(&space, "fixture-source");
+        let existing: String = conn
+            .query_row(
+                "SELECT id FROM episodes WHERE space_id=?1 ORDER BY seq LIMIT 1",
+                [&space],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut event = crate::ledger::get_episode(&conn, &existing)
+            .unwrap()
+            .unwrap();
+        event.id.clear();
+        event.kind = oxibrain_core::EpisodeKind::Primary;
+        event.content = "independent event with registered source".into();
+        event.source = oxibrain_core::SourceRef::Conversation;
+        crate::ledger::insert_event(
+            &conn,
+            &mut event,
+            Some(&crate::ledger::IngestAttachment {
+                source_id: source_id.clone(),
+                occurrence_id: "one".into(),
+                accepted_at: Timestamp(3),
+                principal: "fixture".into(),
+                claims_json: "{}".into(),
+            }),
+        )
+        .unwrap();
+        let jsonl = export_jsonl(&conn).unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let index = |table: &str| {
+            lines
+                .iter()
+                .position(|line| line["table"] == table)
+                .unwrap()
+        };
+        assert!(index("sources") < index("episodes"));
+        assert!(index("episodes") < index("source_policies"));
+        let restored = Connection::open_in_memory().unwrap();
+        migration::run(&restored).unwrap();
+        restored
+            .execute_batch("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;")
+            .unwrap();
+        import_jsonl(&restored, &jsonl).unwrap();
+        restored.execute_batch("COMMIT;").unwrap();
+        assert_eq!(
+            restored
+                .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(count_all(&conn), count_all(&restored));
+        import_jsonl(&restored, &jsonl).unwrap();
+        assert_eq!(count_all(&conn), count_all(&restored));
+        let conflicting = lines
+            .iter()
+            .filter(|line| {
+                ["sources", "source_policies"].contains(&line["table"].as_str().unwrap())
+            })
+            .map(|line| {
+                let mut line = line.clone();
+                if line["table"] == "source_policies" {
+                    line["row"]["trust"] = serde_json::json!("trusted");
+                } else {
+                    line["row"]["claims_json"] = serde_json::json!("{\"claimed\":true}");
+                }
+                serde_json::to_string(&line).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        import_jsonl(&restored, &conflicting).unwrap();
+        assert_eq!(
+            crate::ledger::effective_policy_trust(&restored, &source_id, Timestamp(3)).unwrap(),
+            Some(oxibrain_core::TrustTier::Untrusted)
+        );
+        assert_eq!(
+            crate::ledger::get_source_by_name(&restored, &space, "fixture-source")
+                .unwrap()
+                .unwrap()
+                .claims_json,
+            "{}"
+        );
+        crate::reproject::reproject(&restored).unwrap();
+        assert_eq!(
+            crate::ledger::effective_policy_trust(&restored, &source_id, Timestamp(3)).unwrap(),
+            Some(oxibrain_core::TrustTier::Untrusted)
+        );
+        assert_eq!(
+            crate::ledger::get_episode(&restored, &event.id)
+                .unwrap()
+                .unwrap()
+                .content,
+            event.content
         );
     }
 }

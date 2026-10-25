@@ -11,6 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Idempotently create a space, returning its id. Id is derived from name (deterministic).
+///
+/// Names that look like ids are rejected. `ensure_space` lazily creates
+/// whatever string an op passes, and agents reading `describe` have
+/// repeatedly passed a 32-hex space *id* back as a *name*, silently
+/// spawning a shadow space (observed in production 2026-10). A bare hex
+/// run of 16+ chars is an id or some other opaque token, never a
+/// human-chosen name.
 pub fn create_space(conn: &Connection, name: &str, now: Timestamp) -> Result<String, BrainError> {
     let id = space_id(name);
     let n: i64 = conn
@@ -21,6 +28,14 @@ pub fn create_space(conn: &Connection, name: &str, now: Timestamp) -> Result<Str
         )
         .map_err(sql_err)?;
     if n == 0 {
+        // Guard NEW creations only: a legacy space that already exists
+        // under an id-shaped name must keep working.
+        if is_id_like_name(name) {
+            return Err(BrainError::Invalid(format!(
+                "space name {name:?} looks like an id (bare hex, 16+ chars); \
+                 pass the space *name* from `oxibrain describe`/`admin spaces`, not its `id`"
+            )));
+        }
         conn.execute(
             "INSERT INTO spaces(id, name, created_at) VALUES(?1, ?2, ?3)",
             params![id, name, now.millis()],
@@ -28,6 +43,11 @@ pub fn create_space(conn: &Connection, name: &str, now: Timestamp) -> Result<Str
         .map_err(sql_err)?;
     }
     Ok(id)
+}
+
+/// Bare hex run of 16+ chars (either case) — id-shaped, not name-shaped.
+fn is_id_like_name(name: &str) -> bool {
+    name.len() >= 16 && name.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Deterministic space id (blake3 of name). Keeps `init` reproducible.
@@ -309,6 +329,26 @@ pub fn count_orphan_sources(conn: &Connection) -> Result<i64, BrainError> {
         |r| r.get(0),
     )
     .map_err(sql_err)
+}
+
+/// Scope-filter the immutable row before fetching or decoding source bytes.
+/// Unknown and foreign IDs have the same absent result.
+pub fn get_episode_in_space(
+    conn: &Connection,
+    space: &str,
+    id: &str,
+) -> Result<Option<Episode>, BrainError> {
+    let permitted: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM episodes WHERE id=?1 AND space_id=?2)",
+            params![id, space],
+            |row| row.get(0),
+        )
+        .map_err(sql_err)?;
+    if !permitted {
+        return Ok(None);
+    }
+    get_episode(conn, id)
 }
 
 pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>, BrainError> {
@@ -661,4 +701,37 @@ pub fn effective_policy_trust(
         .optional()
         .map_err(sql_err)?;
     Ok(trust_s.and_then(|s| TrustTier::parse_db(&s)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_db() -> Connection {
+        crate::migration::ensure_vec_extension();
+        let conn = Connection::open_in_memory().expect("open");
+        crate::migration::run(&conn).expect("migrate");
+        conn
+    }
+
+    /// `ensure_space` creates whatever an op passes; agents have
+    /// repeatedly fed a 32-hex space id back as a name, spawning shadow
+    /// spaces. The guard must reject id-shaped names while keeping every
+    /// human-plausible name working.
+    #[test]
+    fn create_space_rejects_id_like_names() {
+        let conn = fresh_db();
+        let now = Timestamp::from_millis(1000);
+
+        // 32-hex space id (the observed failure).
+        assert!(create_space(&conn, &"a".repeat(32), now).is_err());
+        // 16-hex mixed case.
+        assert!(create_space(&conn, "ABCDEF0123456789", now).is_err());
+        // Below the threshold, hex-looking names stay legal.
+        assert!(create_space(&conn, "deadbeef", now).is_ok());
+
+        assert!(create_space(&conn, "farm", now).is_ok());
+        assert!(create_space(&conn, "pc-infra", now).is_ok());
+        assert!(create_space(&conn, "한글-프로젝트", now).is_ok());
+    }
 }

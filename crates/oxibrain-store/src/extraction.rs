@@ -338,6 +338,13 @@ fn parse_claim_literal(lt: &str, value: &str) -> Result<TypedValue, BrainError> 
 /// time per attempt — while the backlog never reaches zero. Pass
 /// [`TIME_MAX`] to ignore failures entirely (the explicit `reextract`
 /// operator repair path).
+///
+/// Session-summary episodes (`source_kind = 'session'`, written by
+/// `session_record`) are exempt: they are narrative already summarised by
+/// the recording agent, surface verbatim through recall's
+/// SessionSummaries layer, and extracting beliefs from them flooded the
+/// graph with low-quality entities and contradictions. Keep this filter
+/// in sync with `Brain::pending_extraction_stats` (document_plane.rs).
 pub fn uncached_memory_episodes(
     conn: &Connection,
     space: &str,
@@ -348,7 +355,7 @@ pub fn uncached_memory_episodes(
         .prepare(
             "SELECT e.id FROM episodes e
              WHERE e.space_id = ?1 AND e.kind = 'primary'
-               AND e.source_kind NOT IN ('document', 'document_revision')
+               AND e.source_kind NOT IN ('document', 'document_revision', 'session')
                AND e.redacted_at IS NULL
                AND NOT EXISTS (
                  SELECT 1 FROM extractions x
@@ -531,6 +538,18 @@ mod tests {
             "document content",
             SourceRef::Document {
                 uri: "doc://x".into(),
+            },
+            EpisodeKind::Primary,
+        );
+        // Excluded by source kind: session summary (session_record) —
+        // narrative already summarised by the recording agent; extracting
+        // beliefs from these flooded spaces with low-quality entities.
+        episode_with(
+            &conn,
+            &space,
+            "session summary content",
+            SourceRef::Session {
+                session_id: "sess-1".into(),
             },
             EpisodeKind::Primary,
         );

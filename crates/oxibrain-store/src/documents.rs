@@ -155,6 +155,17 @@ pub struct CachedChunk {
     pub modified_at: i64,
 }
 
+/// Internal metadata for freshly materializing an authorized publication source.
+#[derive(Debug, Clone)]
+pub struct PublicationDocument {
+    pub document_id: String,
+    pub document_uuid: Option<String>,
+    pub space: String,
+    pub locator: String,
+    pub revision: String,
+    pub media_type: String,
+}
+
 /// Owns the cache connection and the writer advisory lock (when read-write).
 #[derive(Debug)]
 pub struct DocumentCache {
@@ -419,6 +430,15 @@ impl DocumentCache {
     /// index `idx_documents_pdc_uuid` (v3, pdc-adoption-v2). Returns
     /// `None` when the root has no document carrying that UUID — the
     /// normal case for legacy decoders, which never populate the column.
+    pub fn publication_document(
+        &self,
+        root: &str,
+        id: &str,
+    ) -> Result<Option<PublicationDocument>, BrainError> {
+        self.conn.query_row("SELECT space, locator, revision, media_type, id, pdc_document_id FROM documents WHERE root_alias=?1 AND id=?2 AND coalesce(pdc_deleted,0)=0",
+            params![root,id], |row| Ok(PublicationDocument { space: row.get(0)?, locator: row.get(1)?, revision: row.get(2)?, media_type: row.get(3)?, document_id: row.get(4)?, document_uuid: row.get(5)? })).optional().map_err(sql_err)
+    }
+
     pub fn document_uuid(&self, id: &str) -> Result<Option<String>, BrainError> {
         self.conn
             .query_row(

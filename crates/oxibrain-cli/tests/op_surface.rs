@@ -167,6 +167,51 @@ fn describe_lists_spaces_as_enum_source() {
 }
 
 #[test]
+fn schema_reports_build_storage_version_without_opening_a_store() {
+    let root = tempdir().expect("root");
+    let missing = root.path().join("missing-store");
+    let (ok, out, err) = run_oxibrain(&missing, &["schema"]);
+    assert!(ok, "schema failed: {out} {err}");
+    let envelope: serde_json::Value = serde_json::from_str(&out).expect("envelope");
+    assert_eq!(
+        envelope["data"]["storage"]["ledger_schema_version"],
+        oxibrain_store::schema::LEDGER_SCHEMA_VERSION
+    );
+    assert!(!missing.exists(), "schema must not create a store");
+}
+
+#[test]
+fn newer_store_has_a_non_retryable_schema_error_and_is_preserved() {
+    let store = tempdir().expect("store");
+    init_store(store.path());
+    let future = oxibrain_store::schema::LEDGER_SCHEMA_VERSION + 1;
+    {
+        let db = oxibrain_store::Store::open(store.path()).expect("open");
+        db.connection()
+            .pragma_update(None, "user_version", future)
+            .expect("future schema");
+    }
+    let (ok, out) = run_oxibrain_stdin(
+        store.path(),
+        &["session_record"],
+        r#"{"space":"personal","session_id":"schema-test","summary":"Must not be written"}"#,
+    );
+    assert!(!ok, "future schema must be rejected");
+    let envelope: serde_json::Value = serde_json::from_str(&out).expect("envelope");
+    assert_eq!(envelope["error"]["code"], "schema_version_mismatch");
+    assert_eq!(envelope["error"]["retryable"], false);
+    let db = oxibrain_store::Store::open_read_only(store.path()).expect("read only");
+    let version: i64 = db
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    let count: i64 = db
+        .query_row("SELECT count(*) FROM episodes", [], |row| row.get(0))
+        .expect("episodes");
+    assert_eq!(version, future);
+    assert_eq!(count, 0, "schema rejection must precede ledger writes");
+}
+
+#[test]
 fn canonical_document_recall_preserves_source_and_enforces_scope_and_exactness() {
     let store = tempdir().unwrap();
     let vault = tempdir().unwrap();

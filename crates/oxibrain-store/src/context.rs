@@ -182,7 +182,7 @@ pub fn build_context_input(
                 .prepare(
                     "SELECT id, content, ingested_at FROM episodes
                  WHERE space_id = ?1 AND redacted_at IS NULL AND content != ''
-                   AND source_kind NOT IN ('document', 'document_revision', 'session')
+                   AND kind = 'primary' AND source_kind NOT IN ('document', 'document_revision', 'session')
                  ORDER BY ingested_at DESC LIMIT ?2",
                 )
                 .map_err(sql_err)?;

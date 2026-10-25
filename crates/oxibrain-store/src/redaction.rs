@@ -28,7 +28,7 @@ pub fn resolve_closure(
     conn: &Connection,
     target: &RedactTarget,
 ) -> Result<RedactionClosure, BrainError> {
-    match target {
+    let mut closure = match target {
         RedactTarget::Episode { id } => resolve_episode_closure(conn, id),
         RedactTarget::Entity { space, entity_id } => {
             resolve_entity_closure(conn, space, entity_id, None)
@@ -39,7 +39,27 @@ pub fn resolve_closure(
             predicate,
         } => resolve_entity_closure(conn, space, entity_id, Some(predicate)),
         RedactTarget::Space { id } => resolve_space_closure(conn, id),
+    }?;
+    let mut dependencies = closure.episodes.clone();
+    for assertion in &closure.assertions {
+        dependencies.extend(query_strings(
+            conn,
+            "SELECT episode_id FROM assertions WHERE id=?1",
+            &[assertion],
+        )?);
     }
+    let spaces = match target {
+        RedactTarget::Space { id } => vec![id.clone()],
+        _ => vec![],
+    };
+    closure.publication_declarations =
+        crate::publication::redaction_declarations(conn, &dependencies, &spaces)?;
+    closure
+        .episodes
+        .extend(closure.publication_declarations.clone());
+    closure.episodes.sort();
+    closure.episodes.dedup();
+    Ok(closure)
 }
 
 fn resolve_episode_closure(
@@ -76,6 +96,7 @@ fn resolve_episode_closure(
 
     Ok(RedactionClosure {
         episodes: vec![episode_id.to_string()],
+        publication_declarations: Vec::new(),
         assertions: assertion_ids,
         statements: unsupported,
         mentions: mention_ids,
@@ -135,6 +156,7 @@ fn resolve_entity_closure(
 
     Ok(RedactionClosure {
         episodes: Vec::new(), // entity redaction does not tombstone episodes
+        publication_declarations: Vec::new(),
         assertions: assertion_ids,
         statements: unsupported,
         mentions: mention_ids,
@@ -188,7 +210,7 @@ fn resolve_space_closure(
     } else {
         query_strings_in(
             conn,
-            "SELECT DISTINCT episode_id FROM extractions WHERE ",
+            "SELECT DISTINCT episode_id FROM extractions WHERE episode_id IN",
             &episodes,
         )?
     };
@@ -196,6 +218,7 @@ fn resolve_space_closure(
     // by space_id — left to cache-zone rebuild; nothing to enumerate here.
     Ok(RedactionClosure {
         episodes,
+        publication_declarations: Vec::new(),
         assertions,
         statements,
         mentions,
@@ -269,7 +292,8 @@ fn execute_space_redaction(
         &RedactTarget::Space {
             id: space_id.to_string(),
         },
-    )?;
+    )
+    .map_err(|e| BrainError::Storage(format!("space-redact closure: {e}")))?;
     // Empty-closure path (e.g. a space with zero episodes — only document
     // chunks): the space row is administrative, not part of the
     // episode-derived closure. Drop it directly and return. No
@@ -300,7 +324,8 @@ fn execute_space_redaction(
         ),
         Some(reason),
         now,
-    )?;
+    )
+    .map_err(|e| BrainError::Storage(format!("space-redact audit: {e}")))?;
 
     // 2. Append to `redactions` table (INSERT OR IGNORE → idempotent on
     //    repeated audit + replay during reproject).
@@ -315,6 +340,14 @@ fn execute_space_redaction(
     )
     .map_err(sql_err)?;
 
+    // Published copies can live in another space's origin Declaration.
+    // Erase those copies before removing this space's own ledger rows.
+    for episode in &closure.episodes {
+        conn.execute("UPDATE episodes SET content='[redacted]',content_compacted=NULL,redacted_at=?1 WHERE id=?2 AND space_id!=?3 AND redacted_at IS NULL", params![now.millis(),episode,space_id]).map_err(|e| BrainError::Storage(format!("space-redact cross-space tombstone episode={episode}: {e}")))?;
+    }
+    crate::publication::remove_redacted_copies(conn, &closure.episodes)
+        .map_err(|e| BrainError::Storage(format!("space-redact published-copy sweep: {e}")))?;
+
     // 3. Teardown in FK-safe order. Cache/derived tables first (no FKs into
     //    truth tables), then truth half (children before parents).
     //    `fts_word` / `fts_ngram` are contentless (v13): deletes go
@@ -328,7 +361,8 @@ fn execute_space_redaction(
         "DELETE FROM communities WHERE space_id = ?1",
         "DELETE FROM chunks WHERE space_id = ?1",
     ] {
-        conn.execute(sql, params![space_id]).map_err(sql_err)?;
+        conn.execute(sql, params![space_id])
+            .map_err(|e| BrainError::Storage(format!("space-redact derived [{sql}]: {e}")))?;
     }
     for sql in [
         "DELETE FROM extraction_failures WHERE episode_id IN (SELECT id FROM episodes WHERE space_id = ?1)",
@@ -341,12 +375,13 @@ fn execute_space_redaction(
         "DELETE FROM entity_merges WHERE loser_id IN (SELECT id FROM entities WHERE space_id = ?1) OR winner_id IN (SELECT id FROM entities WHERE space_id = ?1)",
         "DELETE FROM entity_keys WHERE space_id = ?1",
         "DELETE FROM entities WHERE space_id = ?1",
+        "DELETE FROM episodes WHERE space_id = ?1",
         "DELETE FROM source_policies WHERE source_id IN (SELECT id FROM sources WHERE space_id = ?1)",
         "DELETE FROM sources WHERE space_id = ?1",
-        "DELETE FROM episodes WHERE space_id = ?1",
         "DELETE FROM spaces WHERE id = ?1",
     ] {
-        conn.execute(sql, params![space_id]).map_err(sql_err)?;
+        conn.execute(sql, params![space_id])
+            .map_err(|e| BrainError::Storage(format!("space-redact truth [{sql}]: {e}")))?;
     }
 
     Ok(RedactionResult {
@@ -406,11 +441,12 @@ pub fn execute_redaction(
     // 4. Tombstone episode content and extractions (episode-scoped only).
     for ep_id in &closure.episodes {
         conn.execute(
-            "UPDATE episodes SET content = '[redacted]', redacted_at = ?1 WHERE id = ?2 AND redacted_at IS NULL",
+            "UPDATE episodes SET content = '[redacted]', content_compacted = NULL, redacted_at = ?1 WHERE id = ?2 AND redacted_at IS NULL",
             params![now.millis(), ep_id],
         )
         .map_err(sql_err)?;
     }
+    crate::publication::remove_redacted_copies(conn, &closure.episodes)?;
     for ep_id in &closure.extractions {
         conn.execute(
             "UPDATE extractions SET raw_response = '[redacted]' WHERE episode_id = ?1",

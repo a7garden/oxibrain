@@ -95,6 +95,13 @@ The store lives under `~/.oxi`; every subcommand accepts `--dir <DIR>` (env
 vault directory and document root. `oxibrain describe` and `oxibrain schema`
 are the orientation and introspection entries into the op surface.
 
+`oxibrain schema` reports the binary's supported ledger and projection versions
+under `data.storage` without opening a store or loading a model. Use these
+capabilities to check shared-store compatibility; the package version alone does
+not identify a development build's schema. A newer store is rejected with the
+non-retryable CLI error code `schema_version_mismatch`. Update the executable
+used by the caller; changing the database version counter is not a repair.
+
 Agent `session_record` stores an **Untrusted Primary** with `SourceRef::Session`
 provenance, not an owner declaration. Its event identity is the space, sessions
 source and session ID: identical bytes replay to the same episode; different bytes
@@ -133,7 +140,7 @@ revision, view and byte range. Rendered-context offsets are separate from source
 offsets. Both rendering modes retain explicit omissions and count their actual
 context with the configured tokenizer. Full rendering remains available as an explicit opt-out.
 
-Memory stores upgrade to schema 18 in version 0.21.0. Keep a verified schema-15
+Memory stores upgrade to schema 19 in version 0.22.0. Keep a verified pre-upgrade
 backup before opening an existing store; older binaries cannot reopen it after
 upgrade. Run `oxibrain admin index --memory` after upgrading to rebuild the
 discarded source-search cache from the ledger; add `--embed` to rebuild optional

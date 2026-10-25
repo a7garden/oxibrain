@@ -266,6 +266,60 @@ pub struct RegistrationResult {
     pub root: RootEntry,
 }
 
+/// Private transient source fence; never serialized or delivered to recipients.
+pub(crate) struct PublicationDocumentFence {
+    origin: oxibrain_core::publication::ViewOrigin,
+    root: RootEntry,
+    canonical: PathBuf,
+    locator: String,
+    generation: i64,
+}
+impl PublicationDocumentFence {
+    pub(crate) fn verify(&self, conn: &rusqlite::Connection, dir: &Path) -> Result<(), BrainError> {
+        use oxibrain_core::publication::{MAX_SOURCE_BYTES, unavailable};
+        let cfg = load_documents_config(dir).map_err(|_| unavailable())?;
+        if cfg.root(&self.root.alias) != Some(&self.root)
+            || canonicalize_root(&self.root.path).map_err(|_| unavailable())? != self.canonical
+            || (self.origin.space() != self.root.space
+                && oxibrain_store::ledger::get_space(conn, self.origin.space())?.as_deref()
+                    != Some(self.root.space.as_str()))
+        {
+            return Err(unavailable());
+        }
+        let cache = DocumentCache::open_ro(dir)?;
+        let cached = cache
+            .list_roots()?
+            .into_iter()
+            .find(|root| root.alias == self.root.alias)
+            .ok_or_else(unavailable)?;
+        if cached.generation != self.generation
+            || cached.fingerprint != fingerprint_from_entry(&self.root)?
+        {
+            return Err(unavailable());
+        }
+        let path = self
+            .canonical
+            .join(&self.locator)
+            .canonicalize()
+            .map_err(|_| unavailable())?;
+        if !path.starts_with(&self.canonical) {
+            return Err(unavailable());
+        }
+        let mut remaining = MAX_SOURCE_BYTES;
+        let bytes = read_document_bounded(&path, &mut remaining).map_err(|_| unavailable())?;
+        let revision = if self.origin.revision().starts_with("git:") {
+            let reader = GitDocumentReader::open(&self.canonical)?.ok_or_else(unavailable)?;
+            reader.current_revision(&reader.snapshot()?, &self.locator, &bytes)?
+        } else {
+            format!("blake3:{}", blake3_hex(&bytes))
+        };
+        if revision != self.origin.revision() {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+}
+
 impl Brain {
     // ─── search / recall ───────────────────────────────────────────────────
 
@@ -497,7 +551,7 @@ impl Brain {
     /// schedulers see the retry schedule, not a number that never moves.
     pub async fn pending_extraction_stats(&self) -> Result<PendingStats, BrainError> {
         const FILTER: &str = "WHERE e.kind = 'primary'
-                         AND e.source_kind NOT IN ('document', 'document_revision')
+                         AND e.source_kind NOT IN ('document', 'document_revision', 'session')
                          AND e.redacted_at IS NULL
                          AND NOT EXISTS (SELECT 1 FROM extractions x
                                          WHERE x.episode_id = e.id
@@ -599,7 +653,7 @@ impl Brain {
     /// freshness outcome. `Busy` ⇒ one rescan + retry; a second `Busy`
     /// surfaces. Read-only brains skip the reconcile entirely and report
     /// what the cache already holds.
-    async fn index_documents_for_read(&self) -> Result<DocumentFreshness, BrainError> {
+    pub(crate) async fn index_documents_for_read(&self) -> Result<DocumentFreshness, BrainError> {
         if self.config.read_only {
             return Ok(DocumentFreshness::default());
         }
@@ -1514,6 +1568,188 @@ impl Brain {
 
     /// Re-read one document and verify its revision before decoding. The full
     /// decoded view and transient heading coordinates share exactly those bytes.
+    /// Reuse the Full Reader's exact revision and decoder checks for publication.
+    pub(crate) fn publication_document_delivery_fence(
+        &self,
+        origin: &oxibrain_core::publication::ViewOrigin,
+    ) -> Result<PublicationDocumentFence, BrainError> {
+        use oxibrain_core::publication::{ViewOrigin, unavailable};
+        let ViewOrigin::Document {
+            root,
+            document_id,
+            document_uuid,
+            ..
+        } = origin
+        else {
+            return Err(unavailable());
+        };
+        let cfg = load_documents_config(&self.config.dir).map_err(|_| unavailable())?;
+        let configured = cfg.root(root).ok_or_else(unavailable)?.clone();
+        let cache = DocumentCache::open_ro(&self.config.dir)?;
+        let cached = cache
+            .list_roots()?
+            .into_iter()
+            .find(|entry| entry.alias == *root)
+            .ok_or_else(unavailable)?;
+        if cached.fingerprint != fingerprint_from_entry(&configured)? {
+            return Err(unavailable());
+        }
+        let id = match document_uuid {
+            Some(uuid) => cache
+                .resolve_pdc(root, uuid)?
+                .map(|(id, _)| id)
+                .ok_or_else(unavailable)?,
+            None => document_id.clone(),
+        };
+        let meta = cache
+            .publication_document(root, &id)?
+            .ok_or_else(unavailable)?;
+        if meta.revision != origin.revision() || meta.document_uuid != *document_uuid {
+            return Err(unavailable());
+        }
+        let canonical = canonicalize_root(&configured.path).map_err(|_| unavailable())?;
+        Ok(PublicationDocumentFence {
+            origin: origin.clone(),
+            root: configured,
+            canonical,
+            locator: meta.locator,
+            generation: cached.generation,
+        })
+    }
+
+    pub(crate) async fn publication_document_snapshot(
+        &self,
+        origin: &oxibrain_core::publication::ViewOrigin,
+    ) -> Result<oxibrain_core::publication::SourceViewSnapshot, BrainError> {
+        let current = self
+            .publication_document_observed(origin)
+            .await?
+            .ok_or_else(oxibrain_core::publication::unavailable)?;
+        if current.origin != *origin {
+            return Err(oxibrain_core::publication::unavailable());
+        }
+        Ok(current)
+    }
+
+    /// A fresh connector/cache observation, never a caller-claimed correction.
+    pub(crate) async fn publication_document_observed(
+        &self,
+        origin: &oxibrain_core::publication::ViewOrigin,
+    ) -> Result<Option<oxibrain_core::publication::SourceViewSnapshot>, BrainError> {
+        use oxibrain_core::publication::{SourceViewSnapshot, ViewOrigin, unavailable};
+        let ViewOrigin::Document {
+            space,
+            root,
+            document_id,
+            document_uuid,
+            decoder,
+            ..
+        } = origin
+        else {
+            return Err(unavailable());
+        };
+        if decoder != DECODER_VERSION || self.config.read_only {
+            return Err(unavailable());
+        }
+        let cfg = load_documents_config(&self.config.dir).map_err(|_| unavailable())?;
+        let configured = cfg.root(root).ok_or_else(unavailable)?;
+        let configured_space = self
+            .lookup_space(&configured.space)
+            .await?
+            .unwrap_or_else(|| configured.space.clone());
+        if configured_space != *space {
+            return Err(unavailable());
+        }
+        let freshness = self
+            .index_documents_for_read()
+            .await
+            .map_err(|_| unavailable())?;
+        if freshness
+            .skipped_roots
+            .iter()
+            .any(|(alias, _)| alias == root)
+            || freshness.skipped_files > 0
+            || !freshness.stale_after_retry.is_empty()
+        {
+            return Err(unavailable());
+        }
+        let dir = self.config.dir.clone();
+        let alias = root.clone();
+        let id = document_id.clone();
+        let uuid = document_uuid.clone();
+        let Some(meta) = blocking(move || {
+            let cache = DocumentCache::open_ro(&dir)?;
+            let resolved = if let Some(uuid) = uuid {
+                cache.resolve_pdc(&alias, &uuid)?.map(|(id, _)| id)
+            } else {
+                Some(id)
+            };
+            match resolved {
+                Some(id) => cache.publication_document(&alias, &id),
+                None => Ok(None),
+            }
+        })
+        .await?
+        else {
+            return Ok(None);
+        };
+        if meta.space != configured.space {
+            return Err(unavailable());
+        }
+        let canonical = self.locator_to_root_path(root).ok_or_else(unavailable)?;
+        let path = canonical
+            .join(&meta.locator)
+            .canonicalize()
+            .map_err(|_| unavailable())?;
+        if !path.starts_with(&canonical) {
+            return Err(unavailable());
+        }
+        let mut budget = self.read_policy.materialization_bytes;
+        let first = self
+            .materialize_view(
+                root,
+                &meta.locator,
+                &meta.revision,
+                &meta.media_type,
+                &mut budget,
+            )
+            .await?
+            .ok_or_else(unavailable)?;
+        let mut budget = self.read_policy.materialization_bytes;
+        let second = self
+            .materialize_view(
+                root,
+                &meta.locator,
+                &meta.revision,
+                &meta.media_type,
+                &mut budget,
+            )
+            .await?
+            .ok_or_else(unavailable)?;
+        if first.view_digest != second.view_digest {
+            return Err(unavailable());
+        }
+        let current_cfg = load_documents_config(&self.config.dir).map_err(|_| unavailable())?;
+        if current_cfg.root(root) != Some(configured)
+            || canonicalize_root(&configured.path).map_err(|_| unavailable())? != canonical
+        {
+            return Err(unavailable());
+        }
+        let origin = ViewOrigin::Document {
+            space: space.clone(),
+            root: root.clone(),
+            document_id: meta.document_id,
+            document_uuid: meta.document_uuid,
+            revision: meta.revision,
+            decoder: decoder.clone(),
+        };
+        Ok(Some(SourceViewSnapshot {
+            origin,
+            text: second.text,
+            available: true,
+        }))
+    }
+
     async fn materialize_view(
         &self,
         root_alias: &str,
@@ -2184,7 +2420,7 @@ fn encode_doc_locator(locator: &str) -> String {
 
 /// Shared materialization budget. A growing file cannot bypass the limit between
 /// metadata and read; `take` bounds allocation and only a verified revision escapes.
-fn read_document_bounded(
+pub(crate) fn read_document_bounded(
     path: &std::path::Path,
     remaining: &mut usize,
 ) -> std::io::Result<Vec<u8>> {

@@ -398,6 +398,14 @@ pub fn snapshot_truth(conn: &Connection, space: &str) -> Result<String, BrainErr
     // excluded from this snapshot (P1, §5.1).
     for (label, sql) in [
         (
+            "publications",
+            "SELECT id,record_json FROM publication_views WHERE destination=?1 ORDER BY id",
+        ),
+        (
+            "publication_observations",
+            "SELECT declaration_id,origin_identity,previous_revision,observed_revision FROM publication_source_observations WHERE json_extract(origin_identity, '$[1]')=?1 ORDER BY declaration_id",
+        ),
+        (
             "entities",
             "SELECT id, type_name, canonical_key, merged_into FROM entities WHERE space_id = ?1 ORDER BY id",
         ),
@@ -426,6 +434,24 @@ pub fn snapshot_truth(conn: &Connection, space: &str) -> Result<String, BrainErr
             "SELECT statement_id, valid_from, valid_to, status, confidence, support_json FROM beliefs WHERE statement_id IN (SELECT id FROM statements WHERE space_id = ?1) ORDER BY statement_id, valid_from",
         ),
     ] {
+        if matches!(label, "publications" | "publication_observations") {
+            let table = if label == "publications" {
+                "publication_views"
+            } else {
+                "publication_source_observations"
+            };
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .map_err(sql_err)?;
+            if !exists {
+                out.push_str(&format!("---{label}---\n"));
+                continue;
+            }
+        }
         out.push_str(&snapshot_query(conn, label, sql, space)?);
     }
     // Global predicates table — no space filter.
@@ -521,7 +547,7 @@ pub fn rebuild_chunks(conn: &Connection, space: &str) -> Result<(), BrainError> 
         .prepare(
             "SELECT id, content, occurred_at, source_kind
                FROM episodes
-              WHERE space_id = ?1 AND redacted_at IS NULL
+              WHERE space_id = ?1 AND redacted_at IS NULL AND kind != 'declaration'
               ORDER BY seq ASC",
         )
         .map_err(sql_err)?;
