@@ -140,7 +140,7 @@ revision, view and byte range. Rendered-context offsets are separate from source
 offsets. Both rendering modes retain explicit omissions and count their actual
 context with the configured tokenizer. Full rendering remains available as an explicit opt-out.
 
-Memory stores upgrade to schema 19 in version 0.22.0. Keep a verified schema-15
+Memory stores upgrade to schema 19 in version 0.22.0. Keep a verified pre-upgrade
 backup before opening an existing store; older binaries cannot reopen it after
 upgrade. Run `oxibrain admin index --memory` after upgrading to rebuild the
 discarded source-search cache from the ledger; add `--embed` to rebuild optional
