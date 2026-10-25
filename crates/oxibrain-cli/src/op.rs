@@ -155,6 +155,7 @@ fn brain_error_parts(e: &BrainError) -> (i32, &'static str, bool) {
             (EXIT_INVALID_INPUT, "unsupported_temporal_scope", false)
         }
         BrainError::TokenizerUnavailable(_) => (EXIT_INVALID_INPUT, "tokenizer_unavailable", false),
+        BrainError::Migration { .. } => (EXIT_INTERNAL, "schema_version_mismatch", false),
         BrainError::Invalid(_) | BrainError::SpaceNameInvalid { .. } => {
             (EXIT_INVALID_INPUT, "invalid_input", false)
         }
@@ -361,6 +362,11 @@ pub fn schema(op: Option<&str>) -> i32 {
     match op {
         None => {
             let data = json!({
+                // Build capabilities, without opening or migrating a store.
+                "storage": {
+                    "ledger_schema_version": oxibrain_store::schema::LEDGER_SCHEMA_VERSION,
+                    "projection_version": oxibrain_store::schema::PROJECTION_VERSION,
+                },
                 "ops": oxibrain_ops::ops().iter().map(|o| json!({
                     "name": o.name,
                     "summary": o.summary,
