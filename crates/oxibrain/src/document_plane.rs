@@ -62,7 +62,7 @@ use oxibrain_core::evidence::{
 };
 use oxibrain_core::query_candidates::{
     LEXICAL_QUERY_PLAN_VERSION, LexicalCandidateChannel, LexicalCandidateKind, LexicalQueryPlan,
-    fuse_lexical_candidates,
+    fuse_lexical_dense_families,
 };
 use oxibrain_core::retrieval::{Query as CoreQuery, QueryMode as CoreQueryMode, SearchPlane};
 use oxibrain_ports::{BrainError, Timestamp};
@@ -342,7 +342,6 @@ impl Brain {
         let mut units = Vec::new();
 
         if q.planes.contains(&SearchPlane::Documents) {
-            freshness = self.index_documents_for_read().await?;
             // The documents cache is scoped by the root's `space` NAME from
             // documents.toml, while `Query.space` conventionally carries the
             // content-derived id (MCP resolves via `ensure_space`). Translate
@@ -350,6 +349,9 @@ impl Brain {
             // that already pass names keep working.
             let mut doc_q = q.clone();
             doc_q.space = self.resolve_space_name(&q.space).await?;
+            freshness = self
+                .index_documents_for_prioritized_read(Some(&doc_q.space))
+                .await?;
             let candidates = self.search_documents(&doc_q, for_recall).await?;
             documents = candidates.hits;
             units = candidates.units;
@@ -654,13 +656,25 @@ impl Brain {
     /// surfaces. Read-only brains skip the reconcile entirely and report
     /// what the cache already holds.
     pub(crate) async fn index_documents_for_read(&self) -> Result<DocumentFreshness, BrainError> {
+        self.index_documents_for_prioritized_read(None).await
+    }
+
+    /// Scoped searches spend the shared read budget on their own roots first.
+    /// The global root-set diff and all skip receipts remain unchanged.
+    async fn index_documents_for_prioritized_read(
+        &self,
+        priority_space: Option<&str>,
+    ) -> Result<DocumentFreshness, BrainError> {
         if self.config.read_only {
             return Ok(DocumentFreshness::default());
         }
-        self.reconcile_once(Some(ScanBudget {
-            entries: self.read_policy.reconcile_entries,
-            bytes: self.read_policy.materialization_bytes as u64,
-        }))
+        self.reconcile_once(
+            Some(ScanBudget {
+                entries: self.read_policy.reconcile_entries,
+                bytes: self.read_policy.materialization_bytes as u64,
+            }),
+            priority_space,
+        )
         .await
     }
 
@@ -668,13 +682,13 @@ impl Brain {
         if self.config.read_only {
             return Ok(DocumentFreshness::default());
         }
-        match self.reconcile_once(None).await {
+        match self.reconcile_once(None, None).await {
             Ok(o) => Ok(o),
             Err(BrainError::Busy(_)) => {
                 // One retry: rescan from scratch so the CAS sees the new
                 // generation, then return the second outcome plainly.
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                self.reconcile_once(None).await
+                self.reconcile_once(None, None).await
             }
             Err(e) => Err(e),
         }
@@ -685,6 +699,7 @@ impl Brain {
     async fn reconcile_once(
         &self,
         mut budget: Option<ScanBudget>,
+        priority_space: Option<&str>,
     ) -> Result<DocumentFreshness, BrainError> {
         let dir = self.config.dir.clone();
         let cfg = load_documents_config(&dir)?;
@@ -699,6 +714,11 @@ impl Brain {
                 Ok(fp) => configured.push((entry, fp)),
                 Err(e) => skipped_roots.push((entry.alias, e.to_string())),
             }
+        }
+        if let Some(space) = priority_space {
+            // Stable ordering preserves configured order within each group;
+            // unrelated roots still reconcile with any remaining allowance.
+            configured.sort_by_key(|(entry, _)| entry.space != space);
         }
 
         // Cached roots from documents.db; a missing cache is the zero state.
@@ -1384,16 +1404,9 @@ impl Brain {
                 }
             }
         }
-        let dense_breadth = receipt.indexed.unwrap_or(knn.len());
         channels.push(receipt);
-        if !knn.is_empty() {
-            candidate_channels.push(LexicalCandidateChannel {
-                kind: LexicalCandidateKind::Dense,
-                ids: knn.iter().map(|(id, _)| id.clone()).collect(),
-                breadth: dense_breadth,
-            });
-        }
-        let (fused, dropped) = fuse_lexical_candidates(&candidate_channels, limit);
+        let dense_ids: Vec<_> = knn.iter().map(|(id, _)| id.clone()).collect();
+        let (fused, dropped) = fuse_lexical_dense_families(&candidate_channels, &dense_ids, limit);
         if !dropped.is_empty() {
             for channel in channels.iter_mut().filter(|channel| channel.executed) {
                 channel.capped = true;

@@ -334,6 +334,57 @@ pub fn fuse_lexical_candidates(
     (selected, dropped)
 }
 
+/// Rank lexical observations within one family, then give that ranking and the
+/// ordered dense candidates equal reciprocal-rank weight. Corpus/vector counts
+/// are coverage metadata, not a weight on the dense family. Apply the candidate
+/// limit only after fusion, conserving every distinct input candidate.
+///
+/// With no dense candidates the existing lexical scores and order are retained.
+/// Dense-only results retain their first-occurrence order; scores are reciprocal
+/// ranks of distinct candidates, independent of the size of the vector index.
+/// Equal family scores prefer lexical membership and rank before source identity.
+pub fn fuse_lexical_dense_families(
+    lexical_channels: &[LexicalCandidateChannel],
+    dense_ids: &[String],
+    maximum: usize,
+) -> (Vec<(String, f64)>, Vec<String>) {
+    if dense_ids.is_empty() {
+        return fuse_lexical_candidates(lexical_channels, maximum);
+    }
+    let (lexical, _) = fuse_lexical_candidates(lexical_channels, usize::MAX);
+    let lexical_ranks: std::collections::BTreeMap<_, _> = lexical
+        .iter()
+        .enumerate()
+        .map(|(rank, (id, _))| (id, rank))
+        .collect();
+    let mut seen = std::collections::BTreeSet::new();
+    let dense: Vec<_> = dense_ids.iter().filter(|id| seen.insert(*id)).collect();
+    let mut scores = std::collections::BTreeMap::<String, f64>::new();
+    for (rank, id) in lexical.iter().map(|(id, _)| id).enumerate() {
+        *scores.entry(id.clone()).or_default() += 1.0 / (61 + rank) as f64;
+    }
+    for (rank, id) in dense.into_iter().enumerate() {
+        *scores.entry(id.clone()).or_default() += 1.0 / (61 + rank) as f64;
+    }
+    let mut rows: Vec<_> = scores.into_iter().collect();
+    rows.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then_with(|| {
+                lexical_ranks
+                    .get(&a.0)
+                    .unwrap_or(&usize::MAX)
+                    .cmp(lexical_ranks.get(&b.0).unwrap_or(&usize::MAX))
+            })
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    let dropped = rows
+        .split_off(maximum.min(rows.len()))
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    (rows, dropped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

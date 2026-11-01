@@ -7,6 +7,19 @@ squash-merged.
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-11-02
+
+### Fixed
+
+- Balance document lexical and dense rankings as two families. The number of indexed vectors no longer discounts semantic candidates as a corpus grows.
+- Prioritize the requested space during bounded document reconciliation without dropping other configured roots or changing full administrative indexing.
+- Require pulldown-cmark 0.13.5, which fixes RUSTSEC-2026-0414 in wikilink parsing.
+
+### Compatibility
+
+- Read policy 6 changes document candidate ranking. Ledger schema 19, immutable assertions, document source bytes, and the sixteen-tool MCP surface are unchanged.
+- Operational source-retrieval probes and deterministic regressions cover these fixes; they do not establish general answer accuracy or close the reader-quality gate.
+
 ## [0.22.0] — 2026-10-25
 
 ### Added

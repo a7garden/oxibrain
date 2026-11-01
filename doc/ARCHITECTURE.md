@@ -1,5 +1,13 @@
 # oxibrain — Architecture
-> **Version:** v2.34 · **Date:** 2026-10-24 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **Version:** v2.35 · **Date:** 2026-11-02 · Supersedes `DESIGN.md` v1.0 (and v0.3–v0.1)
+> **v2.35 — Document memory retrieval quality.** `read-policy/6` keeps lexical
+> query expansion within one family and gives the ordered semantic family an
+> equal reciprocal-rank vote before the final candidate cap. Unrelated index
+> size no longer weakens semantic relevance. Bounded scoped reads prioritize
+> the requested space's configured roots without filtering the complete root-set
+> diff or hiding skipped-root receipts. Truth, schema 19 and source bytes are
+> unchanged. Host delivery/cache checks and live quality limits are documented
+> in [ADR-023](adr/ADR-023-document-memory-retrieval-quality.md).
 > **v2.34 — Source-view CLI/native adapters.** `admin source view`
 > publish/read/withdraw/retract and authenticated `source_view.*` native RPCs
 > share the versioned facade dispatcher. CLI input is bounded unique-key JSON
