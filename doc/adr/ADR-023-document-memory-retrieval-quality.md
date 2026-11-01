@@ -38,9 +38,11 @@ single-valued merely because an operator has a newer prose decision.
    source identity/revision/view, and choose query-centered UTF-8 excerpts.
    Every delivered byte range must still identify the exact original source
    slice. Explicit recall remains fresh; a cache hit requires the same query,
-   independent of language or writing system. Dense-only neighbors remain
-   unverified candidates: the host caps them at three, prioritizes lexical
-   matches, and labels exclusively dense-only output as candidate evidence.
+   independent of language or writing system. Neighbors remain unverified
+   candidates. The host caps snippets without query-feature overlap at three,
+   prioritizes snippets with overlap, and labels exclusively no-overlap output
+   as candidate evidence. Feature overlap is neither per-hit channel provenance
+   nor proof of semantic relevance; ordinary shared fragments can pass it.
    Full local retrieval receipts have bounded retention.
 
 The Rust engine remains independent of the Python host adapter. No new model,
