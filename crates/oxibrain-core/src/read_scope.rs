@@ -100,7 +100,7 @@ impl Default for ReadPolicy {
     }
 }
 impl ReadPolicy {
-    pub const VERSION: &'static str = "read-policy/5";
+    pub const VERSION: &'static str = "read-policy/6";
     pub fn validate(&self) -> Result<(), BrainError> {
         if [
             self.channel_depth,

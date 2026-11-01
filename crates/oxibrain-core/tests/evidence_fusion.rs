@@ -1,6 +1,127 @@
 use oxibrain_core::evidence::{fuse_query_source_channels, fuse_query_source_families};
+use oxibrain_core::query_candidates::{
+    LexicalCandidateChannel, LexicalCandidateKind, fuse_lexical_candidates,
+    fuse_lexical_dense_families,
+};
 use proptest::prelude::*;
 use std::collections::BTreeSet;
+
+#[test]
+fn document_empty_dense_preserves_exact_lexical_scores_and_drops() {
+    let lexical = vec![
+        LexicalCandidateChannel {
+            kind: LexicalCandidateKind::Term,
+            ids: vec!["broad".into(), "narrow".into(), "tail".into()],
+            breadth: 1000,
+        },
+        LexicalCandidateChannel {
+            kind: LexicalCandidateKind::ExactQuery,
+            ids: vec!["narrow".into()],
+            breadth: 1,
+        },
+    ];
+    for maximum in 0..5 {
+        assert_eq!(
+            fuse_lexical_dense_families(&lexical, &[], maximum),
+            fuse_lexical_candidates(&lexical, maximum)
+        );
+    }
+}
+
+#[test]
+fn document_dense_only_deduplicates_before_scoring_and_capping() {
+    let dense = vec!["z".into(), "z".into(), "a".into(), "m".into()];
+    assert_eq!(
+        fuse_lexical_dense_families(&[], &dense, 2),
+        (
+            vec![("z".into(), 1.0 / 61.0), ("a".into(), 1.0 / 62.0)],
+            vec!["m".into()]
+        )
+    );
+}
+
+#[test]
+fn document_family_fusion_caps_after_combining_complementary_candidates() {
+    let lexical = vec![LexicalCandidateChannel {
+        kind: LexicalCandidateKind::Term,
+        ids: (0..120)
+            .map(|i| format!("lexical-{i:03}"))
+            .chain(["rescued".into()])
+            .collect(),
+        breadth: 121,
+    }];
+    assert_eq!(
+        fuse_lexical_dense_families(&lexical, &["rescued".into()], 1).0[0].0,
+        "rescued"
+    );
+}
+
+#[test]
+fn document_lexical_breadth_and_expansion_cannot_discount_the_dense_family() {
+    let make_channels = |breadth, count| {
+        (0..count)
+            .map(|_| LexicalCandidateChannel {
+                kind: LexicalCandidateKind::Term,
+                ids: vec!["z-lexical".into(), "tail".into()],
+                breadth,
+            })
+            .collect::<Vec<_>>()
+    };
+    let dense = vec!["a-semantic".into()];
+    let baseline = fuse_lexical_dense_families(&make_channels(2, 1), &dense, 2);
+    assert_eq!(
+        baseline
+            .0
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["z-lexical", "a-semantic"]
+    );
+    assert_eq!(
+        baseline,
+        fuse_lexical_dense_families(&make_channels(10_000, 32), &dense, 2)
+    );
+}
+
+#[test]
+fn document_equal_scores_prefer_lexical_rank_independently_of_channel_order() {
+    let mut lexical = vec![
+        LexicalCandidateChannel {
+            kind: LexicalCandidateKind::ExactQuery,
+            ids: vec!["z-first".into(), "a-second".into()],
+            breadth: 2,
+        },
+        LexicalCandidateChannel {
+            kind: LexicalCandidateKind::Term,
+            ids: vec!["noise".into()],
+            breadth: 1000,
+        },
+    ];
+    let dense = vec!["a-second".into(), "z-first".into()];
+    let result = fuse_lexical_dense_families(&lexical, &dense, 3);
+    assert_eq!(result.0[0].1, result.0[1].1);
+    assert_eq!(result.0[0].0, "z-first");
+    assert_eq!(result.0[1].0, "a-second");
+    assert_eq!(
+        fuse_lexical_dense_families(&lexical, &dense, 1).0[0].0,
+        "z-first"
+    );
+    lexical.reverse();
+    assert_eq!(result, fuse_lexical_dense_families(&lexical, &dense, 3));
+    assert_eq!(
+        result,
+        fuse_lexical_dense_families(
+            &lexical,
+            &[
+                "a-second".into(),
+                "a-second".into(),
+                "z-first".into(),
+                "z-first".into()
+            ],
+            3,
+        )
+    );
+}
 
 #[test]
 fn lexical_only_keeps_the_existing_weighted_order() {
@@ -118,6 +239,34 @@ fn selected_and_dropped_conserve_the_unique_candidate_union() {
 }
 
 proptest! {
+    #[test]
+    fn document_fusion_is_a_deterministic_scored_partition(
+        lexical_ids in prop::collection::vec(prop::collection::vec(0u8..8, 0..8), 0..6),
+        dense_ids in prop::collection::vec(0u8..8, 0..12),
+        maximum in 0usize..16,
+    ) {
+        let lexical: Vec<_> = lexical_ids.into_iter().map(|ids| LexicalCandidateChannel {
+            kind: LexicalCandidateKind::Term,
+            breadth: ids.len(),
+            ids: ids.into_iter().map(|id| format!("id-{id}")).collect(),
+        }).collect();
+        let dense: Vec<String> = dense_ids.into_iter().map(|id| format!("id-{id}")).collect();
+        let expected: BTreeSet<_> = lexical.iter().flat_map(|channel| channel.ids.iter()).chain(dense.iter()).cloned().collect();
+        let result = fuse_lexical_dense_families(&lexical, &dense, maximum);
+        prop_assert_eq!(&result, &fuse_lexical_dense_families(&lexical, &dense, maximum));
+        let selected: BTreeSet<_> = result.0.iter().map(|(id, _)| id.clone()).collect();
+        let dropped: BTreeSet<_> = result.1.iter().cloned().collect();
+        prop_assert!(result.0.len() <= maximum);
+        prop_assert_eq!(result.0.len(), selected.len());
+        prop_assert_eq!(result.1.len(), dropped.len());
+        prop_assert!(selected.is_disjoint(&dropped));
+        prop_assert_eq!(selected.union(&dropped).cloned().collect::<BTreeSet<_>>(), expected);
+        prop_assert!(result.0.iter().all(|(_, score)| score.is_finite() && *score > 0.0));
+        let (lexical_ranking, _) = fuse_lexical_candidates(&lexical, usize::MAX);
+        let lexical_rank = |id: &str| lexical_ranking.iter().position(|(candidate, _)| candidate == id).unwrap_or(usize::MAX);
+        prop_assert!(result.0.windows(2).all(|pair| pair[0].1 > pair[1].1 || (pair[0].1 == pair[1].1 && (lexical_rank(&pair[0].0), &pair[0].0) < (lexical_rank(&pair[1].0), &pair[1].0))));
+    }
+
     #[test]
     fn randomized_fusion_is_a_deterministic_bounded_partition(
         lexical_ids in prop::collection::vec(
